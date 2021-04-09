@@ -14,9 +14,14 @@
 #define KMP_TASKDEPS_H
 
 #include "kmp.h"
+#include <map>
 
 #define KMP_ACQUIRE_DEPNODE(gtid, n) __kmp_acquire_lock(&(n)->dn.lock, (gtid))
 #define KMP_RELEASE_DEPNODE(gtid, n) __kmp_release_lock(&(n)->dn.lock, (gtid))
+
+extern kmp_futex_lock_t taskgraph_lock;
+extern kmp_record_info *RecordMap; 
+extern int recording;
 
 static inline void __kmp_node_deref(kmp_info_t *thread, kmp_depnode_t *node) {
   if (!node)
@@ -85,6 +90,32 @@ static inline void __kmp_dephash_free(kmp_info_t *thread, kmp_dephash_t *h) {
 }
 
 static inline void __kmp_release_deps(kmp_int32 gtid, kmp_taskdata_t *task) {
+
+  kmp_task_t *this_task = KMP_TASKDATA_TO_TASK(task);
+  if (!recording && this_task->part_id) {
+    // TODO: Not needed when taskifying
+    __kmp_acquire_futex_lock(&taskgraph_lock, 0);
+    // printf("[OpenMP] ---- Task %d ends, checking successors ----\n",
+    // this_task->part_id);
+    kmp_record_info *TaskInfo = &(RecordMap[this_task->part_id]);
+    for (int i = 0; i < TaskInfo->nsuccessors; i++) {
+      kmp_int32 successorNumber = TaskInfo->successors[i];
+      kmp_record_info *successor = &(RecordMap[successorNumber]);
+      // printf("  [OpenMP] Found one successor %d , deps : %d \n",
+      // successorNumber, successor->npredecessors_counter);
+      successor->npredecessors_counter--;
+      if (successor->task != nullptr && !successor->npredecessors_counter) {
+        // printf("  [OpenMP] Successor ready, executing \n");
+        __kmp_omp_task(gtid, successor->task, false);
+
+      } else {
+        // printf("  [OpenMP] Task not ready , npredecessors %d \n",
+        // successor->npredecessors_counter);
+      }
+    }
+    __kmp_release_futex_lock(&taskgraph_lock, 0);
+  }
+
   kmp_info_t *thread = __kmp_threads[gtid];
   kmp_depnode_t *node = task->td_depnode;
 

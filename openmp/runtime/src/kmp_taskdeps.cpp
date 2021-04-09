@@ -29,6 +29,45 @@
 // runtime locks
 // TODO: Any ITT support needed?
 
+// -- Taskgraph
+int recording;
+int inside_taskgraph = false;
+int taskify = true;
+kmp_int32 ntdgs = 0;
+kmp_int32 numRoots = 0;
+kmp_int32 id_counter;
+
+//Pointers
+dynamic_tdg_info dynamic_tdgs[10];
+kmp_record_info *RecordMap;
+int *rootTasks;
+
+//Sizes
+kmp_int32 MaxNesting = 4;
+kmp_int32 MapSize = 50;
+kmp_int32 MapIncrement= 50;
+kmp_int32 SuccessorsSize = 10;
+kmp_int32 SuccessorsIncrement = 5;
+kmp_int32 ColorMapSize = 20;
+
+kmp_futex_lock_t taskgraph_lock;
+
+// Colors for the graphviz output
+const char* color_names[] = {
+        "aquamarine3", "crimson", "chartreuse", "blue2", "darkorchid3", "darkgoldenrod1",
+        "deeppink4", "gray19", "indigo", "indianred", "forestgreen", "navy", "orangered2",
+        "slateblue3", "yellowgreen", "salmon", "purple", "mediumturquoise", "slategray3"
+};
+
+struct ident_color{
+  const char * td_ident;
+  const char *color;
+};
+
+ident_color *ColorMap;
+kmp_int32 ColorIndex=0;
+// -- End of Taskgraph
+
 #ifdef KMP_SUPPORT_GRAPH_OUTPUT
 static std::atomic<kmp_int32> kmp_node_id_seed = ATOMIC_VAR_INIT(0);
 #endif
@@ -213,11 +252,37 @@ static kmp_depnode_list_t *__kmp_add_node(kmp_info_t *thread,
 static inline void __kmp_track_dependence(kmp_int32 gtid, kmp_depnode_t *source,
                                           kmp_depnode_t *sink,
                                           kmp_task_t *sink_task) {
+  if (recording && inside_taskgraph) {
+    kmp_record_info *SourceInfo = &(RecordMap[source->dn.part_id]);
+    bool exists = false;
+    for (int i = 0; i < SourceInfo->nsuccessors; i++) {
+      if (SourceInfo->successors[i] == sink_task->part_id) {
+        exists = true;
+        break;
+      }
+    }
+    if (!exists) {
+      if (SourceInfo->nsuccessors >= SourceInfo->successorsSize) {
+        SourceInfo->successorsSize += SuccessorsIncrement;
+        SourceInfo->successors = (kmp_int32 *)realloc(
+            SourceInfo->successors,
+            SourceInfo->successorsSize * sizeof(kmp_int32));
+      }
+
+      SourceInfo->successors[SourceInfo->nsuccessors] = sink_task->part_id;
+      SourceInfo->nsuccessors++;
+
+      kmp_record_info *SinkInfo = &(RecordMap[sink_task->part_id]);
+      SinkInfo->npredecessors++;
+    }
+  }
+
 #ifdef KMP_SUPPORT_GRAPH_OUTPUT
   kmp_taskdata_t *task_source = KMP_TASK_TO_TASKDATA(source->dn.task);
+  kmp_taskdata_t *task_sink = KMP_TASK_TO_TASKDATA(sink_task);
+
   // do not use sink->dn.task as that is only filled after the dependences
   // are already processed!
-  kmp_taskdata_t *task_sink = KMP_TASK_TO_TASKDATA(sink_task);
 
   __kmp_printf("%d(%s) -> %d(%s)\n", source->dn.id,
                task_source->td_ident->psource, sink->dn.id,
@@ -523,6 +588,51 @@ kmp_int32 __kmpc_omp_task_with_deps(ident_t *loc_ref, kmp_int32 gtid,
   kmp_info_t *thread = __kmp_threads[gtid];
   kmp_taskdata_t *current_task = thread->th.th_current_task;
 
+  if (recording && inside_taskgraph) {
+    // Extend Map Size if needed
+    if (new_task->part_id >= MapSize) {
+
+      int OldSize = MapSize;
+      MapSize += MapIncrement;
+      RecordMap = (kmp_record_info *)realloc(RecordMap,
+                                             MapSize * sizeof(kmp_record_info));
+
+      for (int i = OldSize; i < MapSize; i++) {
+        kmp_int32 *successorsList =
+            (kmp_int32 *)malloc(SuccessorsSize * sizeof(kmp_int32));
+        kmp_record_info newRecord = {successorsList, 0, nullptr, 0, 0, nullptr,
+                                     SuccessorsSize};
+        RecordMap[i] = newRecord;
+      }
+    }
+
+    RecordMap[new_task->part_id].td_ident = new_taskdata->td_ident->psource;
+    RecordMap[new_task->part_id].static_id = new_taskdata->td_task_id;
+    RecordMap[new_task->part_id].task = new_task;
+  }
+
+  if (!recording && inside_taskgraph) {
+    // TODO: Measure lock impact, maybe is better a lock per node
+    __kmp_acquire_futex_lock(&taskgraph_lock, gtid);
+
+    kmp_record_info *TaskInfo = &(RecordMap[new_task->part_id]);
+    TaskInfo->task = new_task;
+
+    if (!TaskInfo->npredecessors_counter) {
+      // printf("  [OpenMP] Task Found  %d -> Executing, dependencies solved\n",
+      // new_task->part_id);
+      int result = __kmp_omp_task(gtid, new_task, true);
+      __kmp_release_futex_lock(&taskgraph_lock, 0);
+      return result;
+
+    } else {
+      // printf("  [OpenMP] Task Found %d deps:%d-> Waiting, dependencies not
+      // solved \n", new_task->part_id, TaskInfo->npredecessors_counter);
+      __kmp_release_futex_lock(&taskgraph_lock, 0);
+      return TASK_CURRENT_NOT_QUEUED;
+    }
+  }
+
 #if OMPT_SUPPORT
   if (ompt_enabled.enabled) {
     if (!current_task->ompt_task_info.frame.enter_frame.ptr)
@@ -657,6 +767,266 @@ void __ompt_taskwait_dep_finish(kmp_taskdata_t *current_task,
   *taskwait_task_data = ompt_data_none;
 }
 #endif /* OMPT_SUPPORT */
+
+void print_tdg() {
+  for (int i = 1; i < MapSize; i++) {
+    if (RecordMap[i].td_ident == nullptr)
+      break;
+    printf("TASK: %d Successors: ", RecordMap[i].static_id);
+    for (int j = 0; j < RecordMap[i].nsuccessors; j++) {
+      printf(" %d ", RecordMap[RecordMap[i].successors[j]].static_id);
+    }
+    printf(" Predecessors : %d ", RecordMap[i].npredecessors);
+    printf(" \n");
+  }
+}
+
+// Depth First Search to look for transitive edges
+void traverse_node(kmp_int32 *edges_to_check, kmp_int32 *num_edges,
+                   kmp_int32 node, kmp_int32 nesting_level, int Visited[]) {
+  kmp_int32 *successors = RecordMap[node].successors;
+  kmp_int32 nsuccessors = RecordMap[node].nsuccessors;
+  Visited[node] = true;
+  for (int i = 0; i < nsuccessors; i++) {
+    kmp_int32 successor = successors[i];
+    for (int j = 0; j < *num_edges; j++) {
+      kmp_int32 edge = edges_to_check[j];
+      if (edge == successor) {
+        // Remove edge
+        edges_to_check[j] = -1;
+        for (int x = j; x < (*num_edges) - 1; x++) {
+          edges_to_check[x] = edges_to_check[x + 1];
+          edges_to_check[x + 1] = -1;
+        }
+        *num_edges = *num_edges - 1;
+        RecordMap[edge].npredecessors--;
+        break;
+      }
+    }
+    if (Visited[successor] == false && nesting_level < MaxNesting)
+      traverse_node(edges_to_check, num_edges, successor, nesting_level + 1,
+                    Visited);
+  }
+}
+
+void erase_transitive_edges() {
+  for (int i = 1; i < MapSize; i++) {
+
+    if (RecordMap[i].td_ident == nullptr)
+      break;
+    kmp_int32 nsuccessors = RecordMap[i].nsuccessors;
+
+    if (!nsuccessors)
+      continue;
+
+    int Visited[MapSize];
+    memset(Visited, false, sizeof(int) * MapSize);
+    Visited[i] = true;
+    // Copy succesors, as they may be modified
+    kmp_int32 *successors =
+        (kmp_int32 *)malloc(sizeof(kmp_int32) * nsuccessors);
+    memcpy(successors, RecordMap[i].successors,
+           sizeof(kmp_int32) * nsuccessors);
+
+    for (int j = 0; j < nsuccessors; j++) {
+      bool deleted = true;
+      for (int x = 0; x < nsuccessors; x++) {
+        if (RecordMap[i].successors[x] == successors[j])
+          deleted = false;
+      }
+      if (!deleted)
+        traverse_node(RecordMap[i].successors, &RecordMap[i].nsuccessors,
+                      successors[j], 0, Visited);
+    }
+    // free succesors
+    free(successors);
+  }
+}
+
+void print_tdg_to_dot(void) {
+
+  FILE *f = fopen("tdg.dot", "w");
+
+  if (f == NULL) {
+    printf("Error opening file!\n");
+    exit(1);
+  }
+
+  fprintf(f, "digraph TDG {\n");
+  fprintf(f, "   compound=true\n");
+  fprintf(f, "   subgraph cluster_0 {\n");
+  fprintf(f, "      label=TDG_%d\n", ntdgs);
+
+  for (int i = 1; i < MapSize; i++) {
+
+    if (RecordMap[i].td_ident == nullptr)
+      break;
+    const char *color = nullptr;
+    const char *ident = RecordMap[i].td_ident;
+    for (int j = 0; j < ColorMapSize; j++) {
+
+      if (ColorMap[j].td_ident == nullptr) {
+        ColorMap[j].td_ident = ident;
+        ColorMap[j].color = color_names[ColorIndex];
+        ColorIndex++;
+        color = ColorMap[j].color;
+        break;
+      } else if (ColorMap[j].td_ident == ident) {
+        color = ColorMap[j].color;
+        break;
+      }
+    }
+
+    if (color == nullptr) {
+      printf("Unexpected error, color not found \n");
+    } else {
+      fprintf(f, "      %d[color=%s,style=bold]\n", RecordMap[i].static_id,
+              color);
+    }
+  }
+  fprintf(f, "   }\n");
+
+  for (int i = 1; i < MapSize; i++) {
+
+    if (RecordMap[i].td_ident == nullptr)
+      break;
+
+    kmp_int32 nsuccessors = RecordMap[i].nsuccessors;
+    kmp_int32 *successors = RecordMap[i].successors;
+    if (nsuccessors) {
+      for (int j = 0; j < nsuccessors; j++) {
+        fprintf(f, "   %d -> %d \n", RecordMap[i].static_id,
+                RecordMap[successors[j]].static_id);
+      }
+    } else {
+      fprintf(f, "   %d \n", RecordMap[i].static_id);
+    }
+  }
+
+  fprintf(f, "   node [shape=plaintext];\n");
+  fprintf(f, "    subgraph cluster_1000 {\n");
+  fprintf(f, "      label=\"User functions:\"; style=\"rounded\";\n");
+  fprintf(f, " user_funcs [label=<<table border=\"0\" cellspacing=\"10\" "
+             "cellborder=\"0\">\n");
+  for (int i = 0; i < ColorMapSize; i++) {
+    if (ColorMap[i].td_ident == nullptr)
+      break;
+    fprintf(f, "      <tr>\n");
+    fprintf(f,
+            "         <td bgcolor=\"%s\" width=\"15px\" border=\"1\"></td>\n",
+            ColorMap[i].color);
+    fprintf(f, "         <td>%s</td>\n", ColorMap[i].td_ident);
+    fprintf(f, "      </tr>\n");
+  }
+  fprintf(f, "      </table>>]\n");
+  fprintf(f, "}}\n");
+  fclose(f);
+}
+
+kmp_int32 __kmpc_omp_taskgraph(ident_t *loc_ref, kmp_int32 gtid,
+                               void (*entry)(void *), void *args,
+                               kmp_uint32 condition) {
+  recording = true;
+  inside_taskgraph = true;
+  id_counter = 0;
+  __kmp_init_futex_lock(&taskgraph_lock);
+  if (condition) {
+    printf("[OpenMP] Condition true, forcing rerecording \n");
+    // Implement the free of the previous RecordMap
+  } else {
+    for (int i = 0; i < ntdgs; i++) {
+      if (dynamic_tdgs[i].loc == loc_ref->psource) {
+        recording = false;
+        RecordMap = dynamic_tdgs[i].RecordMap;
+        if (taskify)
+          for (int i = 1; i < MapSize; i++) {
+
+            if (RecordMap[i].td_ident == nullptr)
+              break;
+
+            kmp_taskdata_t *taskdata = KMP_TASK_TO_TASKDATA(RecordMap[i].task);
+
+            KMP_ATOMIC_INC(&taskdata->td_parent->td_incomplete_child_tasks);
+
+            // Protect with if?
+            if (taskdata->td_parent->td_taskgroup)
+              KMP_ATOMIC_INC(&taskdata->td_parent->td_taskgroup->count);
+
+            if (taskdata->td_parent->td_flags.tasktype == TASK_EXPLICIT)
+              KMP_ATOMIC_INC(&taskdata->td_parent->td_allocated_child_tasks);
+          }
+        break;
+      }
+    }
+  }
+  if (recording) {
+
+    char *var = getenv("OMP_TASKIFY");
+    if ((var && strcmp(var, "FALSE") == 0)) {
+      taskify = false;
+      // printf("[OpenMP] Tasksgraphs are not taskifyed \n");
+    } else {
+      // printf("[OpenMP] Taskgraphs are taskifyed \n");
+    }
+    RecordMap = (kmp_record_info *)malloc(MapSize * sizeof(kmp_record_info));
+    ColorMap = (ident_color *)malloc(ColorMapSize * sizeof(ident_color));
+
+    for (int i = 0; i < MapSize; i++) {
+      kmp_int32 *successorsList =
+          (kmp_int32 *)malloc(SuccessorsSize * sizeof(kmp_int32));
+      kmp_record_info newRecord = {successorsList, 0, nullptr,       0, 0,
+                                   nullptr,        0, SuccessorsSize};
+      RecordMap[i] = newRecord;
+    }
+    for (int i = 0; i < ColorMapSize; i++) {
+      ColorMap[i] = {nullptr, nullptr};
+    }
+    // printf("[OpenMP] Finish initializing Record map \n");
+  }
+
+  if (recording || !taskify) {
+    entry(args);
+  } else {
+    // Only for taskified functions
+    for (int i = 0; i < numRoots; i++) {
+      __kmp_omp_task(gtid, RecordMap[rootTasks[i]].task, true);
+    }
+  }
+
+  if (recording) {
+
+    // Store roots
+    rootTasks = (kmp_int32 *)malloc(MapSize * sizeof(kmp_int32));
+    for (int i = 0; i < MapSize; i++) {
+      if (RecordMap[i].td_ident != nullptr && RecordMap[i].npredecessors == 0) {
+        rootTasks[numRoots] = i;
+        numRoots++;
+      }
+    }
+    dynamic_tdgs[ntdgs] = {loc_ref->psource, RecordMap};
+    ntdgs++;
+    // printf("[OpenMP] Recording finished! \n");
+    erase_transitive_edges();
+    // print_tdg();
+    char *my_env_var = getenv("OMP_PRINT_TDG");
+    if (my_env_var && strcmp(my_env_var, "TRUE") == 0) {
+      // printf("[OpenMP] Dot file tdg.dot generated \n");
+      print_tdg_to_dot();
+    }
+  }
+
+  inside_taskgraph = false;
+
+  __kmpc_omp_taskwait(loc_ref, gtid);
+
+  if (recording)
+    for (int i = 0; i < MapSize; i++) {
+      if (RecordMap[i].td_ident != nullptr)
+        RecordMap[i].npredecessors_counter = RecordMap[i].npredecessors;
+    }
+
+  return 1;
+}
 
 /*!
 @ingroup TASKING

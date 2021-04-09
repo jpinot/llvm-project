@@ -23,6 +23,14 @@
 
 #include "tsan_annotations.h"
 
+// Taskgraph
+extern int inside_taskgraph;
+extern int MapSize;
+extern int MapIncrement;
+extern int SuccessorsSize;
+extern int id_counter;
+extern int taskify;
+
 /* forward declaration */
 static void __kmp_enable_tasking(kmp_task_team_t *task_team,
                                  kmp_info_t *this_thr);
@@ -734,11 +742,36 @@ static void __kmp_free_task(kmp_int32 gtid, kmp_taskdata_t *taskdata,
   taskdata->td_flags.freed = 1;
   ANNOTATE_HAPPENS_BEFORE(taskdata);
 // deallocate the taskdata and shared variable blocks associated with this task
+//
+  if (taskdata->td_task_id == 0 || !taskify) {
+    // only free tasks created outside taskgraph
 #if USE_FAST_MEMORY
-  __kmp_fast_free(thread, taskdata);
+    __kmp_fast_free(thread, taskdata);
 #else /* ! USE_FAST_MEMORY */
-  __kmp_thread_free(thread, taskdata);
+    __kmp_thread_free(thread, taskdata);
 #endif
+
+  } else {
+    kmp_task *task = KMP_TASKDATA_TO_TASK(taskdata);
+
+    taskdata->td_flags.complete = 0;
+    taskdata->td_flags.started = 0;
+    taskdata->td_flags.freed = 0;
+    taskdata->td_flags.executing = 0;
+    taskdata->td_flags.task_serial =
+        (taskdata->td_parent->td_flags.final ||
+         taskdata->td_flags.team_serial || taskdata->td_flags.tasking_ser);
+
+    // taskdata->td_allow_completion_event.pending_events_count = 1;
+    KMP_ATOMIC_ST_RLX(&taskdata->td_untied_count, 0);
+
+    KMP_ATOMIC_ST_RLX(&taskdata->td_incomplete_child_tasks, 0);
+    // start at one because counts current task and children
+    KMP_ATOMIC_ST_RLX(&taskdata->td_allocated_child_tasks, 1);
+
+    RecordMap[task->part_id].npredecessors_counter =
+        RecordMap[task->part_id].npredecessors;
+  }
   KA_TRACE(20, ("__kmp_free_task: T#%d freed task %p\n", gtid, taskdata));
 }
 
@@ -1222,7 +1255,13 @@ void __kmp_enable_tasking_in_serial_mode(
 kmp_task_t *__kmp_task_alloc(ident_t *loc_ref, kmp_int32 gtid,
                              kmp_tasking_flags_t *flags,
                              size_t sizeof_kmp_task_t, size_t sizeof_shareds,
-                             kmp_routine_entry_t task_entry) {
+                             kmp_routine_entry_t task_entry, ...) {
+  // FIXME: This is unacceptable.
+  va_list listptr;
+  va_start(listptr,task_entry);
+  int seed = va_arg(listptr,int);
+  va_end(listptr);
+
   kmp_task_t *task;
   kmp_taskdata_t *taskdata;
   kmp_info_t *thread = __kmp_threads[gtid];
@@ -1328,7 +1367,15 @@ kmp_task_t *__kmp_task_alloc(ident_t *loc_ref, kmp_int32 gtid,
     task->shareds = NULL;
   }
   task->routine = task_entry;
-  task->part_id = 0; // AC: Always start with 0 part id
+
+  id_counter++;
+  if (inside_taskgraph) {
+    task->part_id = id_counter;
+    taskdata->td_task_id = seed;
+  } else {
+    task->part_id = 0; // AC: Always start with 0 part id
+    taskdata->td_task_id = 0;
+  }
 
   taskdata->td_task_id = KMP_GEN_TASK_ID();
   taskdata->td_team = thread->th.th_team;
@@ -1429,7 +1476,13 @@ kmp_task_t *__kmp_task_alloc(ident_t *loc_ref, kmp_int32 gtid,
 kmp_task_t *__kmpc_omp_task_alloc(ident_t *loc_ref, kmp_int32 gtid,
                                   kmp_int32 flags, size_t sizeof_kmp_task_t,
                                   size_t sizeof_shareds,
-                                  kmp_routine_entry_t task_entry) {
+                                  kmp_routine_entry_t task_entry, ...) {
+  // This is unacceptable. Remove.
+  va_list listptr;
+  va_start(listptr,task_entry);
+  int seed = va_arg(listptr,int);
+  va_end(listptr);
+
   kmp_task_t *retval;
   kmp_tasking_flags_t *input_flags = (kmp_tasking_flags_t *)&flags;
   __kmp_assert_valid_gtid(gtid);
@@ -1443,7 +1496,7 @@ kmp_task_t *__kmpc_omp_task_alloc(ident_t *loc_ref, kmp_int32 gtid,
                 sizeof_shareds, task_entry));
 
   retval = __kmp_task_alloc(loc_ref, gtid, input_flags, sizeof_kmp_task_t,
-                            sizeof_shareds, task_entry);
+                            sizeof_shareds, task_entry, seed);
 
   KA_TRACE(20, ("__kmpc_omp_task_alloc(exit): T#%d retval %p\n", gtid, retval));
 
