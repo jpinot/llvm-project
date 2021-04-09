@@ -921,6 +921,11 @@ void StmtPrinter::VisitOMPTaskwaitDirective(OMPTaskwaitDirective *Node) {
   PrintOMPExecutableDirective(Node);
 }
 
+void StmtPrinter::VisitOMPTaskgraphDirective(OMPTaskgraphDirective *Node) {
+  Indent() << "#pragma omp taskgraph";
+  PrintOMPExecutableDirective(Node);
+}
+
 void StmtPrinter::VisitOMPTaskgroupDirective(OMPTaskgroupDirective *Node) {
   Indent() << "#pragma omp taskgroup";
   PrintOMPExecutableDirective(Node);

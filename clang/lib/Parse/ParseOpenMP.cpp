@@ -2158,6 +2158,7 @@ Parser::DeclGroupPtrTy Parser::ParseOpenMPDeclarativeDirectiveWithExtDecl(
   case OMPD_taskyield:
   case OMPD_barrier:
   case OMPD_taskwait:
+  case OMPD_taskgraph:
   case OMPD_taskgroup:
   case OMPD_flush:
   case OMPD_depobj:
@@ -2405,6 +2406,7 @@ Parser::ParseOpenMPDeclarativeOrExecutableDirective(ParsedStmtContext StmtCtx) {
   case OMPD_atomic:
   case OMPD_target:
   case OMPD_teams:
+  case OMPD_taskgraph:
   case OMPD_taskgroup:
   case OMPD_target_data:
   case OMPD_target_parallel:

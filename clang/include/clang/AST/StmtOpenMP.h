@@ -2260,6 +2260,54 @@ public:
   }
 };
 
+/// This represents '#pragma omp taskgraph' directive.
+///
+/// \code
+/// #pragma omp taskgraph
+/// \endcode
+///
+class OMPTaskgraphDirective : public OMPExecutableDirective {
+  friend class ASTStmtReader;
+  friend class OMPExecutableDirective;
+  /// Build directive with the given start and end location.
+  ///
+  /// \param StartLoc Starting location of the directive kind.
+  /// \param EndLoc Ending location of the directive.
+  ///
+  OMPTaskgraphDirective(SourceLocation StartLoc, SourceLocation EndLoc)
+      : OMPExecutableDirective(OMPTaskgraphDirectiveClass,
+                               llvm::omp::OMPD_taskgraph, StartLoc, EndLoc) {}
+
+  /// Build an empty directive.
+  ///
+  explicit OMPTaskgraphDirective()
+      : OMPExecutableDirective(OMPTaskgraphDirectiveClass,
+                               llvm::omp::OMPD_taskgraph, SourceLocation(),
+                               SourceLocation()) {}
+
+public:
+  /// Creates directive.
+  ///
+  /// \param C AST context.
+  /// \param StartLoc Starting location of the directive kind.
+  /// \param EndLoc Ending Location of the directive.
+  ///
+  static OMPTaskgraphDirective *
+  Create(const ASTContext &C, SourceLocation StartLoc, SourceLocation EndLoc,
+         Stmt *AssociatedStmt, ArrayRef<OMPClause *> Clauses);
+
+  /// Creates an empty directive.
+  ///
+  /// \param C AST context.
+  ///
+  static OMPTaskgraphDirective *CreateEmpty(const ASTContext &C,
+                                            unsigned NumClauses, EmptyShell);
+
+  static bool classof(const Stmt *T) {
+    return T->getStmtClass() == OMPTaskgraphDirectiveClass;
+  }
+};
+
 /// This represents '#pragma omp taskgroup' directive.
 ///
 /// \code

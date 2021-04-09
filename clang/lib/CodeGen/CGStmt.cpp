@@ -248,6 +248,9 @@ void CodeGenFunction::EmitStmt(const Stmt *S, ArrayRef<const Attr *> Attrs) {
   case Stmt::OMPTaskwaitDirectiveClass:
     EmitOMPTaskwaitDirective(cast<OMPTaskwaitDirective>(*S));
     break;
+  case Stmt::OMPTaskgraphDirectiveClass:
+    EmitOMPTaskgraphDirective(cast<OMPTaskgraphDirective>(*S));
+    break;
   case Stmt::OMPTaskgroupDirectiveClass:
     EmitOMPTaskgroupDirective(cast<OMPTaskgroupDirective>(*S));
     break;
@@ -2666,6 +2669,22 @@ CodeGenFunction::EmitCapturedStmt(const CapturedStmt &S, CapturedRegionKind K) {
   EmitCallOrInvoke(F, CapStruct.getPointer(*this));
 
   return F;
+}
+
+/// Generate an outlined function for the body of a CapturedStmt, store any
+/// captured variables into the captured struct but does not do any call.
+std::pair<llvm::Function *, llvm::Value *>
+CodeGenFunction::EmitCapturedStmtNoCall(const CapturedStmt &S,
+                                        CapturedRegionKind K) {
+  LValue CapStruct = InitCapturedStruct(S);
+
+  // Emit the CapturedDecl
+  CodeGenFunction CGF(CGM, true);
+  CGCapturedStmtRAII CapInfoRAII(CGF, new CGCapturedStmtInfo(S, K));
+  llvm::Function *F = CGF.GenerateCapturedStmtFunction(S);
+  delete CGF.CapturedStmtInfo;
+
+  return std::make_pair(F, CapStruct.getPointer(*this));
 }
 
 Address CodeGenFunction::GenerateCapturedStmtArgument(const CapturedStmt &S) {

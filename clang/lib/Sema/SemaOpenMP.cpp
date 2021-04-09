@@ -3972,6 +3972,7 @@ void Sema::ActOnOpenMPRegionStart(OpenMPDirectiveKind DKind, Scope *CurScope) {
   case OMPD_for_simd:
   case OMPD_sections:
   case OMPD_single:
+  case OMPD_taskgraph:
   case OMPD_taskgroup:
   case OMPD_distribute:
   case OMPD_distribute_simd:
@@ -5514,6 +5515,12 @@ StmtResult Sema::ActOnOpenMPExecutableDirective(
     assert(AStmt == nullptr &&
            "No associated statement allowed for 'omp taskwait' directive");
     Res = ActOnOpenMPTaskwaitDirective(StartLoc, EndLoc);
+    break;
+  case OMPD_taskgraph:
+    assert(AStmt != nullptr &&
+           "Associated statement required for 'omp taskgraph' directive");
+    Res = ActOnOpenMPTaskgraphDirective(StartLoc, EndLoc, AStmt,
+                                        ClausesWithImplicit);
     break;
   case OMPD_taskgroup:
     Res = ActOnOpenMPTaskgroupDirective(ClausesWithImplicit, AStmt, StartLoc,
@@ -9674,6 +9681,19 @@ StmtResult Sema::ActOnOpenMPTaskwaitDirective(SourceLocation StartLoc,
   return OMPTaskwaitDirective::Create(Context, StartLoc, EndLoc);
 }
 
+StmtResult Sema::ActOnOpenMPTaskgraphDirective(SourceLocation StartLoc,
+                                               SourceLocation EndLoc,
+                                               Stmt *AStmt,
+                                               ArrayRef<OMPClause *> Clauses) {
+  if (!AStmt)
+    return StmtError();
+
+  assert(isa<CapturedStmt>(AStmt) && "Captured statement expected");
+
+  return OMPTaskgraphDirective::Create(Context, StartLoc, EndLoc, AStmt,
+                                       Clauses);
+}
+
 StmtResult Sema::ActOnOpenMPTaskgroupDirective(ArrayRef<OMPClause *> Clauses,
                                                Stmt *AStmt,
                                                SourceLocation StartLoc,
@@ -12500,6 +12520,7 @@ static OpenMPDirectiveKind getOpenMPCaptureRegionForClause(
     case OMPD_target_teams_distribute:
     case OMPD_distribute_parallel_for:
     case OMPD_task:
+    case OMPD_taskgraph:
     case OMPD_taskloop:
     case OMPD_master_taskloop:
     case OMPD_target_data:
@@ -12611,6 +12632,7 @@ static OpenMPDirectiveKind getOpenMPCaptureRegionForClause(
     case OMPD_single:
     case OMPD_master:
     case OMPD_critical:
+    case OMPD_taskgraph:
     case OMPD_taskgroup:
     case OMPD_distribute:
     case OMPD_ordered:
@@ -12691,6 +12713,7 @@ static OpenMPDirectiveKind getOpenMPCaptureRegionForClause(
     case OMPD_single:
     case OMPD_master:
     case OMPD_critical:
+    case OMPD_taskgraph:
     case OMPD_taskgroup:
     case OMPD_distribute:
     case OMPD_ordered:
@@ -12769,6 +12792,7 @@ static OpenMPDirectiveKind getOpenMPCaptureRegionForClause(
     case OMPD_single:
     case OMPD_master:
     case OMPD_critical:
+    case OMPD_taskgraph:
     case OMPD_taskgroup:
     case OMPD_distribute:
     case OMPD_ordered:
@@ -12846,6 +12870,7 @@ static OpenMPDirectiveKind getOpenMPCaptureRegionForClause(
     case OMPD_single:
     case OMPD_master:
     case OMPD_critical:
+    case OMPD_taskgraph:
     case OMPD_taskgroup:
     case OMPD_distribute:
     case OMPD_ordered:
@@ -12926,6 +12951,7 @@ static OpenMPDirectiveKind getOpenMPCaptureRegionForClause(
     case OMPD_single:
     case OMPD_master:
     case OMPD_critical:
+    case OMPD_taskgraph:
     case OMPD_taskgroup:
     case OMPD_ordered:
     case OMPD_atomic:

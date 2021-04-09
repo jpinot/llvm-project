@@ -444,6 +444,9 @@ def OMP_TaskWait : Directive<"taskwait"> {
     VersionedClause<OMPC_Depend, 50>
   ];
 }
+def OMP_TaskGraph : Directive<"taskgraph"> {
+  let allowedClauses = [];
+}
 def OMP_TaskGroup : Directive<"taskgroup"> {
   let allowedClauses = [
     VersionedClause<OMPC_TaskReduction>,

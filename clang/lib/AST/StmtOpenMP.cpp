@@ -652,6 +652,22 @@ OMPTaskwaitDirective *OMPTaskwaitDirective::CreateEmpty(const ASTContext &C,
   return new (C) OMPTaskwaitDirective();
 }
 
+OMPTaskgraphDirective *
+OMPTaskgraphDirective::Create(const ASTContext &C, SourceLocation StartLoc,
+                              SourceLocation EndLoc, Stmt *AssociatedStmt,
+                              ArrayRef<OMPClause *> Clauses) {
+  auto *Dir = createDirective<OMPTaskgraphDirective>(
+      C, Clauses, AssociatedStmt, /*NumChildren=*/1, StartLoc, EndLoc);
+  return Dir;
+}
+
+OMPTaskgraphDirective *OMPTaskgraphDirective::CreateEmpty(const ASTContext &C,
+                                                          unsigned NumClauses,
+                                                          EmptyShell) {
+  return createEmptyDirective<OMPTaskgraphDirective>(
+      C, NumClauses, /*HasAssociatedStmt=*/true, /*NumChildren=*/1);
+}
+
 OMPTaskgroupDirective *OMPTaskgroupDirective::Create(
     const ASTContext &C, SourceLocation StartLoc, SourceLocation EndLoc,
     ArrayRef<OMPClause *> Clauses, Stmt *AssociatedStmt, Expr *ReductionRef) {

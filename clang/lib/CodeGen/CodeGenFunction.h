@@ -3410,6 +3410,10 @@ public:
   llvm::Value *getTypeSize(QualType Ty);
   LValue InitCapturedStruct(const CapturedStmt &S);
   llvm::Function *EmitCapturedStmt(const CapturedStmt &S, CapturedRegionKind K);
+
+  std::pair<llvm::Function *, llvm::Value *>
+  EmitCapturedStmtNoCall(const CapturedStmt &S, CapturedRegionKind K);
+
   llvm::Function *GenerateCapturedStmtFunction(const CapturedStmt &S);
   Address GenerateCapturedStmtArgument(const CapturedStmt &S);
   llvm::Function *GenerateOpenMPCapturedStmtFunction(const CapturedStmt &S,
@@ -3585,6 +3589,7 @@ public:
   void EmitOMPTaskyieldDirective(const OMPTaskyieldDirective &S);
   void EmitOMPBarrierDirective(const OMPBarrierDirective &S);
   void EmitOMPTaskwaitDirective(const OMPTaskwaitDirective &S);
+  void EmitOMPTaskgraphDirective(const OMPTaskgraphDirective &S);
   void EmitOMPTaskgroupDirective(const OMPTaskgroupDirective &S);
   void EmitOMPFlushDirective(const OMPFlushDirective &S);
   void EmitOMPDepobjDirective(const OMPDepobjDirective &S);
