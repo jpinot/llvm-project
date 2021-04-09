@@ -52,6 +52,7 @@
 #include "llvm/Transforms/Scalar/GVN.h"
 #include "llvm/Transforms/Scalar/InstSimplifyPass.h"
 #include "llvm/Transforms/Scalar/Scalarizer.h"
+#include "llvm/Transforms/StaticTDG.h"
 #include "llvm/Transforms/Utils.h"
 #include "llvm/Transforms/Utils/SymbolRewriter.h"
 #include "llvm/Transforms/Utils/UnifyFunctionExitNodes.h"
@@ -170,6 +171,7 @@ namespace {
       (void) llvm::createSafeStackPass();
       (void) llvm::createSROAPass();
       (void) llvm::createSingleLoopExtractorPass();
+      (void) llvm::createStaticTDGIdentPass();
       (void) llvm::createStripSymbolsPass();
       (void) llvm::createStripNonDebugSymbolsPass();
       (void) llvm::createStripDeadDebugInfoPass();

@@ -48,6 +48,7 @@
 #include "llvm/Transforms/Vectorize/LoopVectorize.h"
 #include "llvm/Transforms/Vectorize/SLPVectorizer.h"
 #include "llvm/Transforms/Vectorize/VectorCombine.h"
+#include "llvm/Transforms/StaticTDG.h"
 
 using namespace llvm;
 
@@ -918,6 +919,8 @@ void PassManagerBuilder::populateModulePassManager(
   }
 
   MPM.add(createAnnotationRemarksLegacyPass());
+
+  MPM.add(createStaticTDGIdentPass());
 }
 
 void PassManagerBuilder::addLTOOptimizationPasses(legacy::PassManagerBase &PM) {

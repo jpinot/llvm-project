@@ -117,6 +117,7 @@ add_llvm_component_library(LLVMAnalysis
   ScalarEvolutionNormalization.cpp
   StackLifetime.cpp
   StackSafetyAnalysis.cpp
+  StaticTDG.cpp
   SyncDependenceAnalysis.cpp
   SyntheticCountsUtils.cpp
   TFUtils.cpp
