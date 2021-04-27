@@ -923,7 +923,7 @@ void print_tdg_to_dot(void) {
   fclose(f);
 }
 
-kmp_int32 __kmpc_omp_taskgraph(ident_t *loc_ref, kmp_int32 gtid,
+kmp_int32 __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid,
                                void (*entry)(void *), void *args,
                                kmp_uint32 condition) {
   recording = true;
