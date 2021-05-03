@@ -50,7 +50,7 @@ void StaticTDGPass::calculateTasks(Function &F, DominatorTree &DT, LoopInfo &LI,
       if (CallInst *TaskCall = dyn_cast<CallInst>(&I)) {
         if (TaskCall->getCalledFunction() &&
             TaskCall->getCalledFunction()->getName() ==
-                "__kmpc_omp_task_alloc") {
+                "__kmpc_set_task_static_id") {
 
           NumberOfTasks++;
 
