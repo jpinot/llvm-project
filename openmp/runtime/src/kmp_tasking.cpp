@@ -762,7 +762,7 @@ static void __kmp_free_task(kmp_int32 gtid, kmp_taskdata_t *taskdata,
         (taskdata->td_parent->td_flags.final ||
          taskdata->td_flags.team_serial || taskdata->td_flags.tasking_ser);
 
-    // taskdata->td_allow_completion_event.pending_events_count = 1;
+    taskdata->td_allow_completion_event.pending_events_count = 1;
     KMP_ATOMIC_ST_RLX(&taskdata->td_untied_count, 0);
 
     KMP_ATOMIC_ST_RLX(&taskdata->td_incomplete_child_tasks, 0);
@@ -1255,12 +1255,7 @@ void __kmp_enable_tasking_in_serial_mode(
 kmp_task_t *__kmp_task_alloc(ident_t *loc_ref, kmp_int32 gtid,
                              kmp_tasking_flags_t *flags,
                              size_t sizeof_kmp_task_t, size_t sizeof_shareds,
-                             kmp_routine_entry_t task_entry, ...) {
-  // FIXME: This is unacceptable.
-  va_list listptr;
-  va_start(listptr,task_entry);
-  int seed = va_arg(listptr,int);
-  va_end(listptr);
+                             kmp_routine_entry_t task_entry) {
 
   kmp_task_t *task;
   kmp_taskdata_t *taskdata;
@@ -1367,16 +1362,7 @@ kmp_task_t *__kmp_task_alloc(ident_t *loc_ref, kmp_int32 gtid,
     task->shareds = NULL;
   }
   task->routine = task_entry;
-
-  id_counter++;
-  if (inside_taskgraph) {
-    task->part_id = id_counter;
-    taskdata->td_task_id = seed;
-  } else {
-    task->part_id = 0; // AC: Always start with 0 part id
-    taskdata->td_task_id = 0;
-  }
-
+  task->part_id = 0; // AC: Always start with 0 part id
   taskdata->td_task_id = KMP_GEN_TASK_ID();
   taskdata->td_team = thread->th.th_team;
   taskdata->td_alloc_thread = encountering_thread;
@@ -1473,15 +1459,19 @@ kmp_task_t *__kmp_task_alloc(ident_t *loc_ref, kmp_int32 gtid,
   return task;
 }
 
+void __kmpc_set_task_static_id(kmp_task_t *task, kmp_int32 staticID) {
+  if (inside_taskgraph) {
+    kmp_taskdata_t *taskdata = KMP_TASK_TO_TASKDATA(task);
+    id_counter++;
+    task->part_id = id_counter;
+    taskdata->td_task_id = staticID;
+  }
+}
+
 kmp_task_t *__kmpc_omp_task_alloc(ident_t *loc_ref, kmp_int32 gtid,
                                   kmp_int32 flags, size_t sizeof_kmp_task_t,
                                   size_t sizeof_shareds,
-                                  kmp_routine_entry_t task_entry, ...) {
-  // This is unacceptable. Remove.
-  va_list listptr;
-  va_start(listptr,task_entry);
-  int seed = va_arg(listptr,int);
-  va_end(listptr);
+                                  kmp_routine_entry_t task_entry) {
 
   kmp_task_t *retval;
   kmp_tasking_flags_t *input_flags = (kmp_tasking_flags_t *)&flags;
@@ -1496,7 +1486,7 @@ kmp_task_t *__kmpc_omp_task_alloc(ident_t *loc_ref, kmp_int32 gtid,
                 sizeof_shareds, task_entry));
 
   retval = __kmp_task_alloc(loc_ref, gtid, input_flags, sizeof_kmp_task_t,
-                            sizeof_shareds, task_entry, seed);
+                            sizeof_shareds, task_entry);
 
   KA_TRACE(20, ("__kmpc_omp_task_alloc(exit): T#%d retval %p\n", gtid, retval));
 
@@ -1793,6 +1783,29 @@ kmp_int32 __kmp_omp_task(kmp_int32 gtid, kmp_task_t *new_task,
                          bool serialize_immediate) {
   kmp_taskdata_t *new_taskdata = KMP_TASK_TO_TASKDATA(new_task);
 
+  if (recording && inside_taskgraph) {
+    // Extend Map Size if needed
+    if (new_task->part_id >= MapSize) {
+      int OldSize = MapSize;
+      MapSize += MapIncrement;
+      RecordMap = (kmp_record_info *)realloc(RecordMap,
+                                             MapSize * sizeof(kmp_record_info));
+
+      for (int i = OldSize; i < MapSize; i++) {
+        kmp_int32 *successorsList =
+            (kmp_int32 *)malloc(SuccessorsSize * sizeof(kmp_int32));
+        kmp_record_info newRecord = {successorsList, 0, nullptr, 0, 0, nullptr,
+                                     SuccessorsSize};
+        RecordMap[i] = newRecord;
+      }
+    }
+
+    if (RecordMap[new_task->part_id].td_ident == nullptr) {
+      RecordMap[new_task->part_id].td_ident = new_taskdata->td_ident->psource;
+      RecordMap[new_task->part_id].static_id = new_taskdata->td_task_id;
+      RecordMap[new_task->part_id].task = new_task;
+    }
+  }
   /* Should we execute the new task or queue it? For now, let's just always try
      to queue it.  If the queue fills up, then we'll execute it.  */
   if (new_taskdata->td_flags.proxy == TASK_PROXY ||

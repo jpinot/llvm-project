@@ -316,10 +316,11 @@ __kmp_depnode_link_successor(kmp_int32 gtid, kmp_info_t *thread,
   // link node as successor of list elements
   for (kmp_depnode_list_t *p = plist; p; p = p->next) {
     kmp_depnode_t *dep = p->node;
+    __kmp_track_dependence(gtid, dep, node, task);
     if (dep->dn.task) {
       KMP_ACQUIRE_DEPNODE(gtid, dep);
       if (dep->dn.task) {
-        __kmp_track_dependence(gtid, dep, node, task);
+        //__kmp_track_dependence(gtid, dep, node, task);
         dep->dn.successors = __kmp_add_node(thread, dep->dn.successors, node);
         KA_TRACE(40, ("__kmp_process_deps: T#%d adding dependence from %p to "
                       "%p\n",
@@ -341,11 +342,12 @@ static inline kmp_int32 __kmp_depnode_link_successor(kmp_int32 gtid,
   if (!sink)
     return 0;
   kmp_int32 npredecessors = 0;
+  __kmp_track_dependence(gtid, sink, source, task);
   if (sink->dn.task) {
     // synchronously add source to sink' list of successors
     KMP_ACQUIRE_DEPNODE(gtid, sink);
     if (sink->dn.task) {
-      __kmp_track_dependence(gtid, sink, source, task);
+      //__kmp_track_dependence(gtid, sink, source, task);
       sink->dn.successors = __kmp_add_node(thread, sink->dn.successors, source);
       KA_TRACE(40, ("__kmp_process_deps: T#%d adding dependence from %p to "
                     "%p\n",
@@ -716,6 +718,7 @@ kmp_int32 __kmpc_omp_task_with_deps(ident_t *loc_ref, kmp_int32 gtid,
 #endif
 
     __kmp_init_node(node);
+    node->dn.part_id= new_task->part_id;
     new_taskdata->td_depnode = node;
 
     if (__kmp_check_deps(gtid, node, new_task, &current_task->td_dephash,

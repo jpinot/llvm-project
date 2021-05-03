@@ -114,6 +114,7 @@ static inline void __kmp_release_deps(kmp_int32 gtid, kmp_taskdata_t *task) {
       }
     }
     __kmp_release_futex_lock(&taskgraph_lock, 0);
+    return;
   }
 
   kmp_info_t *thread = __kmp_threads[gtid];

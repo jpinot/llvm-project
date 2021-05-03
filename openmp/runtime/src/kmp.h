@@ -3673,7 +3673,7 @@ extern kmp_task_t *__kmp_task_alloc(ident_t *loc_ref, kmp_int32 gtid,
                                     kmp_tasking_flags_t *flags,
                                     size_t sizeof_kmp_task_t,
                                     size_t sizeof_shareds,
-                                    kmp_routine_entry_t task_entry, ...);
+                                    kmp_routine_entry_t task_entry);
 extern void __kmp_init_implicit_task(ident_t *loc_ref, kmp_info_t *this_thr,
                                      kmp_team_t *team, int tid,
                                      int set_curr_task);
@@ -3825,7 +3825,7 @@ KMP_EXPORT kmp_int32 __kmpc_omp_task(ident_t *loc_ref, kmp_int32 gtid,
 KMP_EXPORT kmp_task_t *
 __kmpc_omp_task_alloc(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 flags,
                       size_t sizeof_kmp_task_t, size_t sizeof_shareds,
-                      kmp_routine_entry_t task_entry, ...);
+                      kmp_routine_entry_t task_entry);
 KMP_EXPORT kmp_task_t *__kmpc_omp_target_task_alloc(
     ident_t *loc_ref, kmp_int32 gtid, kmp_int32 flags, size_t sizeof_kmp_task_t,
     size_t sizeof_shareds, kmp_routine_entry_t task_entry, kmp_int64 device_id);
@@ -3837,6 +3837,7 @@ KMP_EXPORT kmp_int32 __kmpc_omp_task_parts(ident_t *loc_ref, kmp_int32 gtid,
                                            kmp_task_t *new_task);
 KMP_EXPORT kmp_int32 __kmpc_omp_taskwait(ident_t *loc_ref, kmp_int32 gtid);
 KMP_EXPORT kmp_int32 __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid, void (*entry)(void *), void *args, kmp_uint32 condition);
+KMP_EXPORT void __kmpc_set_task_static_id(kmp_task_t *task, int staticID);
 
 KMP_EXPORT kmp_int32 __kmpc_omp_taskyield(ident_t *loc_ref, kmp_int32 gtid,
                                           int end_part);
