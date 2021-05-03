@@ -4141,6 +4141,22 @@ static void getKmpAffinityType(ASTContext &C, QualType &KmpTaskAffinityInfoTy) {
   }
 }
 
+llvm::GlobalVariable* getOrInsertTaskID(CodeGenFunction &CGF) {
+  llvm::GlobalVariable *TaskID;
+  TaskID = CGF.CGM.getModule().getNamedGlobal("__staticTaskID");
+  if (TaskID)
+    return TaskID;
+  else {
+    TaskID = llvm::cast<llvm::GlobalVariable>(
+        CGF.CGM.getModule().getOrInsertGlobal("__staticTaskID", CGF.Int32Ty));
+    // gvar->setDSOLocal(true);
+    TaskID->setLinkage(llvm::GlobalValue::CommonLinkage);
+    TaskID->setAlignment(llvm::MaybeAlign(4));
+    TaskID->setInitializer(CGF.Builder.getInt32(0));
+    return TaskID;
+  }
+}
+
 CGOpenMPRuntime::TaskResultTy
 CGOpenMPRuntime::emitTaskInit(CodeGenFunction &CGF, SourceLocation Loc,
                               const OMPExecutableDirective &D,
@@ -4304,24 +4320,16 @@ CGOpenMPRuntime::emitTaskInit(CodeGenFunction &CGF, SourceLocation Loc,
 
     // Taskgraph support.
     {
-      // FIXME: Do this once, not per task.
-      // FIXME: This name is likely to collide.
-      CGF.CGM.getModule().getOrInsertGlobal("__seed", CGF.Int32Ty);
-      llvm::GlobalVariable *gvar = CGF.CGM.getModule().getNamedGlobal("__seed");
-      // gvar->setDSOLocal(true);
-      gvar->setLinkage(llvm::GlobalValue::CommonLinkage);
-      gvar->setAlignment(llvm::MaybeAlign(4));
-      gvar->setInitializer(CGF.Builder.getInt32(0));
+      llvm::GlobalVariable *TaskID = getOrInsertTaskID(CGF);
 
       CharUnits Align = CharUnits::fromQuantity(
           CGF.CGM.getDataLayout().getABITypeAlignment(CGF.Int32Ty));
-      llvm::Value *seedValue = CGF.Builder.CreateLoad(Address(gvar, Align));
 
-      llvm::Value *seedAdded =
-          CGF.Builder.CreateAdd(seedValue, CGF.Builder.getInt32(1));
-      CGF.Builder.CreateStore(seedAdded, Address(gvar, Align));
-
-      AllocArgs.push_back(seedAdded);
+      llvm::Value *TaskIDValue = CGF.Builder.CreateLoad(Address(TaskID, Align));
+      llvm::Value *TaskIDAdded =
+          CGF.Builder.CreateAdd(TaskIDValue, CGF.Builder.getInt32(1));
+      CGF.Builder.CreateStore(TaskIDAdded, Address(TaskID, Align));
+      // AllocArgs.push_back(seedAdded);
     }
 
     NewTask =
@@ -6272,19 +6280,11 @@ void CGOpenMPRuntime::emitTaskgraphCall(CodeGenFunction &CGF,
   CGF.Builder.SetInsertPoint(
       OutlineInfo.first->getEntryBlock().getFirstNonPHI());
 
-  // FIXME: Don't do this every time.
-  // FIXME: Remove duplication.
-  // FIXME: This name is likely to collide.
-  CGF.CGM.getModule().getOrInsertGlobal("__seed", CGF.Int32Ty);
-  llvm::GlobalVariable *gvar = CGF.CGM.getModule().getNamedGlobal("__seed");
-  // gvar->setDSOLocal(true);
-  gvar->setLinkage(llvm::GlobalValue::CommonLinkage);
-  gvar->setAlignment(llvm::MaybeAlign(4));
-  gvar->setInitializer(CGF.Builder.getInt32(0));
+  llvm::GlobalVariable *TaskID = getOrInsertTaskID(CGF);
 
   CharUnits Align = CharUnits::fromQuantity(
       CGF.CGM.getDataLayout().getABITypeAlignment(CGF.Int32Ty));
-  CGF.Builder.CreateStore(CGF.Builder.getInt32(0), Address(gvar, Align));
+  CGF.Builder.CreateStore(CGF.Builder.getInt32(0), Address(TaskID, Align));
   CGF.Builder.restoreIP(InsertP);
 }
 
