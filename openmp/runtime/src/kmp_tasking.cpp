@@ -743,7 +743,8 @@ static void __kmp_free_task(kmp_int32 gtid, kmp_taskdata_t *taskdata,
   ANNOTATE_HAPPENS_BEFORE(taskdata);
 // deallocate the taskdata and shared variable blocks associated with this task
 //
-  if (taskdata->td_task_id == 0 || !taskify) {
+  kmp_task *task = KMP_TASKDATA_TO_TASK(taskdata);
+  if (task->part_id == 0 || !taskify) {
     // only free tasks created outside taskgraph
 #if USE_FAST_MEMORY
     __kmp_fast_free(thread, taskdata);
@@ -752,7 +753,6 @@ static void __kmp_free_task(kmp_int32 gtid, kmp_taskdata_t *taskdata,
 #endif
 
   } else {
-    kmp_task *task = KMP_TASKDATA_TO_TASK(taskdata);
 
     taskdata->td_flags.complete = 0;
     taskdata->td_flags.started = 0;
