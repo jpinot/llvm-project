@@ -769,8 +769,10 @@ static void __kmp_free_task(kmp_int32 gtid, kmp_taskdata_t *taskdata,
     // start at one because counts current task and children
     KMP_ATOMIC_ST_RLX(&taskdata->td_allocated_child_tasks, 1);
 
-    RecordMap[task->part_id].npredecessors_counter =
-        RecordMap[task->part_id].npredecessors;
+    if (RecordMap) {
+      RecordMap[task->part_id].npredecessors_counter =
+          RecordMap[task->part_id].npredecessors;
+    }
   }
   KA_TRACE(20, ("__kmp_free_task: T#%d freed task %p\n", gtid, taskdata));
 }
