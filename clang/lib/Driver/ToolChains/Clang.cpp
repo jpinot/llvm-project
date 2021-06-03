@@ -5578,6 +5578,9 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
                        options::OPT_fno_openmp_cuda_force_full_runtime,
                        /*Default=*/false))
         CmdArgs.push_back("-fopenmp-cuda-force-full-runtime");
+
+      // Forward taskgraph support.
+      Args.AddAllArgs(CmdArgs, options::OPT_fopenmp_taskgraph);
       break;
     default:
       // By default, if Clang doesn't know how to generate useful OpenMP code

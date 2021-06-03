@@ -9690,6 +9690,11 @@ StmtResult Sema::ActOnOpenMPTaskgraphDirective(SourceLocation StartLoc,
 
   assert(isa<CapturedStmt>(AStmt) && "Captured statement expected");
 
+  if (!getLangOpts().OpenMPTaskGraph) {
+    Diag(StartLoc, diag::err_omp_taskgraph_not_allowed);
+    return StmtError();
+  }
+
   return OMPTaskgraphDirective::Create(Context, StartLoc, EndLoc, AStmt,
                                        Clauses);
 }

@@ -3385,6 +3385,9 @@ void CompilerInvocation::GenerateLangArgs(const LangOptions &Opts,
 
     if (Opts.OpenMPIRBuilder)
       GenerateArg(Args, OPT_fopenmp_enable_irbuilder, SA);
+
+    if (Opts.OpenMPTaskGraph)
+      GenerateArg(Args, OPT_fopenmp_taskgraph, SA);
   }
 
   if (Opts.OpenMPSimd) {
@@ -3705,6 +3708,8 @@ bool CompilerInvocation::ParseLangArgs(LangOptions &Opts, ArgList &Args,
       Opts.OpenMP && Args.hasArg(options::OPT_fopenmp_is_device);
   Opts.OpenMPIRBuilder =
       Opts.OpenMP && Args.hasArg(options::OPT_fopenmp_enable_irbuilder);
+  Opts.OpenMPTaskGraph =
+      Opts.OpenMP && Args.hasArg(options::OPT_fopenmp_taskgraph);
   bool IsTargetSpecified =
       Opts.OpenMPIsDevice || Args.hasArg(options::OPT_fopenmp_targets_EQ);
 

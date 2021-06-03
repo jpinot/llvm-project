@@ -10567,6 +10567,8 @@ def err_omp_allocator_used_in_clauses : Error<
   "data-sharing or data-mapping attribute clauses">;
 def err_omp_allocator_not_in_uses_allocators : Error<
   "allocator must be specified in the 'uses_allocators' clause">;
+def err_omp_taskgraph_not_allowed : Error<
+  "taskgraph directive must be enabled using -fopenmp-taskgraph">;
 def note_omp_protected_structured_block
     : Note<"jump bypasses OpenMP structured block">;
 def note_omp_exits_structured_block
