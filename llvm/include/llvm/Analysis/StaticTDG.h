@@ -2,8 +2,9 @@
 //
 //                     The LLVM Compiler Infrastructure
 //
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 #ifndef LLVM_ANALYSIS_STATICTDGANALYSIS_H
@@ -28,21 +29,27 @@ struct StaticTaskInfo {
   Instruction *TaskAllocInstruction;
 };
 
-struct StaticData {
+struct StaticTDGInfo {
   int NumberOfTasks;
   SmallVector<StaticTaskInfo, 4> Tasks;
   SmallVector<Loop *, 4> FinalTaskLoops;
 };
 
-class StaticTDGLegacyPass : public FunctionPass {
-private:
+// This is used in both legacy and new passes.
+class StaticTDGData {
   // Info used by the transform pass
-  StaticData FinalData;
-
+  StaticTDGInfo Info;
   int NumberOfTasks = 0;
 
+  public:
   void calculateTasks(Function &F, DominatorTree &DT, LoopInfo &LI,
                       ScalarEvolution &SE);
+  StaticTDGInfo getTaskData() const { return Info; }
+};
+
+class StaticTDGLegacyPass : public FunctionPass {
+private:
+  StaticTDGData TDGInfo;
 
 public:
   static char ID;
@@ -57,7 +64,19 @@ public:
 
   void releaseMemory() override;
 
-  StaticData getTaskData();
+  StaticTDGInfo getTaskData();
+};
+
+// New PassManager Analysis
+class StaticTDGAnalysis : public AnalysisInfoMixin<StaticTDGAnalysis> {
+  friend AnalysisInfoMixin<StaticTDGAnalysis>;
+
+  static AnalysisKey Key;
+
+public:
+  /// Provide the result typedef for this analysis pass.
+  using Result = StaticTDGInfo;
+  StaticTDGInfo run(Function &F, FunctionAnalysisManager &FAM);
 };
 
 } // end namespace llvm

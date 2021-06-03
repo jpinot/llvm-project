@@ -2,8 +2,9 @@
 //
 //                     The LLVM Compiler Infrastructure
 //
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
@@ -30,9 +31,9 @@ StaticTDGLegacyPass::StaticTDGLegacyPass() : FunctionPass(ID) {
   initializeStaticTDGLegacyPassPass(*PassRegistry::getPassRegistry());
 }
 
-FunctionPass *createStaticTDGPass() { return new StaticTDGLegacyPass(); }
+FunctionPass *createStaticTDGAnalysis() { return new StaticTDGLegacyPass(); }
 
-void StaticTDGLegacyPass::calculateTasks(Function &F, DominatorTree &DT, LoopInfo &LI,
+void StaticTDGData::calculateTasks(Function &F, DominatorTree &DT, LoopInfo &LI,
                                    ScalarEvolution &SE) {
 
   // dbgs() << "Function: " << F.getName() << "\n";
@@ -76,14 +77,14 @@ void StaticTDGLegacyPass::calculateTasks(Function &F, DominatorTree &DT, LoopInf
           for (auto loop : taskloops) {
 
             bool exists = false;
-            for (auto &storedLoop : FinalData.FinalTaskLoops) {
+            for (auto &storedLoop : Info.FinalTaskLoops) {
               if (storedLoop == loop) {
                 exists = true;
                 break;
               }
             }
             if (!exists) {
-              FinalData.FinalTaskLoops.push_back(loop);
+              Info.FinalTaskLoops.push_back(loop);
             }
 
             int iterations = SE.getSmallConstantTripCount(loop);
@@ -96,8 +97,8 @@ void StaticTDGLegacyPass::calculateTasks(Function &F, DominatorTree &DT, LoopInf
 
           std::reverse(taskloops.begin(), taskloops.end());
 
-          FinalData.Tasks.push_back({NumberOfTasks, taskloops, max, &I});
-          FinalData.NumberOfTasks = NumberOfTasks;
+          Info.Tasks.push_back({NumberOfTasks, taskloops, max, &I});
+          Info.NumberOfTasks = NumberOfTasks;
 
           // dbgs() << "Encontrado! " <<  NumberOfTasks << " \n";
         }
@@ -114,15 +115,15 @@ void StaticTDGLegacyPass::calculateTasks(Function &F, DominatorTree &DT, LoopInf
   // dbgs() << "Sale \n";
 }
 
-void StaticTDGLegacyPass::releaseMemory() { FinalData = StaticData(); }
+void StaticTDGLegacyPass::releaseMemory() { TDGInfo = StaticTDGData(); }
 
-StaticData StaticTDGLegacyPass::getTaskData() { return FinalData; }
+StaticTDGInfo StaticTDGLegacyPass::getTaskData() { return TDGInfo.getTaskData(); }
 
 bool StaticTDGLegacyPass::runOnFunction(Function &F) {
   auto &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
   auto &LI = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
   auto &SE = getAnalysis<ScalarEvolutionWrapperPass>().getSE();
-  calculateTasks(F, DT, LI, SE);
+  TDGInfo.calculateTasks(F, DT, LI, SE);
 
   return false;
 }
@@ -141,3 +142,17 @@ INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(ScalarEvolutionWrapperPass)
 INITIALIZE_PASS_END(StaticTDGLegacyPass, "static-tdg", "Static tdg", false, true)
 
+// New PM pass
+AnalysisKey StaticTDGAnalysis::Key;
+
+StaticTDGInfo StaticTDGAnalysis::run(
+    Function &F, FunctionAnalysisManager &FAM) {
+  auto &DT = FAM.getResult<DominatorTreeAnalysis>(F);
+  auto &LI = FAM.getResult<LoopAnalysis>(F);
+  auto &SE = FAM.getResult<ScalarEvolutionAnalysis>(F);
+
+  StaticTDGData TDGInfo;
+  TDGInfo.calculateTasks(F, DT, LI, SE);
+
+  return TDGInfo.getTaskData();
+}
