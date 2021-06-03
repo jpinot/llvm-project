@@ -31,11 +31,11 @@ using namespace llvm;
 
 namespace {
 
-struct StaticTDGIdent : public ModulePass {
+struct StaticTDGIdentLegacyPass : public ModulePass {
   /// Pass identification, replacement for typeid
   static char ID;
-  StaticTDGIdent() : ModulePass(ID) {
-    initializeStaticTDGIdentPass(*PassRegistry::getPassRegistry());
+  StaticTDGIdentLegacyPass() : ModulePass(ID) {
+    initializeStaticTDGIdentLegacyPassPass(*PassRegistry::getPassRegistry());
   }
 
   bool runOnModule(Module &M) override {
@@ -52,7 +52,7 @@ struct StaticTDGIdent : public ModulePass {
     }
 
     for (auto *F : Functs) {
-      auto SD = getAnalysis<StaticTDGPass>(*F).getTaskData();
+      auto SD = getAnalysis<StaticTDGLegacyPass>(*F).getTaskData();
 
       auto FinalTaskLoops = SD.FinalTaskLoops;
       auto NumberOfTasks = SD.NumberOfTasks;
@@ -119,22 +119,22 @@ struct StaticTDGIdent : public ModulePass {
   }
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
-    AU.addRequired<StaticTDGPass>();
+    AU.addRequired<StaticTDGLegacyPass>();
   }
 };
 
 } // namespace
 
-char StaticTDGIdent::ID = 0;
+char StaticTDGIdentLegacyPass::ID = 0;
 
-ModulePass *llvm::createStaticTDGIdentPass() { return new StaticTDGIdent(); }
+ModulePass *llvm::createStaticTDGIdentPass() { return new StaticTDGIdentLegacyPass(); }
 
 void LLVMStaticTDGPass(LLVMPassManagerRef PM) {
   unwrap(PM)->add(createStaticTDGIdentPass());
 }
 
-INITIALIZE_PASS_BEGIN(StaticTDGIdent, "static-tdg-id",
+INITIALIZE_PASS_BEGIN(StaticTDGIdentLegacyPass, "static-tdg-id",
                       "Static TDG task identifier calculation", false, false)
-INITIALIZE_PASS_DEPENDENCY(StaticTDGPass)
-INITIALIZE_PASS_END(StaticTDGIdent, "static-tdg-id",
+INITIALIZE_PASS_DEPENDENCY(StaticTDGLegacyPass)
+INITIALIZE_PASS_END(StaticTDGIdentLegacyPass, "static-tdg-id",
                     "Static TDG task identifier calculation", false, false)

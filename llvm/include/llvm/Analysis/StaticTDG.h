@@ -34,7 +34,7 @@ struct StaticData {
   SmallVector<Loop *, 4> FinalTaskLoops;
 };
 
-class StaticTDGPass : public FunctionPass {
+class StaticTDGLegacyPass : public FunctionPass {
 private:
   // Info used by the transform pass
   StaticData FinalData;
@@ -47,7 +47,7 @@ private:
 public:
   static char ID;
 
-  StaticTDGPass();
+  StaticTDGLegacyPass();
 
   bool runOnFunction(Function &F) override;
 

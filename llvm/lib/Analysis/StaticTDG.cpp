@@ -24,15 +24,15 @@
 
 using namespace llvm;
 
-char StaticTDGPass::ID = 0;
+char StaticTDGLegacyPass::ID = 0;
 
-StaticTDGPass::StaticTDGPass() : FunctionPass(ID) {
-  initializeStaticTDGPassPass(*PassRegistry::getPassRegistry());
+StaticTDGLegacyPass::StaticTDGLegacyPass() : FunctionPass(ID) {
+  initializeStaticTDGLegacyPassPass(*PassRegistry::getPassRegistry());
 }
 
-FunctionPass *createStaticTDGPass() { return new StaticTDGPass(); }
+FunctionPass *createStaticTDGPass() { return new StaticTDGLegacyPass(); }
 
-void StaticTDGPass::calculateTasks(Function &F, DominatorTree &DT, LoopInfo &LI,
+void StaticTDGLegacyPass::calculateTasks(Function &F, DominatorTree &DT, LoopInfo &LI,
                                    ScalarEvolution &SE) {
 
   // dbgs() << "Function: " << F.getName() << "\n";
@@ -114,11 +114,11 @@ void StaticTDGPass::calculateTasks(Function &F, DominatorTree &DT, LoopInfo &LI,
   // dbgs() << "Sale \n";
 }
 
-void StaticTDGPass::releaseMemory() { FinalData = StaticData(); }
+void StaticTDGLegacyPass::releaseMemory() { FinalData = StaticData(); }
 
-StaticData StaticTDGPass::getTaskData() { return FinalData; }
+StaticData StaticTDGLegacyPass::getTaskData() { return FinalData; }
 
-bool StaticTDGPass::runOnFunction(Function &F) {
+bool StaticTDGLegacyPass::runOnFunction(Function &F) {
   auto &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
   auto &LI = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
   auto &SE = getAnalysis<ScalarEvolutionWrapperPass>().getSE();
@@ -127,17 +127,17 @@ bool StaticTDGPass::runOnFunction(Function &F) {
   return false;
 }
 
-void StaticTDGPass::getAnalysisUsage(AnalysisUsage &AU) const {
+void StaticTDGLegacyPass::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.setPreservesAll();
   AU.addRequired<DominatorTreeWrapperPass>();
   AU.addRequired<LoopInfoWrapperPass>();
   AU.addRequired<ScalarEvolutionWrapperPass>();
 }
 
-INITIALIZE_PASS_BEGIN(StaticTDGPass, "static-tdg", "Static tdg", false, true)
+INITIALIZE_PASS_BEGIN(StaticTDGLegacyPass, "static-tdg", "Static tdg", false, true)
 INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(ScalarEvolutionWrapperPass)
-INITIALIZE_PASS_END(StaticTDGPass, "static-tdg", "Static tdg", false, true)
+INITIALIZE_PASS_END(StaticTDGLegacyPass, "static-tdg", "Static tdg", false, true)
 
