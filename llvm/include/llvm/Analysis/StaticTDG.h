@@ -81,5 +81,5 @@ public:
 
 } // end namespace llvm
 
-#endif // LLVM_ANALYSIS_OMPSSREGIONANALYSIS_H
+#endif // LLVM_ANALYSIS_STATICTDGANALYSIS_H
 

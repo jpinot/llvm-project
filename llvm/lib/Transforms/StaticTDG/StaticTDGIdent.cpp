@@ -31,15 +31,15 @@ using namespace llvm;
 
 namespace {
 
-struct StaticTDGIdentLegacyPass : public ModulePass {
-  /// Pass identification, replacement for typeid
-  static char ID;
-  StaticTDGIdentLegacyPass() : ModulePass(ID) {
-    initializeStaticTDGIdentLegacyPassPass(*PassRegistry::getPassRegistry());
-  }
+using StaticTDGInfoForFunctionTy = function_ref<StaticTDGInfo(Function &)>;
 
-  bool runOnModule(Module &M) override {
-    if (skipModule(M))
+struct StaticTDGIdent {
+  StaticTDGIdent(StaticTDGInfoForFunctionTy StaticTDGInfoForFunction)
+      : StaticTDGInfoForFunction(StaticTDGInfoForFunction) {}
+  StaticTDGInfoForFunctionTy StaticTDGInfoForFunction;
+
+  bool runOnModule(Module &M) {
+    if (M.empty())
       return false;
 
     SmallVector<Function *, 4> Functs;
@@ -52,7 +52,7 @@ struct StaticTDGIdentLegacyPass : public ModulePass {
     }
 
     for (auto *F : Functs) {
-      auto SD = getAnalysis<StaticTDGLegacyPass>(*F).getTaskData();
+      StaticTDGInfo SD = StaticTDGInfoForFunction(*F);
 
       auto FinalTaskLoops = SD.FinalTaskLoops;
       auto NumberOfTasks = SD.NumberOfTasks;
@@ -113,6 +113,25 @@ struct StaticTDGIdentLegacyPass : public ModulePass {
     // dbgs() << "Done! \n";
     return true;
   }
+};
+
+struct StaticTDGIdentLegacyPass : public ModulePass {
+  /// Pass identification, replacement for typeid
+  static char ID;
+  StaticTDGIdentLegacyPass() : ModulePass(ID) {
+    initializeStaticTDGIdentLegacyPassPass(*PassRegistry::getPassRegistry());
+  }
+
+  bool runOnModule(Module &M) override {
+    if (skipModule(M))
+      return false;
+
+    // See below for the reason of this.
+    auto StaticTDGInfoForFunction = [this](Function &F) -> StaticTDGInfo {
+      return this->getAnalysis<StaticTDGLegacyPass>(F).getTaskData();
+    };
+    return StaticTDGIdent(StaticTDGInfoForFunction).runOnModule(M);
+  }
 
   StringRef getPassName() const override {
     return "Static TDG task identifier calculation";
@@ -127,10 +146,12 @@ struct StaticTDGIdentLegacyPass : public ModulePass {
 
 char StaticTDGIdentLegacyPass::ID = 0;
 
-ModulePass *llvm::createStaticTDGIdentPass() { return new StaticTDGIdentLegacyPass(); }
+ModulePass *llvm::createStaticTDGIdentLegacyPass() {
+  return new StaticTDGIdentLegacyPass();
+}
 
 void LLVMStaticTDGPass(LLVMPassManagerRef PM) {
-  unwrap(PM)->add(createStaticTDGIdentPass());
+  unwrap(PM)->add(createStaticTDGIdentLegacyPass());
 }
 
 INITIALIZE_PASS_BEGIN(StaticTDGIdentLegacyPass, "static-tdg-id",
@@ -138,3 +159,21 @@ INITIALIZE_PASS_BEGIN(StaticTDGIdentLegacyPass, "static-tdg-id",
 INITIALIZE_PASS_DEPENDENCY(StaticTDGLegacyPass)
 INITIALIZE_PASS_END(StaticTDGIdentLegacyPass, "static-tdg-id",
                     "Static TDG task identifier calculation", false, false)
+
+// New pass manager.
+PreservedAnalyses StaticTDGIdentPass::run(Module &M,
+                                          ModuleAnalysisManager &AM) {
+  auto &FAM = AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
+  // This is an adapter that will be used to get the analysis data of a given
+  // function. This is done this way so we can reuse the code for the new and
+  // legacy pass manager (they used different functions to get this
+  // information).
+  auto StaticTDGInfoForFunction = [&FAM](Function &F) -> StaticTDGInfo {
+    return FAM.getResult<StaticTDGAnalysis>(F);
+  };
+  if (!StaticTDGIdent(StaticTDGInfoForFunction).runOnModule(M))
+    return PreservedAnalyses::all();
+
+  // FIXME: we can be more precise here.
+  return PreservedAnalyses::none();
+}

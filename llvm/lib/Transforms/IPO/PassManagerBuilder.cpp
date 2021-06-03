@@ -920,7 +920,7 @@ void PassManagerBuilder::populateModulePassManager(
 
   MPM.add(createAnnotationRemarksLegacyPass());
 
-  MPM.add(createStaticTDGIdentPass());
+  MPM.add(createStaticTDGIdentLegacyPass());
 }
 
 void PassManagerBuilder::addLTOOptimizationPasses(legacy::PassManagerBase &PM) {

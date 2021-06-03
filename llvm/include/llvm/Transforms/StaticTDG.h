@@ -19,7 +19,11 @@ class ModulePass;
 //===----------------------------------------------------------------------===//
 
 // Creates identifiers for the Static TDGs
-ModulePass *createStaticTDGIdentPass();
+ModulePass *createStaticTDGIdentLegacyPass();
+
+struct StaticTDGIdentPass : public PassInfoMixin<StaticTDGIdentPass> {
+  PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
+};
 
 } // End llvm namespace
 

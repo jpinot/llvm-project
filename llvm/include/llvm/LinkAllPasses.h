@@ -171,7 +171,7 @@ namespace {
       (void) llvm::createSafeStackPass();
       (void) llvm::createSROAPass();
       (void) llvm::createSingleLoopExtractorPass();
-      (void) llvm::createStaticTDGIdentPass();
+      (void) llvm::createStaticTDGIdentLegacyPass();
       (void) llvm::createStripSymbolsPass();
       (void) llvm::createStripNonDebugSymbolsPass();
       (void) llvm::createStripDeadDebugInfoPass();

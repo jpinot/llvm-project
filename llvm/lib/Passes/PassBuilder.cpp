@@ -240,6 +240,7 @@
 #include "llvm/Transforms/Vectorize/LoopVectorize.h"
 #include "llvm/Transforms/Vectorize/SLPVectorizer.h"
 #include "llvm/Transforms/Vectorize/VectorCombine.h"
+#include "llvm/Transforms/StaticTDG.h"
 
 using namespace llvm;
 
@@ -1408,6 +1409,9 @@ PassBuilder::buildModuleOptimizationPipeline(OptimizationLevel Level,
   // ordering here.
   MPM.addPass(GlobalDCEPass());
   MPM.addPass(ConstantMergePass());
+
+  // Static TDG
+  MPM.addPass(StaticTDGIdentPass());
 
   return MPM;
 }
