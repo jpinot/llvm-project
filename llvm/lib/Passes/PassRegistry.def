@@ -121,6 +121,7 @@ MODULE_PASS("memprof-module", ModuleMemProfilerPass())
 MODULE_PASS("poison-checking", PoisonCheckingPass())
 MODULE_PASS("pseudo-probe-update", PseudoProbeUpdatePass())
 MODULE_PASS("ompss-2", OmpSsPass())
+MODULE_PASS("static-tdg-id", StaticTDGIdentPass())
 #undef MODULE_PASS
 
 #ifndef CGSCC_ANALYSIS

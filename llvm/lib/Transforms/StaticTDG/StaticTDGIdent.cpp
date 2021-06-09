@@ -1,9 +1,8 @@
-//===- OmpSs.cpp -- Strip parts of Debug Info --------===//
+//===- StaticTDGIdent.cpp -- Strip parts of Debug Info --------------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
@@ -29,6 +28,8 @@
 #include "llvm/Transforms/Utils/ValueMapper.h"
 using namespace llvm;
 
+#define DEBUG_TYPE "static-tdg-id"
+
 namespace {
 
 using StaticTDGInfoForFunctionTy = function_ref<StaticTDGInfo(Function &)>;
@@ -51,12 +52,17 @@ struct StaticTDGIdent {
       Functs.push_back(&F);
     }
 
+    bool Changed = false;
     for (auto *F : Functs) {
       StaticTDGInfo SD = StaticTDGInfoForFunction(*F);
 
       auto FinalTaskLoops = SD.FinalTaskLoops;
       auto NumberOfTasks = SD.NumberOfTasks;
       auto Tasks = SD.Tasks;
+
+      LLVM_DEBUG(if (!FinalTaskLoops.empty() || !Tasks.empty()) {
+        dbgs() << "Processing function " << F->getName() << "\n";
+      });
 
       SmallVector<std::pair<Loop *, Value *>, 4> LoopValueMap;
       for (auto loop : FinalTaskLoops) {
@@ -73,6 +79,8 @@ struct StaticTDGIdent {
             IRB.CreateLoad(IRB.getInt32Ty(), LoopVariable);
         Value *FirstAdd = IRB.CreateAdd(LoopVariableValue, IRB.getInt32(1));
         IRB.CreateStore(FirstAdd, LoopVariable);
+
+        Changed = true;
       }
 
       for (auto &task : Tasks) {
@@ -108,10 +116,12 @@ struct StaticTDGIdent {
         CallInst *TaskAllocCall = dyn_cast<CallInst>(TaskAlloc);
         TaskAllocCall->setArgOperand(TaskAllocCall->getNumArgOperands() - 1,
                                      SecondAdd);
+
+        Changed = true;
       }
     }
-    // dbgs() << "Done! \n";
-    return true;
+
+    return Changed;
   }
 };
 
