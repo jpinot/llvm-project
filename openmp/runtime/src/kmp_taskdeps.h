@@ -19,9 +19,11 @@
 #define KMP_ACQUIRE_DEPNODE(gtid, n) __kmp_acquire_lock(&(n)->dn.lock, (gtid))
 #define KMP_RELEASE_DEPNODE(gtid, n) __kmp_release_lock(&(n)->dn.lock, (gtid))
 
+#if LIBOMP_TASKGRAPH
 extern kmp_futex_lock_t taskgraph_lock;
 extern kmp_record_info *RecordMap; 
 extern int recording;
+#endif
 
 static inline void __kmp_node_deref(kmp_info_t *thread, kmp_depnode_t *node) {
   if (!node)
@@ -91,6 +93,7 @@ static inline void __kmp_dephash_free(kmp_info_t *thread, kmp_dephash_t *h) {
 
 static inline void __kmp_release_deps(kmp_int32 gtid, kmp_taskdata_t *task) {
 
+#if LIBOMP_TASKGRAPH
   kmp_task_t *this_task = KMP_TASKDATA_TO_TASK(task);
   if (!recording && this_task->part_id) {
     // TODO: Not needed when taskifying
@@ -116,6 +119,7 @@ static inline void __kmp_release_deps(kmp_int32 gtid, kmp_taskdata_t *task) {
     __kmp_release_futex_lock(&taskgraph_lock, 0);
     return;
   }
+#endif
 
   kmp_info_t *thread = __kmp_threads[gtid];
   kmp_depnode_t *node = task->td_depnode;

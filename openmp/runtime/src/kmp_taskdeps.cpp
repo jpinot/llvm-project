@@ -29,7 +29,7 @@
 // runtime locks
 // TODO: Any ITT support needed?
 
-// -- Taskgraph
+#if LIBOMP_TASKGRAPH
 int recording;
 int inside_taskgraph = false;
 int taskify = true;
@@ -66,7 +66,7 @@ struct ident_color{
 
 ident_color *ColorMap;
 kmp_int32 ColorIndex=0;
-// -- End of Taskgraph
+#endif // LIBOMP_TASKGRAPH
 
 #ifdef KMP_SUPPORT_GRAPH_OUTPUT
 static std::atomic<kmp_int32> kmp_node_id_seed = ATOMIC_VAR_INIT(0);
@@ -252,6 +252,7 @@ static kmp_depnode_list_t *__kmp_add_node(kmp_info_t *thread,
 static inline void __kmp_track_dependence(kmp_int32 gtid, kmp_depnode_t *source,
                                           kmp_depnode_t *sink,
                                           kmp_task_t *sink_task) {
+#if LIBOMP_TASKGRAPH
   if (recording && inside_taskgraph) {
     kmp_record_info *SourceInfo = &(RecordMap[source->dn.part_id]);
     bool exists = false;
@@ -276,6 +277,7 @@ static inline void __kmp_track_dependence(kmp_int32 gtid, kmp_depnode_t *source,
       SinkInfo->npredecessors++;
     }
   }
+#endif
 
 #ifdef KMP_SUPPORT_GRAPH_OUTPUT
   kmp_taskdata_t *task_source = KMP_TASK_TO_TASKDATA(source->dn.task);
@@ -590,6 +592,7 @@ kmp_int32 __kmpc_omp_task_with_deps(ident_t *loc_ref, kmp_int32 gtid,
   kmp_info_t *thread = __kmp_threads[gtid];
   kmp_taskdata_t *current_task = thread->th.th_current_task;
 
+#if LIBOMP_TASKGRAPH
   if (recording && inside_taskgraph) {
     // Extend Map Size if needed
     if (new_task->part_id >= MapSize) {
@@ -634,6 +637,7 @@ kmp_int32 __kmpc_omp_task_with_deps(ident_t *loc_ref, kmp_int32 gtid,
       return TASK_CURRENT_NOT_QUEUED;
     }
   }
+#endif
 
 #if OMPT_SUPPORT
   if (ompt_enabled.enabled) {
@@ -718,7 +722,9 @@ kmp_int32 __kmpc_omp_task_with_deps(ident_t *loc_ref, kmp_int32 gtid,
 #endif
 
     __kmp_init_node(node);
+#if LIBOMP_TASKGRAPH
     node->dn.part_id= new_task->part_id;
+#endif
     new_taskdata->td_depnode = node;
 
     if (__kmp_check_deps(gtid, node, new_task, &current_task->td_dephash,
@@ -771,6 +777,7 @@ void __ompt_taskwait_dep_finish(kmp_taskdata_t *current_task,
 }
 #endif /* OMPT_SUPPORT */
 
+#if LIBOMP_TASKGRAPH
 void print_tdg() {
   for (int i = 1; i < MapSize; i++) {
     if (RecordMap[i].td_ident == nullptr)
@@ -1030,6 +1037,7 @@ kmp_int32 __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid,
 
   return 1;
 }
+#endif
 
 /*!
 @ingroup TASKING

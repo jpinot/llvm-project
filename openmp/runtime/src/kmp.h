@@ -2285,7 +2285,9 @@ typedef struct kmp_base_depnode {
   kmp_lock_t *mtx_locks[MAX_MTX_DEPS]; /* lock mutexinoutset dependent tasks */
   kmp_int32 mtx_num_locks; /* number of locks in mtx_locks array */
   kmp_lock_t lock; /* guards shared fields: task, successors */
+#if LIBOMP_TASKGRAPH
   kmp_uint32 part_id; /* used by taskgraph */
+#endif
 #if KMP_SUPPORT_GRAPH_OUTPUT
   kmp_uint32 id;
 #endif
@@ -3836,7 +3838,9 @@ KMP_EXPORT void __kmpc_omp_task_complete_if0(ident_t *loc_ref, kmp_int32 gtid,
 KMP_EXPORT kmp_int32 __kmpc_omp_task_parts(ident_t *loc_ref, kmp_int32 gtid,
                                            kmp_task_t *new_task);
 KMP_EXPORT kmp_int32 __kmpc_omp_taskwait(ident_t *loc_ref, kmp_int32 gtid);
-KMP_EXPORT kmp_int32 __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid, void (*entry)(void *), void *args, kmp_uint32 condition);
+KMP_EXPORT kmp_int32 __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid,
+                                      void (*entry)(void *), void *args,
+                                      kmp_uint32 condition);
 KMP_EXPORT void __kmpc_set_task_static_id(kmp_task_t *task, int staticID);
 
 KMP_EXPORT kmp_int32 __kmpc_omp_taskyield(ident_t *loc_ref, kmp_int32 gtid,

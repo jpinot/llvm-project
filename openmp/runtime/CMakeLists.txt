@@ -287,6 +287,8 @@ if(LIBOMP_STATS)
   set(LIBOMP_USE_STDCPPLIB TRUE)
 endif()
 
+set(LIBOMP_TASKGRAPH FALSE CACHE BOOL "Taskgraph support")
+
 # Shared library can be switched to a static library
 set(LIBOMP_ENABLE_SHARED TRUE CACHE BOOL
   "Shared library instead of static library?")
@@ -393,6 +395,7 @@ if(${OPENMP_STANDALONE_BUILD})
   libomp_say("Use quad precision   -- ${LIBOMP_USE_QUAD_PRECISION}")
   libomp_say("Use TSAN-support     -- ${LIBOMP_TSAN_SUPPORT}")
   libomp_say("Use Hwloc library    -- ${LIBOMP_USE_HWLOC}")
+  libomp_say("Support taskgraph    -- ${LIBOMP_TASKGRAPH}")
 endif()
 
 add_subdirectory(src)
