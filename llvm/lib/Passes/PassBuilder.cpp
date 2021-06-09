@@ -1410,9 +1410,6 @@ PassBuilder::buildModuleOptimizationPipeline(OptimizationLevel Level,
   MPM.addPass(GlobalDCEPass());
   MPM.addPass(ConstantMergePass());
 
-  // Static TDG
-  MPM.addPass(StaticTDGIdentPass());
-
   return MPM;
 }
 
