@@ -1,4 +1,4 @@
-add_llvm_library(LLVMStaticTDG
+add_llvm_component_library(LLVMStaticTDG
   StaticTDGIdent.cpp
 
   ADDITIONAL_HEADER_DIRS
@@ -7,6 +7,9 @@ add_llvm_library(LLVMStaticTDG
 
   DEPENDS
   intrinsics_gen
+
+  COMPONENT_NAME
+  statictdg
 
   LINK_COMPONENTS
   Analysis
