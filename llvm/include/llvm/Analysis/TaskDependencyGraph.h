@@ -1,0 +1,107 @@
+#ifndef LLVM_ANALYSIS_TASK_DEPENDENCY_GRAPH_H
+#define LLVM_ANALYSIS_TASK_DEPENDENCY_GRAPH_H
+
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DepthFirstIterator.h"
+#include "llvm/ADT/GraphTraits.h"
+#include "llvm/ADT/PointerIntPair.h"
+#include "llvm/ADT/iterator_range.h"
+#include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Config/llvm-config.h"
+#include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Dominators.h"
+#include "llvm/IR/PassManager.h"
+#include "llvm/Pass.h"
+#include "llvm/Support/raw_ostream.h"
+
+namespace llvm {
+
+FunctionPass *createTaskDependencyGraphPass();
+
+struct TaskDependInfo {
+  Value *base;                    // base Address
+  bool isArray;                   // if the dependency is an array or not
+  SmallVector<uint64_t, 2> index; // indexes in the subscript
+  int type;                       // 1: in, 2:out, 3:inout
+};
+
+struct TaskInfo {
+  int id;                                     // Task id
+  StringRef ident;                            // Task ident line
+  SmallVector<uint64_t, 2> successors;        // Ids of successors
+  SmallVector<uint64_t, 2> predecessors;      // Ids of predecessors
+  SmallVector<TaskDependInfo, 2> TaskDepInfo; // Task dependency information
+};
+
+struct ident_color {
+  StringRef ident;
+  StringRef color;
+};
+
+class TaskDependencyGraphData {
+  // Info used by the transform pass
+  SmallVector<ident_color, 10> ColorMap;
+  int MaxNesting = 3;
+  int ColorsUsed = 0;
+  SmallVector<TaskInfo, 10> FunctionTasks; // Vector to store all tasks found
+  SmallPtrSet<Function *,10> ProcessedFunctions;
+
+public:
+  void traverse_node(SmallVectorImpl<uint64_t> &edges_to_check, int node,
+                     int nesting_level, std::vector<bool> &Visited);
+  void print_tdg();
+  void print_tdg_to_dot(StringRef ModuleName);
+  void obtainTaskIdent(TaskInfo &TaskFound, CallInst &TaskCall);
+  void erase_transitive_edges();
+  bool checkDependency(TaskDependInfo &Source, TaskDependInfo &Dest);
+  void findOpenMPTasks(Function &F, DominatorTree &DT);
+  void obtainTaskInfo(TaskInfo &TaskFound, CallInst &TaskCall,
+                      DominatorTree &DT);
+  bool invalidate(Function &, const PreservedAnalyses &,
+                  FunctionAnalysisManager::Invalidator &) {
+    return false;
+  }                    
+};
+
+class TaskDependencyGraphPass : public FunctionPass {
+
+public:
+  static char ID;
+  explicit TaskDependencyGraphPass();
+  ~TaskDependencyGraphPass() override;
+
+  /// @name FunctionPass interface
+  //@{
+  bool runOnFunction(Function &F) override;
+  void releaseMemory() override;
+  // void verifyAnalysis() const override;
+  void getAnalysisUsage(AnalysisUsage &AU) const override;
+  void print(raw_ostream &OS, const Module *) const override;
+  //@}
+};
+
+// New PassManager Analysis
+class TaskDependencyGraphAnalysis
+    : public AnalysisInfoMixin<TaskDependencyGraphAnalysis> {
+  friend AnalysisInfoMixin<TaskDependencyGraphAnalysis>;
+  static AnalysisKey Key;
+  TaskDependencyGraphData TDG;
+
+public:
+  /// Provide the result typedef for this analysis pass.
+  using Result = TaskDependencyGraphData;
+  TaskDependencyGraphData run(Function &F, FunctionAnalysisManager &FAM);
+};
+
+class TaskDependencyGraphAnalysisPass
+    : public AnalysisInfoMixin<TaskDependencyGraphAnalysisPass> {
+
+public:
+  /// Provide the result typedef for this analysis pass.
+  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
+ 
+};
+
+} // namespace llvm
+
+#endif // LLVM_ANALYSIS_TASK_DEPENDENCY_GRAPH_H

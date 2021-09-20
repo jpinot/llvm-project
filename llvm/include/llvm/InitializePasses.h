@@ -434,6 +434,7 @@ void initializeTailCallElimPass(PassRegistry&);
 void initializeTailDuplicatePass(PassRegistry&);
 void initializeTargetLibraryInfoWrapperPassPass(PassRegistry&);
 void initializeTargetPassConfigPass(PassRegistry&);
+void initializeTaskDependencyGraphPassPass(PassRegistry&);
 void initializeTargetTransformInfoWrapperPassPass(PassRegistry&);
 void initializeThreadSanitizerLegacyPassPass(PassRegistry&);
 void initializeTwoAddressInstructionPassPass(PassRegistry&);

@@ -123,6 +123,7 @@ add_llvm_component_library(LLVMAnalysis
   TFUtils.cpp
   TargetLibraryInfo.cpp
   TargetTransformInfo.cpp
+  TaskDependencyGraph.cpp
   Trace.cpp
   TypeBasedAliasAnalysis.cpp
   TypeMetadataUtils.cpp

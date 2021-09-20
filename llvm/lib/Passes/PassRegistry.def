@@ -177,6 +177,7 @@ FUNCTION_ANALYSIS("pass-instrumentation", PassInstrumentationAnalysis(PIC))
 FUNCTION_ANALYSIS("divergence", DivergenceAnalysis())
 FUNCTION_ANALYSIS("ompss-2-regions", OmpSsRegionAnalysisPass())
 FUNCTION_ANALYSIS("static-tdg-analysis", StaticTDGAnalysis())
+FUNCTION_ANALYSIS("task-dependency-graph", TaskDependencyGraphAnalysis())
 
 #ifndef FUNCTION_ALIAS_ANALYSIS
 #define FUNCTION_ALIAS_ANALYSIS(NAME, CREATE_PASS)                             \
@@ -335,6 +336,8 @@ FUNCTION_PASS("msan", MemorySanitizerPass({}))
 FUNCTION_PASS("kmsan", MemorySanitizerPass({0, false, /*Kernel=*/true}))
 FUNCTION_PASS("tsan", ThreadSanitizerPass())
 FUNCTION_PASS("memprof", MemProfilerPass())
+FUNCTION_PASS("tdg", TaskDependencyGraphAnalysisPass())
+
 #undef FUNCTION_PASS
 
 #ifndef FUNCTION_PASS_WITH_PARAMS
