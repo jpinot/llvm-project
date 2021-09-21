@@ -22,6 +22,7 @@
 #include "llvm/Analysis/StackSafetyAnalysis.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
+#include "llvm/Analysis/TaskDependencyGraph.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/Bitcode/BitcodeWriterPass.h"
@@ -217,10 +218,10 @@ static void addBoundsCheckingPass(const PassManagerBuilder &Builder,
   PM.add(createBoundsCheckingLegacyPass());
 }
 
-static void addStaticTDGIdentPass(const PassManagerBuilder &Builder,
+static void addStaticTDGPass(const PassManagerBuilder &Builder,
                                   PassManagerBase &PM) {
-  if (Builder.OptLevel > 0)
-    PM.add(createStaticTDGIdentLegacyPass());
+  if (Builder.OptLevel > 1)
+    PM.add(createTaskDependencyGraphPass());
 }
 
 static SanitizerCoverageOptions
@@ -725,7 +726,7 @@ void EmitAssemblyHelper::CreatePasses(legacy::PassManager &MPM,
 
   if (LangOpts.OpenMPTaskGraph)
     PMBuilder.addExtension(PassManagerBuilder::EP_LoopOptimizerEnd,
-       addStaticTDGIdentPass);
+       addStaticTDGPass);
 
   if (!CodeGenOpts.MemoryProfileOutput.empty()) {
     PMBuilder.addExtension(PassManagerBuilder::EP_OptimizerLast,
@@ -1363,10 +1364,10 @@ void EmitAssemblyHelper::EmitAssemblyWithNewPassManager(
     }
 
     if (LangOpts.OpenMPTaskGraph) {
-      PB.registerPipelineEarlySimplificationEPCallback(
-          [](ModulePassManager &MPM, PassBuilder::OptimizationLevel Level) {
-            if (Level != PassBuilder::OptimizationLevel::O0)
-              MPM.addPass(StaticTDGIdentPass());
+      PB.registerScalarOptimizerLateEPCallback(
+          [](FunctionPassManager &MPM, PassBuilder::OptimizationLevel Level) {
+            if (Level != PassBuilder::OptimizationLevel::O0 && Level != PassBuilder::OptimizationLevel::O1)
+              MPM.addPass(TaskDependencyGraphAnalysisPass());
           });
     }
 
