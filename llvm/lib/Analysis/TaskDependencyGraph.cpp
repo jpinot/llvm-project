@@ -38,7 +38,7 @@ const StringRef color_names[] = {
 
 #define DEBUG_TYPE "task-dependency-graph"
 
-TaskDependencyGraphPass::TaskDependencyGraphPass() : FunctionPass(ID) {
+TaskDependencyGraphPass::TaskDependencyGraphPass() : ModulePass(ID) {
   initializeTaskDependencyGraphPassPass(*PassRegistry::getPassRegistry());
 }
 
@@ -414,12 +414,6 @@ void TaskDependencyGraphData::findOpenMPTasks(Function &F, DominatorTree &DT) {
   Worklist.push_back(&F.getEntryBlock());
   Visited.insert(&F.getEntryBlock());
 
-  if (ProcessedFunctions.count(&F))
-    return;
-
-  ProcessedFunctions.insert(&F);
-
-  dbgs() << "Start \n";
   // Incremental task id
   int NumTasks = 0;
 
@@ -466,7 +460,6 @@ void TaskDependencyGraphData::findOpenMPTasks(Function &F, DominatorTree &DT) {
       }
     }
   }
-  dbgs() << "Ends checking tasks \n";
 
   // Check dependencies between all the tasks found, and fill
   // succesors/predecessors
@@ -483,11 +476,9 @@ void TaskDependencyGraphData::findOpenMPTasks(Function &F, DominatorTree &DT) {
       }
     }
   }
-  dbgs() << "Calculates dependencies \n";
 
   // Remove transisitve edges
   erase_transitive_edges();
-  dbgs() << "Edges erased \n";
 
   print_tdg();
   if (FunctionTasks.size()) {
@@ -497,11 +488,17 @@ void TaskDependencyGraphData::findOpenMPTasks(Function &F, DominatorTree &DT) {
   FunctionTasks.clear();
 }
 
-bool TaskDependencyGraphPass::runOnFunction(Function &F) {
-  auto &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
-  dbgs() << "Deprecated \n";
+bool TaskDependencyGraphPass::runOnModule(Module &M) {
   TaskDependencyGraphData TDG;
-  TDG.findOpenMPTasks(F, DT);
+
+  for (Function &F : M) {
+    if (F.isDeclaration() || F.empty())
+      continue;
+    // Only check functions with tasks
+    auto &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
+    //if (F.hasFnAttribute("llvm.omp.taskgraph"))
+      TDG.findOpenMPTasks(F, DT);
+  }
   return false;
 }
 
@@ -526,7 +523,7 @@ INITIALIZE_PASS_END(TaskDependencyGraphPass, "task-dependency-graph",
 // "include/llvm/LinkAllPasses.h". Otherwise the pass would be deleted by
 // the link time optimization.
 
-FunctionPass *llvm::createTaskDependencyGraphPass() {
+ModulePass *llvm::createTaskDependencyGraphPass() {
   return new TaskDependencyGraphPass();
 }
 
@@ -534,17 +531,24 @@ FunctionPass *llvm::createTaskDependencyGraphPass() {
 AnalysisKey TaskDependencyGraphAnalysis::Key;
 
 TaskDependencyGraphData
-TaskDependencyGraphAnalysis::run(Function &F, FunctionAnalysisManager &FAM) {
-  auto &DT = FAM.getResult<DominatorTreeAnalysis>(F);
-  TDG.findOpenMPTasks(F, DT);
+TaskDependencyGraphAnalysis::run(Module &M, ModuleAnalysisManager &AM) {
+  FunctionAnalysisManager &FAM =
+      AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
+  for (Function &F : M) {
+    if (F.isDeclaration() || F.empty())
+      continue;
+    auto &DT = FAM.getResult<DominatorTreeAnalysis>(F);
+    // Only check functions with tasks
+    //if (F.hasFnAttribute("llvm.omp.taskgraph"))
+      TDG.findOpenMPTasks(F, DT);
+  }
   return TDG;
 }
 
 PreservedAnalyses
-TaskDependencyGraphAnalysisPass::run(Function &F,
-                                     FunctionAnalysisManager &FAM) {
+TaskDependencyGraphAnalysisPass::run(Module &M, ModuleAnalysisManager &AM) {
 
-  FAM.getResult<TaskDependencyGraphAnalysis>(F);
+  AM.getResult<TaskDependencyGraphAnalysis>(M);
   // Analysis should never change the LLVM IR code so all
   // results of other analyses are still valid!
   return PreservedAnalyses::all();

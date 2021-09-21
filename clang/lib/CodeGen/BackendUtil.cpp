@@ -1364,8 +1364,8 @@ void EmitAssemblyHelper::EmitAssemblyWithNewPassManager(
     }
 
     if (LangOpts.OpenMPTaskGraph) {
-      PB.registerScalarOptimizerLateEPCallback(
-          [](FunctionPassManager &MPM, PassBuilder::OptimizationLevel Level) {
+      PB.registerOptimizerLastEPCallback(
+          [](ModulePassManager &MPM, PassBuilder::OptimizationLevel Level) {
             if (Level != PassBuilder::OptimizationLevel::O0 && Level != PassBuilder::OptimizationLevel::O1)
               MPM.addPass(TaskDependencyGraphAnalysisPass());
           });

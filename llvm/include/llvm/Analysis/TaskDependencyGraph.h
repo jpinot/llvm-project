@@ -16,7 +16,7 @@
 
 namespace llvm {
 
-FunctionPass *createTaskDependencyGraphPass();
+ModulePass *createTaskDependencyGraphPass();
 
 struct TaskDependInfo {
   Value *base;                    // base Address
@@ -44,7 +44,6 @@ class TaskDependencyGraphData {
   int MaxNesting = 3;
   int ColorsUsed = 0;
   SmallVector<TaskInfo, 10> FunctionTasks; // Vector to store all tasks found
-  SmallPtrSet<Function *,10> ProcessedFunctions;
 
 public:
   void traverse_node(SmallVectorImpl<uint64_t> &edges_to_check, int node,
@@ -58,13 +57,13 @@ public:
   void findOpenMPTasks(Function &F, DominatorTree &DT);
   void obtainTaskInfo(TaskInfo &TaskFound, CallInst &TaskCall,
                       DominatorTree &DT);
-  bool invalidate(Function &, const PreservedAnalyses &,
-                  FunctionAnalysisManager::Invalidator &) {
+  bool invalidate(Module &, const PreservedAnalyses &,
+                  ModuleAnalysisManager::Invalidator &) {
     return false;
   }                    
 };
 
-class TaskDependencyGraphPass : public FunctionPass {
+class TaskDependencyGraphPass : public ModulePass {
 
 public:
   static char ID;
@@ -73,7 +72,7 @@ public:
 
   /// @name FunctionPass interface
   //@{
-  bool runOnFunction(Function &F) override;
+  bool runOnModule(Module &M) override;
   void releaseMemory() override;
   // void verifyAnalysis() const override;
   void getAnalysisUsage(AnalysisUsage &AU) const override;
@@ -91,7 +90,7 @@ class TaskDependencyGraphAnalysis
 public:
   /// Provide the result typedef for this analysis pass.
   using Result = TaskDependencyGraphData;
-  TaskDependencyGraphData run(Function &F, FunctionAnalysisManager &FAM);
+  TaskDependencyGraphData run(Module &M, ModuleAnalysisManager &AM);
 };
 
 class TaskDependencyGraphAnalysisPass
@@ -99,7 +98,7 @@ class TaskDependencyGraphAnalysisPass
 
 public:
   /// Provide the result typedef for this analysis pass.
-  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
+  PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
  
 };
 
