@@ -4164,6 +4164,11 @@ CGOpenMPRuntime::emitTaskInit(CodeGenFunction &CGF, SourceLocation Loc,
                               Address Shareds, const OMPTaskDataTy &Data) {
   ASTContext &C = CGM.getContext();
   llvm::SmallVector<PrivateDataTy, 4> Privates;
+
+  llvm::Function *CurrentFunction = CGF.Builder.GetInsertBlock()->getParent();
+  if (!CurrentFunction->hasFnAttribute("llvm.openmp.taskgraph"))
+    CurrentFunction->addFnAttr("llvm.openmp.taskgraph");
+
   // Aggregate privates and sort them by the alignment.
   const auto *I = Data.PrivateCopies.begin();
   for (const Expr *E : Data.PrivateVars) {
