@@ -38,7 +38,6 @@ const StringRef color_names[] = {
 
 #define DEBUG_TYPE "task-dependency-graph"
 
-
 TaskDependencyGraphPass::TaskDependencyGraphPass() : FunctionPass(ID) {
   initializeTaskDependencyGraphPassPass(*PassRegistry::getPassRegistry());
 }
@@ -348,6 +347,65 @@ void TaskDependencyGraphData::print_tdg_to_dot(StringRef ModuleName) {
   tdgfile.close();
 }
 
+void TaskDependencyGraphData::generate_tdg_file(StringRef ModuleName) {
+  std::string fileName = ModuleName.str();
+  size_t lastindex = fileName.find_last_of(".");
+  std::string rawFileName = fileName.substr(0, lastindex);
+
+  std::ofstream tdgfile(rawFileName + "_tdg.c");
+  SmallVector<int, 10> InputList;
+  SmallVector<int, 10> OutputList;
+  for (int i = 0; i < (int)FunctionTasks.size(); i++) {
+    InputList.insert(InputList.end(), FunctionTasks[i].predecessors.begin(),
+                     FunctionTasks[i].predecessors.end());
+    OutputList.insert(OutputList.end(), FunctionTasks[i].successors.begin(),
+                      FunctionTasks[i].successors.end());
+  }
+  int offin = 0;
+  int offout = 0;
+
+  if (!tdgfile.is_open()) {
+    dbgs() << "Error Opening TDG file \n";
+    exit(1);
+  }
+  tdgfile << "struct kmp_task_t;\nstruct kmp_tdg\n{\n";
+  tdgfile << "  unsigned int id;\n  struct kmp_task_t task;\n  unsigned int "
+             "offin;\n  unsigned int offout;\n  "
+             "unsigned int nin;\n  unsigned int nout;\n};\n";
+  tdgfile << "struct kmp_tdg kmp_tdg_0[" << FunctionTasks.size() << "] = {";
+  for (int i = 0; i < (int)FunctionTasks.size(); i++) {
+    tdgfile << "{ .id =" << FunctionTasks[i].id
+            << ", .task = 0, .offin =" << offin << ", .offout =" << offout
+            << ", .nin =" << FunctionTasks[i].predecessors.size()
+            << ", nout =" << FunctionTasks[i].successors.size() << "}";
+
+    offin += FunctionTasks[i].predecessors.size();
+    offout += FunctionTasks[i].successors.size();
+    if (i != (int)FunctionTasks.size() - 1)
+      tdgfile << ",";
+    else
+      tdgfile << "};\n";
+  }
+  tdgfile << "unsigned int kmp_tdg_ins_0[" << InputList.size() << "] = {";
+  for (int i = 0; i < (int)InputList.size(); i++) {
+    tdgfile << " " << InputList[i];
+    if (i != (int)InputList.size() - 1)
+      tdgfile << ",";
+    else
+      tdgfile << "};\n";
+  }
+  tdgfile << "unsigned int kmp_tdg_outs_0[" << OutputList.size() << "] = {";
+  for (int i = 0; i < (int)OutputList.size(); i++) {
+    tdgfile << " " << OutputList[i];
+    if (i != (int)OutputList.size() - 1)
+      tdgfile << ",";
+    else
+      tdgfile << "};\n";
+  }
+  tdgfile << "unsigned int gomp_tdg_ntasks = " << FunctionTasks.size() << ";\n";
+  tdgfile.close();
+}
+
 void TaskDependencyGraphData::findOpenMPTasks(Function &F, DominatorTree &DT) {
 
   // Iterate over the BB
@@ -356,7 +414,8 @@ void TaskDependencyGraphData::findOpenMPTasks(Function &F, DominatorTree &DT) {
   Worklist.push_back(&F.getEntryBlock());
   Visited.insert(&F.getEntryBlock());
 
-  if(ProcessedFunctions.count(&F)) return;
+  if (ProcessedFunctions.count(&F))
+    return;
 
   ProcessedFunctions.insert(&F);
 
@@ -431,8 +490,10 @@ void TaskDependencyGraphData::findOpenMPTasks(Function &F, DominatorTree &DT) {
   dbgs() << "Edges erased \n";
 
   print_tdg();
-  if (FunctionTasks.size())
+  if (FunctionTasks.size()) {
     print_tdg_to_dot(F.getParent()->getSourceFileName());
+    generate_tdg_file(F.getParent()->getSourceFileName());
+  }
   FunctionTasks.clear();
 }
 
