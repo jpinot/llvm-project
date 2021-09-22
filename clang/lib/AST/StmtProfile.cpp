@@ -488,6 +488,8 @@ void OMPClauseProfiler::VisitOMPDefaultClause(const OMPDefaultClause *C) { }
 
 void OMPClauseProfiler::VisitOMPProcBindClause(const OMPProcBindClause *C) { }
 
+void OMPClauseProfiler::VisitOMPTdgTypeClause(const OMPTdgTypeClause *C) { }
+
 void OMPClauseProfiler::VisitOMPUnifiedAddressClause(
     const OMPUnifiedAddressClause *C) {}
 

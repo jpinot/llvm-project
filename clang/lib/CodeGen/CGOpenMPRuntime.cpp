@@ -4164,11 +4164,7 @@ CGOpenMPRuntime::emitTaskInit(CodeGenFunction &CGF, SourceLocation Loc,
                               Address Shareds, const OMPTaskDataTy &Data) {
   ASTContext &C = CGM.getContext();
   llvm::SmallVector<PrivateDataTy, 4> Privates;
-
-  llvm::Function *CurrentFunction = CGF.Builder.GetInsertBlock()->getParent();
-  if (!CurrentFunction->hasFnAttribute("llvm.openmp.taskgraph"))
-    CurrentFunction->addFnAttr("llvm.openmp.taskgraph");
-
+  
   // Aggregate privates and sort them by the alignment.
   const auto *I = Data.PrivateCopies.begin();
   for (const Expr *E : Data.PrivateVars) {
@@ -4343,6 +4339,7 @@ CGOpenMPRuntime::emitTaskInit(CodeGenFunction &CGF, SourceLocation Loc,
           {NewTask, TaskIDAdded});
     }
   }
+  
   // Emit detach clause initialization.
   // evt = (typeof(evt))__kmpc_task_allow_completion_event(loc, tid,
   // task_descriptor);
@@ -6245,12 +6242,29 @@ void CGOpenMPRuntime::emitTaskwaitCall(CodeGenFunction &CGF,
     Region->emitUntiedSwitch(CGF);
 }
 
+void markFunctionsInsideTaskgraph(llvm::Function &F) {
+  if (!F.hasFnAttribute("llvm.openmp.taskgraph"))
+    F.addFnAttr("llvm.openmp.taskgraph");
+
+  for (llvm::BasicBlock &bb : F) {
+    for (llvm::Instruction &I : bb) {
+      if(llvm::CallInst *call = dyn_cast<llvm::CallInst>(&I)){
+        markFunctionsInsideTaskgraph(*(call->getCalledFunction()));
+      }
+    }
+  }
+}
+
 void CGOpenMPRuntime::emitTaskgraphCall(CodeGenFunction &CGF,
                                         SourceLocation Loc,
                                         const OMPExecutableDirective &D) {
   if (!CGF.HaveInsertPoint())
     return;
 
+  for (const auto *C : D.getClausesOfKind<OMPTdgTypeClause>()){
+      if( C->getTdgTypeKind() == OMPC_TDG_TYPE_static){
+      }
+  }
   llvm::Value *IfVal = nullptr;
 
   for (const auto *C : D.getClausesOfKind<OMPIfClause>()) {
@@ -6271,6 +6285,8 @@ void CGOpenMPRuntime::emitTaskgraphCall(CodeGenFunction &CGF,
     Condition = IfVal;
   else
     Condition = CGF.Builder.getInt32(0);
+
+  markFunctionsInsideTaskgraph(*OutlineInfo.first);
 
   llvm::Value *Args[] = {emitUpdateLocation(CGF, Loc), getThreadID(CGF, Loc),
                          CGF.Builder.CreatePointerBitCastOrAddrSpaceCast(

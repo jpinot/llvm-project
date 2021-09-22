@@ -1593,6 +1593,12 @@ void OMPClausePrinter::VisitOMPProcBindClause(OMPProcBindClause *Node) {
      << ")";
 }
 
+void OMPClausePrinter::VisitOMPTdgTypeClause(OMPTdgTypeClause *Node) {
+  OS << "tdg_type("
+     << getOpenMPSimpleClauseTypeName(OMPC_tdg_type, Node->getTdgTypeKind())
+     << ")";
+}
+
 void OMPClausePrinter::VisitOMPUnifiedAddressClause(OMPUnifiedAddressClause *) {
   OS << "unified_address";
 }

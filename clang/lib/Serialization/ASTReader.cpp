@@ -11759,6 +11759,9 @@ OMPClause *OMPClauseReader::readClause() {
   case llvm::omp::OMPC_proc_bind:
     C = new (Context) OMPProcBindClause();
     break;
+  case llvm::omp::OMPC_tdg_type:
+    C = new (Context) OMPTdgTypeClause();
+    break;  
   case llvm::omp::OMPC_schedule:
     C = new (Context) OMPScheduleClause();
     break;
@@ -12064,6 +12067,13 @@ void OMPClauseReader::VisitOMPProcBindClause(OMPProcBindClause *C) {
   C->setProcBindKind(static_cast<llvm::omp::ProcBindKind>(Record.readInt()));
   C->setLParenLoc(Record.readSourceLocation());
   C->setProcBindKindKwLoc(Record.readSourceLocation());
+}
+
+void OMPClauseReader::VisitOMPTdgTypeClause(OMPTdgTypeClause *C) {
+  C->setTdgTypeKind(
+       static_cast<OpenMPTdgTypeClauseKind>(Record.readInt()));
+  C->setLParenLoc(Record.readSourceLocation());
+  C->setTdgTypeKindKwLoc(Record.readSourceLocation());
 }
 
 void OMPClauseReader::VisitOMPScheduleClause(OMPScheduleClause *C) {

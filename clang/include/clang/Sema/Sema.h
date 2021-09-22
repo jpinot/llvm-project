@@ -10930,6 +10930,13 @@ public:
                                        SourceLocation StartLoc,
                                        SourceLocation LParenLoc,
                                        SourceLocation EndLoc);
+  /// Called on well-formed 'tdg_type' clause.
+  OMPClause *ActOnOpenMPTdgTypeClause(OpenMPTdgTypeClauseKind Kind,
+                                           SourceLocation KindKwLoc,
+                                           SourceLocation StartLoc,
+                                           SourceLocation LParenLoc,
+                                           SourceLocation EndLoc);
+
   /// Called on well-formed 'order' clause.
   OMPClause *ActOnOpenMPOrderClause(OpenMPOrderClauseKind Kind,
                                     SourceLocation KindLoc,

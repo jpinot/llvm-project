@@ -123,6 +123,11 @@ unsigned clang::getOpenMPSimpleClauseType(OpenMPClauseKind Kind, StringRef Str,
 #define OPENMP_REDUCTION_MODIFIER(Name) .Case(#Name, OMPC_REDUCTION_##Name)
 #include "clang/Basic/OpenMPKinds.def"
         .Default(OMPC_REDUCTION_unknown);
+  case OMPC_tdg_type:
+    return llvm::StringSwitch<OpenMPTdgTypeClauseKind>(Str)
+#define OPENMP_TDG_TYPE_KIND(Name) .Case(#Name, OMPC_TDG_TYPE_##Name)
+#include "clang/Basic/OpenMPKinds.def"
+        .Default(OMPC_TDG_TYPE_unknown);
   case OMPC_unknown:
   case OMPC_threadprivate:
   case OMPC_if:
@@ -207,6 +212,16 @@ const char *clang::getOpenMPSimpleClauseTypeName(OpenMPClauseKind Kind,
 #include "llvm/Frontend/OpenMP/OMPKinds.def"
     }
     llvm_unreachable("Invalid OpenMP 'proc_bind' clause type");
+  case OMPC_tdg_type:
+    switch (Type) {
+    case OMPC_TDG_TYPE_unknown:
+      return "unknown";
+#define OPENMP_TDG_TYPE_KIND(Name)                                         \
+    case OMPC_TDG_TYPE_##Name:                                               \
+      return #Name;
+#include "clang/Basic/OpenMPKinds.def"
+    }
+    llvm_unreachable("Invalid OpenMP 'tdg_type' clause type");
   case OMPC_schedule:
     switch (Type) {
     case OMPC_SCHEDULE_unknown:

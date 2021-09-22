@@ -6154,6 +6154,12 @@ void OMPClauseWriter::VisitOMPProcBindClause(OMPProcBindClause *C) {
   Record.AddSourceLocation(C->getProcBindKindKwLoc());
 }
 
+void OMPClauseWriter::VisitOMPTdgTypeClause(OMPTdgTypeClause *C) {
+  Record.push_back(C->getTdgTypeKind());
+  Record.AddSourceLocation(C->getLParenLoc());
+  Record.AddSourceLocation(C->getTdgTypeKindKwLoc());
+}
+
 void OMPClauseWriter::VisitOMPScheduleClause(OMPScheduleClause *C) {
   VisitOMPClauseWithPreInit(C);
   Record.push_back(C->getScheduleKind());

@@ -13565,6 +13565,11 @@ OMPClause *Sema::ActOnOpenMPSimpleClause(
     Res = ActOnOpenMPUpdateClause(static_cast<OpenMPDependClauseKind>(Argument),
                                   ArgumentLoc, StartLoc, LParenLoc, EndLoc);
     break;
+  case OMPC_tdg_type:
+    Res = ActOnOpenMPTdgTypeClause(
+        static_cast<OpenMPTdgTypeClauseKind>(Argument), ArgumentLoc, StartLoc,
+        LParenLoc, EndLoc);
+    break;
   case OMPC_if:
   case OMPC_final:
   case OMPC_num_threads:
@@ -13708,6 +13713,22 @@ OMPClause *Sema::ActOnOpenMPProcBindClause(ProcBindKind Kind,
   }
   return new (Context)
       OMPProcBindClause(Kind, KindKwLoc, StartLoc, LParenLoc, EndLoc);
+}
+
+OMPClause *Sema::ActOnOpenMPTdgTypeClause(OpenMPTdgTypeClauseKind Kind,
+                                           SourceLocation KindKwLoc,
+                                           SourceLocation StartLoc,
+                                           SourceLocation LParenLoc,
+                                           SourceLocation EndLoc) {
+  if (Kind == OMPC_TDG_TYPE_unknown) {
+    Diag(KindKwLoc, diag::err_omp_unexpected_clause_value)
+        << getListOfPossibleValues(OMPC_tdg_type, /*First=*/0,
+                                   /*Last=*/OMPC_TDG_TYPE_unknown)
+        << getOpenMPClauseName(OMPC_tdg_type);
+    return nullptr;
+  }
+  return new (Context)
+      OMPTdgTypeClause(Kind, KindKwLoc, StartLoc, LParenLoc, EndLoc);
 }
 
 OMPClause *Sema::ActOnOpenMPAtomicDefaultMemOrderClause(

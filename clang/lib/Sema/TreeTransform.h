@@ -1864,6 +1864,15 @@ public:
                                                StartLoc, LParenLoc, EndLoc);
   }
 
+  OMPClause *RebuildOMPTdgTypeClause(OpenMPTdgTypeClauseKind Kind,
+                                      SourceLocation KindKwLoc,
+                                      SourceLocation StartLoc,
+                                      SourceLocation LParenLoc,
+                                      SourceLocation EndLoc) {
+    return getSema().ActOnOpenMPTdgTypeClause(Kind, KindKwLoc,
+                                               StartLoc, LParenLoc, EndLoc);
+  }
+
   /// Build a new OpenMP 'schedule' clause.
   ///
   /// By default, performs semantic analysis to build the new OpenMP clause.
@@ -9370,6 +9379,14 @@ OMPClause *
 TreeTransform<Derived>::TransformOMPProcBindClause(OMPProcBindClause *C) {
   return getDerived().RebuildOMPProcBindClause(
       C->getProcBindKind(), C->getProcBindKindKwLoc(), C->getBeginLoc(),
+      C->getLParenLoc(), C->getEndLoc());
+}
+
+template <typename Derived>
+OMPClause *
+TreeTransform<Derived>::TransformOMPTdgTypeClause(OMPTdgTypeClause *C) {
+  return getDerived().RebuildOMPTdgTypeClause(
+      C->getTdgTypeKind(), C->getTdgTypeKindKwLoc(), C->getBeginLoc(),
       C->getLParenLoc(), C->getEndLoc());
 }
 

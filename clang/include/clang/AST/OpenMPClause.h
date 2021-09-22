@@ -1117,6 +1117,87 @@ public:
   }
 };
 
+/// This represents 'tdg_type' clause in the '#pragma omp taskgraph ...'
+/// directive.
+///
+/// \code
+/// #pragma omp taskgraph tdg_type(static)
+/// \endcode
+/// In this example directive '#pragma omp taskgraph' has simple 'tdg_type'
+/// clause with kind 'static'.
+class OMPTdgTypeClause : public OMPClause {
+friend class OMPClauseReader;
+
+  /// Location of '('.
+  SourceLocation LParenLoc;
+
+  /// A kind of the 'proc_bind' clause.
+  OpenMPTdgTypeClauseKind Kind = OMPC_TDG_TYPE_unknown;
+
+  /// Start location of the kind in source code.
+  SourceLocation KindKwLoc;
+
+  /// Set kind of the clause.
+  ///
+  /// \param K Kind of clause.
+  void setTdgTypeKind(OpenMPTdgTypeClauseKind K) { Kind = K; }
+
+  /// Set clause kind location.
+  ///
+  /// \param KLoc Kind location.
+  void setTdgTypeKindKwLoc(SourceLocation KLoc) { KindKwLoc = KLoc; }
+
+public:
+  /// Build 'proc_bind' clause with argument \a A ('master', 'close' or
+  ///        'spread').
+  ///
+  /// \param A Argument of the clause ('master', 'close' or 'spread').
+  /// \param ALoc Starting location of the argument.
+  /// \param StartLoc Starting location of the clause.
+  /// \param LParenLoc Location of '('.
+  /// \param EndLoc Ending location of the clause.
+  OMPTdgTypeClause(OpenMPTdgTypeClauseKind A, SourceLocation ALoc,
+                    SourceLocation StartLoc, SourceLocation LParenLoc,
+                    SourceLocation EndLoc)
+      : OMPClause(llvm::omp::OMPC_tdg_type, StartLoc, EndLoc), LParenLoc(LParenLoc),
+        Kind(A), KindKwLoc(ALoc) {}
+
+  /// Build an empty clause.
+  OMPTdgTypeClause()
+      : OMPClause(llvm::omp::OMPC_tdg_type, SourceLocation(), SourceLocation()) {}
+
+  /// Sets the location of '('.
+  void setLParenLoc(SourceLocation Loc) { LParenLoc = Loc; }
+
+  /// Returns the location of '('.
+  SourceLocation getLParenLoc() const { return LParenLoc; }
+
+  /// Returns kind of the clause.
+  OpenMPTdgTypeClauseKind getTdgTypeKind() const { return Kind; }
+
+  /// Returns location of clause kind.
+  SourceLocation getTdgTypeKindKwLoc() const { return KindKwLoc; }
+
+  child_range children() {
+    return child_range(child_iterator(), child_iterator());
+  }
+
+  const_child_range children() const {
+    return const_child_range(const_child_iterator(), const_child_iterator());
+  }
+
+  child_range used_children() {
+    return child_range(child_iterator(), child_iterator());
+  }
+  const_child_range used_children() const {
+    return const_child_range(const_child_iterator(), const_child_iterator());
+  }
+
+  static bool classof(const OMPClause *T) {
+    return T->getClauseKind() == llvm::omp::OMPC_tdg_type;
+  }
+};
+
 /// This represents 'unified_address' clause in the '#pragma omp requires'
 /// directive.
 ///

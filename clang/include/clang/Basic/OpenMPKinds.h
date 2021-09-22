@@ -152,6 +152,13 @@ enum OpenMPOrderClauseKind {
   OMPC_ORDER_unknown,
 };
 
+/// OpenMP attributes for 'tdg_type' clause.
+enum OpenMPTdgTypeClauseKind {
+#define OPENMP_TDG_TYPE_KIND(Name) OMPC_TDG_TYPE_##Name,
+#include "clang/Basic/OpenMPKinds.def"
+  OMPC_TDG_TYPE_unknown,
+};
+
 /// Scheduling data for loop-based OpenMP directives.
 struct OpenMPScheduleTy final {
   OpenMPScheduleClauseKind Schedule = OMPC_SCHEDULE_unknown;

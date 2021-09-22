@@ -2239,6 +2239,8 @@ void OMPClauseEnqueue::VisitOMPDefaultClause(const OMPDefaultClause *C) {}
 
 void OMPClauseEnqueue::VisitOMPProcBindClause(const OMPProcBindClause *C) {}
 
+void OMPClauseEnqueue::VisitOMPTdgTypeClause(const OMPTdgTypeClause *C) { }
+
 void OMPClauseEnqueue::VisitOMPScheduleClause(const OMPScheduleClause *C) {
   VisitOMPClauseWithPreInit(C);
   Visitor->AddStmt(C->getChunkSize());

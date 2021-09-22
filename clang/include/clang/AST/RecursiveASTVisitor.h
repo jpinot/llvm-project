@@ -3097,6 +3097,11 @@ bool RecursiveASTVisitor<Derived>::VisitOMPProcBindClause(OMPProcBindClause *) {
 }
 
 template <typename Derived>
+bool RecursiveASTVisitor<Derived>::VisitOMPTdgTypeClause(OMPTdgTypeClause *) {
+  return true;
+}
+
+template <typename Derived>
 bool RecursiveASTVisitor<Derived>::VisitOMPUnifiedAddressClause(
     OMPUnifiedAddressClause *) {
   return true;
