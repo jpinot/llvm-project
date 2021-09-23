@@ -347,12 +347,12 @@ void TaskDependencyGraphData::print_tdg_to_dot(StringRef ModuleName) {
   tdgfile.close();
 }
 
-void TaskDependencyGraphData::generate_tdg_file(StringRef ModuleName) {
+void TaskDependencyGraphData::generate_analysis_tdg_file(StringRef ModuleName) {
   std::string fileName = ModuleName.str();
   size_t lastindex = fileName.find_last_of(".");
   std::string rawFileName = fileName.substr(0, lastindex);
 
-  std::ofstream tdgfile(rawFileName + "_tdg.c");
+  std::ofstream tdgfile(rawFileName + "_analysis_tdg.c");
   SmallVector<int, 10> InputList;
   SmallVector<int, 10> OutputList;
   for (int i = 0; i < (int)FunctionTasks.size(); i++) {
@@ -403,6 +403,61 @@ void TaskDependencyGraphData::generate_tdg_file(StringRef ModuleName) {
       tdgfile << "};\n";
   }
   tdgfile << "unsigned int gomp_tdg_ntasks = " << FunctionTasks.size() << ";\n";
+  tdgfile.close();
+}
+
+void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName) {
+  std::string fileName = ModuleName.str();
+  size_t lastindex = fileName.find_last_of(".");
+  std::string rawFileName = fileName.substr(0, lastindex);
+
+  std::ofstream tdgfile(rawFileName + "_tdg.c");
+
+  if (!tdgfile.is_open()) {
+    dbgs() << "Error Opening TDG file \n";
+    exit(1);
+  }
+  SmallVector<int, 10> OutputList;
+  for (int i = 0; i < (int)FunctionTasks.size(); i++) {
+ 
+    OutputList.insert(OutputList.end(), FunctionTasks[i].successors.begin(),
+                      FunctionTasks[i].successors.end());
+  }
+
+  int offout = 0;
+  tdgfile << "struct kmp_task_t;\nstruct kmp_record_info\n{\n";
+  tdgfile << "  int static_id;\n  struct kmp_task_t task;\n  int "
+             "* succesors;\n  int nsuccessors;\n  "
+             "int npredecessors_counter;\n  int npredecessors;\n  int "
+             "successors_size;\n};\n";
+
+  tdgfile << "unsigned int kmp_tdg_outs_0[" << OutputList.size() << "] = {";
+  for (int i = 0; i < (int)OutputList.size(); i++) {
+    tdgfile << " " << OutputList[i];
+    if (i != (int)OutputList.size() - 1)
+      tdgfile << ",";
+    else
+      tdgfile << "};\n";
+  }
+  tdgfile << "struct kmp_tdg kmp_tdg_0[" << FunctionTasks.size() << "] = {";
+  for (int i = 0; i < (int)FunctionTasks.size(); i++) {
+    tdgfile << "{ .static_id =" << FunctionTasks[i].id
+            << ", .task = 0, .succesors = &kmp_tdg_outs_0[" << offout << "]"
+            << ", .nsuccessors =" << FunctionTasks[i].successors.size()
+            << ", .npredecessors_counter ="
+            << FunctionTasks[i].predecessors.size()
+            << ", .npredecessors = " << FunctionTasks[i].predecessors.size()
+            << ", .succesors_size = 0"
+            << "}";
+
+    offout += FunctionTasks[i].successors.size();
+    if (i != (int)FunctionTasks.size() - 1)
+      tdgfile << ",";
+    else
+      tdgfile << "};\n";
+  }
+
+  tdgfile << "void kmp_set_tdg()\n{\n  __kmpc_set_tdg(&kmp_tdg kmp_tdg_0);\n};";
   tdgfile.close();
 }
 
@@ -483,8 +538,10 @@ void TaskDependencyGraphData::findOpenMPTasks(Function &F, DominatorTree &DT) {
   print_tdg();
   if (FunctionTasks.size()) {
     print_tdg_to_dot(F.getParent()->getSourceFileName());
-    generate_tdg_file(F.getParent()->getSourceFileName());
+    generate_analysis_tdg_file(F.getParent()->getSourceFileName());
+    generate_runtime_tdg_file(F.getParent()->getSourceFileName());
   }
+
   FunctionTasks.clear();
 }
 
@@ -496,8 +553,8 @@ bool TaskDependencyGraphPass::runOnModule(Module &M) {
       continue;
     // Only check functions with tasks
     auto &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
-    //if (F.hasFnAttribute("llvm.omp.taskgraph"))
-      TDG.findOpenMPTasks(F, DT);
+    // if (F.hasFnAttribute("llvm.omp.taskgraph"))
+    TDG.findOpenMPTasks(F, DT);
   }
   return false;
 }
@@ -539,8 +596,8 @@ TaskDependencyGraphAnalysis::run(Module &M, ModuleAnalysisManager &AM) {
       continue;
     auto &DT = FAM.getResult<DominatorTreeAnalysis>(F);
     // Only check functions with tasks
-    //if (F.hasFnAttribute("llvm.omp.taskgraph"))
-      TDG.findOpenMPTasks(F, DT);
+    // if (F.hasFnAttribute("llvm.omp.taskgraph"))
+    TDG.findOpenMPTasks(F, DT);
   }
   return TDG;
 }

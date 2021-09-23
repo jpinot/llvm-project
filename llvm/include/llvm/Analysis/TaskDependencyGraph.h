@@ -50,7 +50,8 @@ public:
                      int nesting_level, std::vector<bool> &Visited);
   void print_tdg();
   void print_tdg_to_dot(StringRef ModuleName);
-  void generate_tdg_file(StringRef ModuleName);
+  void generate_analysis_tdg_file(StringRef ModuleName);
+  void generate_runtime_tdg_file(StringRef ModuleName);
   void obtainTaskIdent(TaskInfo &TaskFound, CallInst &TaskCall);
   void erase_transitive_edges();
   bool checkDependency(TaskDependInfo &Source, TaskDependInfo &Dest);
