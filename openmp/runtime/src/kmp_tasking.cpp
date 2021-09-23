@@ -31,6 +31,7 @@ extern int MapIncrement;
 extern int SuccessorsSize;
 extern int id_counter;
 extern int taskify;
+extern ident_task *TaskIdentMap;
 #endif
 
 /* forward declaration */
@@ -1468,8 +1469,8 @@ kmp_task_t *__kmp_task_alloc(ident_t *loc_ref, kmp_int32 gtid,
 #if LIBOMP_TASKGRAPH
 void __kmpc_set_task_static_id(kmp_task_t *task, kmp_int32 staticID) {
   if (inside_taskgraph) {
-    kmp_taskdata_t *taskdata = KMP_TASK_TO_TASKDATA(task);
     id_counter++;
+    kmp_taskdata_t *taskdata = KMP_TASK_TO_TASKDATA(task);
     task->part_id = id_counter;
     taskdata->td_task_id = staticID;
   }
@@ -1803,14 +1804,13 @@ kmp_int32 __kmp_omp_task(kmp_int32 gtid, kmp_task_t *new_task,
       for (int i = OldSize; i < MapSize; i++) {
         kmp_int32 *successorsList =
             (kmp_int32 *)malloc(SuccessorsSize * sizeof(kmp_int32));
-        kmp_record_info newRecord = {successorsList, 0, nullptr, 0, 0, nullptr,
-                                     SuccessorsSize};
+        kmp_record_info newRecord = {0, nullptr, successorsList, 0, 0, 0, SuccessorsSize};
         RecordMap[i] = newRecord;
       }
     }
 
-    if (RecordMap[new_task->part_id].td_ident == nullptr) {
-      RecordMap[new_task->part_id].td_ident = new_taskdata->td_ident->psource;
+    if (RecordMap[new_task->part_id].task == nullptr) {
+      TaskIdentMap[new_task->part_id].td_ident = new_taskdata->td_ident->psource;
       RecordMap[new_task->part_id].static_id = new_taskdata->td_task_id;
       RecordMap[new_task->part_id].task = new_task;
     }

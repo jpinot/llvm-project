@@ -2389,19 +2389,27 @@ typedef struct kmp_tasking_flags { /* Total struct must be exactly 32 bits */
 
 
 struct kmp_record_info {
+  kmp_int32 static_id;
+  kmp_task_t * task;
   kmp_int32 * successors;
   kmp_int32 nsuccessors;
-  kmp_task_t * task;
   kmp_int32 npredecessors_counter;
   kmp_int32 npredecessors;
-  const char *td_ident;
-  kmp_int32 static_id;
-  kmp_int32 successorsSize;
+  kmp_int32 successors_size;
 };
 
 struct dynamic_tdg_info{
   const char *loc;
   kmp_record_info *RecordMap;
+};
+
+struct ident_color{
+  const char * td_ident;
+  const char *color;
+};
+
+struct ident_task{
+  const char * td_ident;
 };
 
 struct kmp_taskdata { /* aligned during dynamic allocation       */

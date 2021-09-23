@@ -59,12 +59,8 @@ const char* color_names[] = {
         "slateblue3", "yellowgreen", "salmon", "purple", "mediumturquoise", "slategray3"
 };
 
-struct ident_color{
-  const char * td_ident;
-  const char *color;
-};
-
 ident_color *ColorMap;
+ident_task *TaskIdentMap;
 kmp_int32 ColorIndex=0;
 #endif // LIBOMP_TASKGRAPH
 
@@ -263,11 +259,11 @@ static inline void __kmp_track_dependence(kmp_int32 gtid, kmp_depnode_t *source,
       }
     }
     if (!exists) {
-      if (SourceInfo->nsuccessors >= SourceInfo->successorsSize) {
-        SourceInfo->successorsSize += SuccessorsIncrement;
+      if (SourceInfo->nsuccessors >= SourceInfo->successors_size) {
+        SourceInfo->successors_size += SuccessorsIncrement;
         SourceInfo->successors = (kmp_int32 *)realloc(
             SourceInfo->successors,
-            SourceInfo->successorsSize * sizeof(kmp_int32));
+            SourceInfo->successors_size * sizeof(kmp_int32));
       }
 
       SourceInfo->successors[SourceInfo->nsuccessors] = sink_task->part_id;
@@ -605,13 +601,13 @@ kmp_int32 __kmpc_omp_task_with_deps(ident_t *loc_ref, kmp_int32 gtid,
       for (int i = OldSize; i < MapSize; i++) {
         kmp_int32 *successorsList =
             (kmp_int32 *)malloc(SuccessorsSize * sizeof(kmp_int32));
-        kmp_record_info newRecord = {successorsList, 0, nullptr, 0, 0, nullptr,
-                                     SuccessorsSize};
+        kmp_record_info newRecord = {0, nullptr, successorsList, 0, 0,
+                                     0, SuccessorsSize};
         RecordMap[i] = newRecord;
       }
     }
 
-    RecordMap[new_task->part_id].td_ident = new_taskdata->td_ident->psource;
+    TaskIdentMap[new_task->part_id].td_ident = new_taskdata->td_ident->psource;
     RecordMap[new_task->part_id].static_id = new_taskdata->td_task_id;
     RecordMap[new_task->part_id].task = new_task;
   }
@@ -780,7 +776,7 @@ void __ompt_taskwait_dep_finish(kmp_taskdata_t *current_task,
 #if LIBOMP_TASKGRAPH
 void print_tdg() {
   for (int i = 1; i < MapSize; i++) {
-    if (RecordMap[i].td_ident == nullptr)
+    if (RecordMap[i].task == nullptr)
       break;
     printf("TASK: %d Successors: ", RecordMap[i].static_id);
     for (int j = 0; j < RecordMap[i].nsuccessors; j++) {
@@ -822,7 +818,7 @@ void traverse_node(kmp_int32 *edges_to_check, kmp_int32 *num_edges,
 void erase_transitive_edges() {
   for (int i = 1; i < MapSize; i++) {
 
-    if (RecordMap[i].td_ident == nullptr)
+    if (RecordMap[i].task == nullptr)
       break;
     kmp_int32 nsuccessors = RecordMap[i].nsuccessors;
 
@@ -869,10 +865,10 @@ void print_tdg_to_dot(void) {
 
   for (int i = 1; i < MapSize; i++) {
 
-    if (RecordMap[i].td_ident == nullptr)
+    if (RecordMap[i].task == nullptr)
       break;
     const char *color = nullptr;
-    const char *ident = RecordMap[i].td_ident;
+    const char *ident = TaskIdentMap[i].td_ident;
     for (int j = 0; j < ColorMapSize; j++) {
 
       if (ColorMap[j].td_ident == nullptr) {
@@ -898,7 +894,7 @@ void print_tdg_to_dot(void) {
 
   for (int i = 1; i < MapSize; i++) {
 
-    if (RecordMap[i].td_ident == nullptr)
+    if (RecordMap[i].task == nullptr)
       break;
 
     kmp_int32 nsuccessors = RecordMap[i].nsuccessors;
@@ -951,7 +947,7 @@ kmp_int32 __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid,
         if (taskify)
           for (int i = 1; i < MapSize; i++) {
 
-            if (RecordMap[i].td_ident == nullptr)
+            if (RecordMap[i].task == nullptr)
               break;
 
             kmp_taskdata_t *taskdata = KMP_TASK_TO_TASKDATA(RecordMap[i].task);
@@ -980,12 +976,14 @@ kmp_int32 __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid,
     }
     RecordMap = (kmp_record_info *)malloc(MapSize * sizeof(kmp_record_info));
     ColorMap = (ident_color *)malloc(ColorMapSize * sizeof(ident_color));
+    TaskIdentMap = (ident_task *)malloc(MapSize * sizeof(ident_task));
 
     for (int i = 0; i < MapSize; i++) {
+      TaskIdentMap[i] = {nullptr};
       kmp_int32 *successorsList =
           (kmp_int32 *)malloc(SuccessorsSize * sizeof(kmp_int32));
-      kmp_record_info newRecord = {successorsList, 0, nullptr,       0, 0,
-                                   nullptr,        0, SuccessorsSize};
+      kmp_record_info newRecord = {0, nullptr, successorsList, 0,
+                                   0, 0, SuccessorsSize};
       RecordMap[i] = newRecord;
     }
     for (int i = 0; i < ColorMapSize; i++) {
@@ -1008,7 +1006,7 @@ kmp_int32 __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid,
     // Store roots
     rootTasks = (kmp_int32 *)malloc(MapSize * sizeof(kmp_int32));
     for (int i = 0; i < MapSize; i++) {
-      if (RecordMap[i].td_ident != nullptr && RecordMap[i].npredecessors == 0) {
+      if (RecordMap[i].task != nullptr && RecordMap[i].npredecessors == 0) {
         rootTasks[numRoots] = i;
         numRoots++;
       }
@@ -1031,7 +1029,7 @@ kmp_int32 __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid,
 
   if (recording)
     for (int i = 0; i < MapSize; i++) {
-      if (RecordMap[i].td_ident != nullptr)
+      if (RecordMap[i].task != nullptr)
         RecordMap[i].npredecessors_counter = RecordMap[i].npredecessors;
     }
 
