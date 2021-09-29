@@ -118,6 +118,17 @@ def OMPC_ProcBind : Clause<"proc_bind"> {
     OMP_PROC_BIND_unknown
   ];
 }
+def OMP_TDG_TYPE_dynamic : ClauseVal<"dynamic",2,1> { let isDefault = true; }
+def OMP_TDG_TYPE_static : ClauseVal<"static",3,1> {}
+def OMPC_TdgType : Clause<"tdg_type"> {
+  let clangClass = "OMPTdgTypeClause";
+  let flangClass = "OmpTdgTypeClause";
+  let enumClauseValue = "TdgTypeKind";
+  let allowedClauseValues = [
+    OMP_TDG_TYPE_dynamic,
+    OMP_TDG_TYPE_static
+  ];
+}
 
 // static and auto are C++ keywords so need a capital to disambiguate.
 def OMP_SCHEDULE_Static : ClauseVal<"Static", 2, 1> {}
@@ -445,7 +456,9 @@ def OMP_TaskWait : Directive<"taskwait"> {
   ];
 }
 def OMP_TaskGraph : Directive<"taskgraph"> {
-  let allowedClauses = [];
+  let allowedClauses = [
+    VersionedClause<OMPC_TdgType>
+  ];
 }
 def OMP_TaskGroup : Directive<"taskgroup"> {
   let allowedClauses = [

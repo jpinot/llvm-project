@@ -47,7 +47,7 @@ class TaskDependencyGraphData {
 
 public:
   void traverse_node(SmallVectorImpl<uint64_t> &edges_to_check, int node,
-                     int nesting_level, std::vector<bool> &Visited);
+                     int master, int nesting_level, std::vector<bool> &Visited);
   void print_tdg();
   void print_tdg_to_dot(StringRef ModuleName);
   void generate_analysis_tdg_file(StringRef ModuleName);
@@ -61,7 +61,7 @@ public:
   bool invalidate(Module &, const PreservedAnalyses &,
                   ModuleAnalysisManager::Invalidator &) {
     return false;
-  }                    
+  }
 };
 
 class TaskDependencyGraphPass : public ModulePass {
@@ -100,7 +100,6 @@ class TaskDependencyGraphAnalysisPass
 public:
   /// Provide the result typedef for this analysis pass.
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
- 
 };
 
 } // namespace llvm

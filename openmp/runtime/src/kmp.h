@@ -2387,6 +2387,10 @@ typedef struct kmp_tasking_flags { /* Total struct must be exactly 32 bits */
 
 } kmp_tasking_flags_t;
 
+enum tdg_type {
+  DYNAMIC_TDG, 
+  STATIC_TDG
+};
 
 struct kmp_record_info {
   kmp_int32 static_id;
@@ -3846,11 +3850,11 @@ KMP_EXPORT void __kmpc_omp_task_complete_if0(ident_t *loc_ref, kmp_int32 gtid,
 KMP_EXPORT kmp_int32 __kmpc_omp_task_parts(ident_t *loc_ref, kmp_int32 gtid,
                                            kmp_task_t *new_task);
 KMP_EXPORT kmp_int32 __kmpc_omp_taskwait(ident_t *loc_ref, kmp_int32 gtid);
-KMP_EXPORT kmp_int32 __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid,
-                                      void (*entry)(void *), void *args,
-                                      kmp_uint32 condition);
+KMP_EXPORT void __kmpc_set_tdg(struct kmp_record_info *tdg, kmp_int32 ntasks, kmp_int32 *roots, kmp_int32 nroots);
+KMP_EXPORT void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid,
+                                 void (*entry)(void *), void *args,
+                                 kmp_int32 tdg_type);
 KMP_EXPORT void __kmpc_set_task_static_id(kmp_task_t *task, int staticID);
-
 KMP_EXPORT kmp_int32 __kmpc_omp_taskyield(ident_t *loc_ref, kmp_int32 gtid,
                                           int end_part);
 

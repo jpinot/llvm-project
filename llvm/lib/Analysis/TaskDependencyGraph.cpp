@@ -135,9 +135,9 @@ void TaskDependencyGraphData::obtainTaskInfo(TaskInfo &TaskFound,
                         dyn_cast<ConstantInt>(GEP->getOperand(i))) {
                   CurrentTaskDepInfo.index.push_back(CI->getZExtValue());
                 } else {
-                  dbgs() << "Not constant access, can not compute task "
-                            "dependencies, check that loops are correctly "
-                            "unrolled \n";
+                  assert("Not constant access, can not compute task "
+                         "dependencies, check that loops are correctly "
+                         "unrolled \n");
                 }
               }
             } else {
@@ -213,8 +213,8 @@ bool TaskDependencyGraphData::checkDependency(TaskDependInfo &Source,
 
 // Depth First Search to look for transitive edges
 void TaskDependencyGraphData::traverse_node(
-    SmallVectorImpl<uint64_t> &edges_to_check, int node, int nesting_level,
-    std::vector<bool> &Visited) {
+    SmallVectorImpl<uint64_t> &edges_to_check, int node, int master,
+    int nesting_level, std::vector<bool> &Visited) {
 
   Visited[node] = true;
 
@@ -225,11 +225,19 @@ void TaskDependencyGraphData::traverse_node(
       if (edge == successor) {
         // Remove edge
         edges_to_check.erase(edges_to_check.begin() + j);
+        for (int x = 0; x < (int)FunctionTasks[edge].predecessors.size(); x++) {
+          if ((int)FunctionTasks[edge].predecessors[x] == master) {
+            FunctionTasks[edge].predecessors.erase(
+                FunctionTasks[edge].predecessors.begin() + x);
+            break;
+          }
+        }
         break;
       }
     }
     if (Visited[successor] == false && nesting_level < MaxNesting)
-      traverse_node(edges_to_check, successor, nesting_level + 1, Visited);
+      traverse_node(edges_to_check, successor, master, nesting_level + 1,
+                    Visited);
   }
 }
 
@@ -245,7 +253,7 @@ void TaskDependencyGraphData::erase_transitive_edges() {
 
     for (int j = 0; j < (int)FunctionTasks[i].successors.size(); j++) {
       traverse_node(FunctionTasks[i].successors, FunctionTasks[i].successors[j],
-                    0, Visited);
+                    i, 0, Visited);
     }
   }
 }
@@ -418,36 +426,46 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName) {
     exit(1);
   }
   SmallVector<int, 10> OutputList;
+  SmallVector<int, 2> TdgRoots;
   for (int i = 0; i < (int)FunctionTasks.size(); i++) {
- 
+    if (FunctionTasks[i].predecessors.size() == 0)
+      TdgRoots.push_back(i);
+
     OutputList.insert(OutputList.end(), FunctionTasks[i].successors.begin(),
                       FunctionTasks[i].successors.end());
   }
 
   int offout = 0;
+  tdgfile << "#include <stddef.h>\n";
   tdgfile << "struct kmp_task_t;\nstruct kmp_record_info\n{\n";
-  tdgfile << "  int static_id;\n  struct kmp_task_t task;\n  int "
+  tdgfile << "  int static_id;\n  struct kmp_task_t *task;\n  int "
              "* succesors;\n  int nsuccessors;\n  "
              "int npredecessors_counter;\n  int npredecessors;\n  int "
              "successors_size;\n};\n";
-
-  tdgfile << "unsigned int kmp_tdg_outs_0[" << OutputList.size() << "] = {";
-  for (int i = 0; i < (int)OutputList.size(); i++) {
-    tdgfile << " " << OutputList[i];
-    if (i != (int)OutputList.size() - 1)
-      tdgfile << ",";
-    else
-      tdgfile << "};\n";
+  tdgfile << "extern void __kmpc_set_tdg(struct kmp_record_info *tdg, int "
+             "ntasks, int *roots, int nroots);\n";
+  tdgfile << "int kmp_tdg_outs_0[" << OutputList.size() << "] = {";
+  if (OutputList.size()) {
+    for (int i = 0; i < (int)OutputList.size(); i++) {
+      tdgfile << " " << OutputList[i];
+      if (i != (int)OutputList.size() - 1)
+        tdgfile << ",";
+      else
+        tdgfile << "};\n";
+    }
+  } else {
+    tdgfile << "};\n";
   }
-  tdgfile << "struct kmp_tdg kmp_tdg_0[" << FunctionTasks.size() << "] = {";
+  tdgfile << "struct kmp_record_info kmp_tdg_0[" << FunctionTasks.size()
+          << "] = {";
   for (int i = 0; i < (int)FunctionTasks.size(); i++) {
     tdgfile << "{ .static_id =" << FunctionTasks[i].id
-            << ", .task = 0, .succesors = &kmp_tdg_outs_0[" << offout << "]"
+            << ", .task = NULL, .succesors = &kmp_tdg_outs_0[" << offout << "]"
             << ", .nsuccessors =" << FunctionTasks[i].successors.size()
             << ", .npredecessors_counter ="
             << FunctionTasks[i].predecessors.size()
             << ", .npredecessors = " << FunctionTasks[i].predecessors.size()
-            << ", .succesors_size = 0"
+            << ", .successors_size = 0"
             << "}";
 
     offout += FunctionTasks[i].successors.size();
@@ -456,8 +474,17 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName) {
     else
       tdgfile << "};\n";
   }
-
-  tdgfile << "void kmp_set_tdg()\n{\n  __kmpc_set_tdg(&kmp_tdg kmp_tdg_0);\n};";
+  tdgfile << "int kmp_tdg_roots[" << TdgRoots.size() << "] = {";
+  for (int i = 0; i < (int)TdgRoots.size(); i++) {
+    tdgfile << " " << TdgRoots[i];
+    if (i != (int)TdgRoots.size() - 1)
+      tdgfile << ",";
+    else
+      tdgfile << "};\n";
+  }
+  tdgfile << "void kmp_set_tdg()\n{\n  __kmpc_set_tdg(kmp_tdg_0,"
+          << FunctionTasks.size() << ", kmp_tdg_roots, " << TdgRoots.size()
+          << ");\n};";
   tdgfile.close();
 }
 
@@ -535,7 +562,7 @@ void TaskDependencyGraphData::findOpenMPTasks(Function &F, DominatorTree &DT) {
   // Remove transisitve edges
   erase_transitive_edges();
 
-  print_tdg();
+  // print_tdg();
   if (FunctionTasks.size()) {
     print_tdg_to_dot(F.getParent()->getSourceFileName());
     generate_analysis_tdg_file(F.getParent()->getSourceFileName());
@@ -553,8 +580,8 @@ bool TaskDependencyGraphPass::runOnModule(Module &M) {
       continue;
     // Only check functions with tasks
     auto &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
-    // if (F.hasFnAttribute("llvm.omp.taskgraph"))
-    TDG.findOpenMPTasks(F, DT);
+    if (F.hasFnAttribute("llvm.omp.taskgraph.static"))
+      TDG.findOpenMPTasks(F, DT);
   }
   return false;
 }
@@ -596,8 +623,8 @@ TaskDependencyGraphAnalysis::run(Module &M, ModuleAnalysisManager &AM) {
       continue;
     auto &DT = FAM.getResult<DominatorTreeAnalysis>(F);
     // Only check functions with tasks
-    // if (F.hasFnAttribute("llvm.omp.taskgraph"))
-    TDG.findOpenMPTasks(F, DT);
+    if (F.hasFnAttribute("llvm.omp.taskgraph.static"))
+      TDG.findOpenMPTasks(F, DT);
   }
   return TDG;
 }

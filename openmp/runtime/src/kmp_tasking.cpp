@@ -747,7 +747,7 @@ static void __kmp_free_task(kmp_int32 gtid, kmp_taskdata_t *taskdata,
 // deallocate the taskdata and shared variable blocks associated with this task
 #if LIBOMP_TASKGRAPH
   kmp_task *task = KMP_TASKDATA_TO_TASK(taskdata);
-  if (task->part_id == 0) {
+  if (task->part_id == -1) {
 #endif // LIBOMP_TASKGRAPH
     // only free tasks created outside taskgraph
 #if USE_FAST_MEMORY
@@ -1433,6 +1433,11 @@ kmp_task_t *__kmp_task_alloc(ident_t *loc_ref, kmp_int32 gtid,
   // Initialize counter to 1 event, the task finish event
   taskdata->td_allow_completion_event.pending_events_count = 1;
   taskdata->td_allow_completion_event.ed.task = task;
+#if LIBOMP_TASKGRAPH
+  //When filling data, we only need to create empty tasks
+  if(fill_data)
+    return task;
+#endif
 
 #if OMPT_SUPPORT
   if (UNLIKELY(ompt_enabled.enabled))
@@ -1467,12 +1472,16 @@ kmp_task_t *__kmp_task_alloc(ident_t *loc_ref, kmp_int32 gtid,
 }
 
 #if LIBOMP_TASKGRAPH
+//Mark tasks created outside a taskgraph with part_id -1, to differenciate them, this is used to decide if task should be freed and also when task ends and we look por successors.
 void __kmpc_set_task_static_id(kmp_task_t *task, kmp_int32 staticID) {
-  if (recording) {
-    id_counter++;
-    kmp_taskdata_t *taskdata = KMP_TASK_TO_TASKDATA(task);
+  kmp_taskdata_t *taskdata = KMP_TASK_TO_TASKDATA(task);
+  if (recording || fill_data) {
     task->part_id = id_counter;
     taskdata->td_task_id = staticID;
+    id_counter++;
+  }
+  else{
+    task->part_id = -1;
   }
 }
 #endif
@@ -1818,8 +1827,8 @@ kmp_int32 __kmp_omp_task(kmp_int32 gtid, kmp_task_t *new_task,
     }
   }
   if (fill_data){
-    TaskIdentMap[new_task->part_id].td_ident = new_taskdata->td_ident->psource;
     RecordMap[new_task->part_id].task = new_task;
+    return TASK_CURRENT_NOT_QUEUED;
   }
 #endif
   /* Should we execute the new task or queue it? For now, let's just always try

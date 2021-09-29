@@ -690,8 +690,8 @@ static bool hasUnrollFullPragma(const Loop *L) {
 }
 
 // Returns true if the function contains OpenMP tasks.
-static bool hasOpenMPTasks(Function *F) {
-  return F->hasFnAttribute("llvm.openmp.taskgraph");
+static bool hasStaticOpenMPTaskgraph(Function *F) {
+  return F->hasFnAttribute("llvm.omp.taskgraph.static");
 }
 // Returns true if the loop has an unroll(enable) pragma. This metadata is used
 // for both "#pragma unroll" and "#pragma clang loop unroll(enable)" directives.
@@ -782,7 +782,7 @@ bool llvm::computeUnrollCount(
         getUnrolledLoopSize(LoopSize, UP) < PragmaUnrollThreshold)
       return true;
   }
-  bool LoopHasOpenMPTasks=  hasOpenMPTasks(L->getHeader()->getParent());
+  bool LoopHasOpenMPTasks=  hasStaticOpenMPTaskgraph(L->getHeader()->getParent());
   bool PragmaFullUnroll = hasUnrollFullPragma(L) || LoopHasOpenMPTasks;
   if (PragmaFullUnroll && TripCount != 0) {
     UP.Count = TripCount;

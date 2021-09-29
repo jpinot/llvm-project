@@ -23,6 +23,7 @@
 extern kmp_futex_lock_t taskgraph_lock;
 extern kmp_record_info *RecordMap; 
 extern int recording;
+extern int fill_data;
 #endif
 
 static inline void __kmp_node_deref(kmp_info_t *thread, kmp_depnode_t *node) {
@@ -95,7 +96,7 @@ static inline void __kmp_release_deps(kmp_int32 gtid, kmp_taskdata_t *task) {
 
 #if LIBOMP_TASKGRAPH
   kmp_task_t *this_task = KMP_TASKDATA_TO_TASK(task);
-  if (!recording && this_task->part_id) {
+  if (!recording && !fill_data && this_task->part_id!=-1) {
     // TODO: Not needed when taskifying
     __kmp_acquire_futex_lock(&taskgraph_lock, 0);
     // printf("[OpenMP] ---- Task %d ends, checking successors ----\n",

@@ -14,6 +14,7 @@
 
 #include "kmp.h"
 #include "kmp_io.h"
+#include "kmp_i18n.h"
 #include "kmp_wait_release.h"
 #include "kmp_taskdeps.h"
 #if OMPT_SUPPORT
@@ -607,18 +608,14 @@ kmp_int32 __kmpc_omp_task_with_deps(ident_t *loc_ref, kmp_int32 gtid,
         RecordMap[i] = newRecord;
       }
     }
-
     TaskIdentMap[new_task->part_id].td_ident = new_taskdata->td_ident->psource;
     RecordMap[new_task->part_id].static_id = new_taskdata->td_task_id;
     RecordMap[new_task->part_id].task = new_task;
   }
 
   if (fill_data) {
-
     kmp_record_info *TaskInfo = &(RecordMap[new_task->part_id]);
-    TaskIdentMap[new_task->part_id].td_ident = new_taskdata->td_ident->psource;
-    TaskInfo->task = new_task;
-    
+    TaskInfo->task = new_task; 
     return TASK_CURRENT_NOT_QUEUED;
   }
 #endif
@@ -947,40 +944,30 @@ void __kmpc_execute_tdg(ident_t *loc_ref, kmp_int32 gtid) {
 }
 
 void __kmpc_fill_data(ident_t *loc_ref, kmp_int32 gtid, void (*entry)(void *),
-                      void *args, kmp_uint32 condition) {
+                      void *args) {
   fill_data = true;
-  ColorMap = (ident_color *)malloc(ColorMapSize * sizeof(ident_color));
-  TaskIdentMap = (ident_task *)malloc(MapSize * sizeof(ident_task));
-  for (int i = 0; i < ColorMapSize; i++) {
-    ColorMap[i] = {nullptr, nullptr};
-  }
-
-  // Store roots
-  rootTasks = (kmp_int32 *)malloc(MapSize * sizeof(kmp_int32));
-  for (int i = 0; i < MapSize; i++) {
-    if (RecordMap[i].task != nullptr && RecordMap[i].npredecessors == 0) {
-      rootTasks[numRoots] = i;
-      numRoots++;
-    }
-  }
 
   entry(args);
+  __kmpc_omp_taskwait(loc_ref, gtid);
 
   fill_data = false;
 }
 
-void __kmpc_set_tdg(ident_t *loc_ref, kmp_record_info **tdg){
-  //TODO: puede que exista ya
-  dynamic_tdgs[ntdgs] = {loc_ref->psource, *tdg};
+void __kmpc_set_tdg( struct kmp_record_info *tdg, kmp_int32 ntasks, kmp_int32 *roots, kmp_int32 nroots){
+
+  if(ntdgs) return;
+  printf("TDG set! \n");
+  dynamic_tdgs[ntdgs] = {"static", tdg};
+  RecordMap = tdg;
+  MapSize = ntasks;
+  rootTasks = roots;
+  numRoots= nroots;
   ntdgs++;
 }
 
 kmp_int32 __kmpc_record(ident_t *loc_ref, kmp_int32 gtid,
-                           void (*entry)(void *), void *args,
-                           kmp_uint32 condition) {
+                           void (*entry)(void *), void *args) {
   recording = true;
-  id_counter = 0;
-  __kmp_init_futex_lock(&taskgraph_lock);
 
   RecordMap = (kmp_record_info *)malloc(MapSize * sizeof(kmp_record_info));
   ColorMap = (ident_color *)malloc(ColorMapSize * sizeof(ident_color));
@@ -1031,19 +1018,32 @@ kmp_int32 __kmpc_record(ident_t *loc_ref, kmp_int32 gtid,
   return 1;
 }
 
-kmp_int32 __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid,
-                           void (*entry)(void *), void *args,
-                           kmp_uint32 condition) {
+void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid,
+                           void (*entry)(void *), void *args, kmp_int32 tdg_type) {
+
+  __kmp_init_futex_lock(&taskgraph_lock);
+  id_counter = 0;
+
   for (int i = 0; i < ntdgs; i++) {
     if (dynamic_tdgs[i].loc == loc_ref->psource) {
       printf("Executing!  \n");
       __kmpc_execute_tdg(loc_ref, gtid);
-      return 1;
+      return;
     }
   }
-  printf("Recording! \n");
-  __kmpc_record(loc_ref, gtid, entry, args, condition);
-  return 1;
+  if(tdg_type==DYNAMIC_TDG){
+    printf("Recording! \n");
+  __kmpc_record(loc_ref, gtid, entry, args);
+  }
+  else if(tdg_type==STATIC_TDG){
+    printf("Fill data and executing! \n");
+    dynamic_tdgs[0].loc= loc_ref->psource;
+  __kmpc_fill_data(loc_ref, gtid, entry, args);
+  __kmpc_execute_tdg(loc_ref, gtid);
+  }
+  else{
+    printf("internal error: tdg_type not recognized\n");
+  }
 }
 
 #endif

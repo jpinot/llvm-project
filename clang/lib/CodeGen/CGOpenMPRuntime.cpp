@@ -6243,8 +6243,8 @@ void CGOpenMPRuntime::emitTaskwaitCall(CodeGenFunction &CGF,
 }
 
 void markFunctionsInsideTaskgraph(llvm::Function &F) {
-  if (!F.hasFnAttribute("llvm.openmp.taskgraph"))
-    F.addFnAttr("llvm.openmp.taskgraph");
+  if (!F.hasFnAttribute("llvm.omp.taskgraph.static"))
+    F.addFnAttr("llvm.omp.taskgraph.static");
 
   for (llvm::BasicBlock &bb : F) {
     for (llvm::Instruction &I : bb) {
@@ -6261,39 +6261,53 @@ void CGOpenMPRuntime::emitTaskgraphCall(CodeGenFunction &CGF,
   if (!CGF.HaveInsertPoint())
     return;
 
+  uint32_t tdg_type = 0;
+  
   for (const auto *C : D.getClausesOfKind<OMPTdgTypeClause>()){
       if( C->getTdgTypeKind() == OMPC_TDG_TYPE_static){
+        tdg_type = 1;
       }
   }
+  
   llvm::Value *IfVal = nullptr;
 
+  /*
   for (const auto *C : D.getClausesOfKind<OMPIfClause>()) {
     const Expr *Cond = C->getCondition();
     llvm::Value *CondVal = nullptr;
     CondVal = CGF.EvaluateExprAsBool(Cond);
     if (CondVal) {
       IfVal = CGF.Builder.CreateIntCast(CondVal, CGF.IntTy,
-                                        /*isSigned=*/true);
-    }
-  }
+                                        /*isSigned=*///true);
+  //  }
+  //}
+  
 
   const CapturedStmt *CS = cast<CapturedStmt>(D.getAssociatedStmt());
 
   auto OutlineInfo = CGF.EmitCapturedStmtNoCall(*CS, CR_Default);
+
+  /*
   llvm::Value *Condition = nullptr;
   if (IfVal != nullptr)
     Condition = IfVal;
   else
     Condition = CGF.Builder.getInt32(0);
+  */
 
-  markFunctionsInsideTaskgraph(*OutlineInfo.first);
+  //Static TDG
+  if(tdg_type){
+    markFunctionsInsideTaskgraph(*OutlineInfo.first);
+    auto *FT = llvm::FunctionType::get(CGF.VoidTy, false);
+    CGF.Builder.CreateCall(CGM.CreateRuntimeFunction(FT, "kmp_set_tdg"));
+  }
 
   llvm::Value *Args[] = {emitUpdateLocation(CGF, Loc), getThreadID(CGF, Loc),
                          CGF.Builder.CreatePointerBitCastOrAddrSpaceCast(
                              OutlineInfo.first, CGF.Int8PtrTy),
                          CGF.Builder.CreatePointerBitCastOrAddrSpaceCast(
                              OutlineInfo.second, CGF.Int8PtrTy),
-                         Condition};
+                         CGF.Builder.getInt32(tdg_type)};
   CGF.EmitRuntimeCall(OMPBuilder.getOrCreateRuntimeFunction(
                           CGM.getModule(), OMPRTL___kmpc_taskgraph),
                       Args);
