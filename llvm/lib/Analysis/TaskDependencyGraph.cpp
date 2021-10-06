@@ -356,11 +356,12 @@ void TaskDependencyGraphData::print_tdg_to_dot(StringRef ModuleName) {
 }
 
 void TaskDependencyGraphData::generate_analysis_tdg_file(StringRef ModuleName) {
+  /*
   std::string fileName = ModuleName.str();
   size_t lastindex = fileName.find_last_of(".");
   std::string rawFileName = fileName.substr(0, lastindex);
-
-  std::ofstream tdgfile(rawFileName + "_analysis_tdg.c");
+  */
+  std::ofstream tdgfile("analysis_tdg.c");
   SmallVector<int, 10> InputList;
   SmallVector<int, 10> OutputList;
   for (int i = 0; i < (int)FunctionTasks.size(); i++) {
@@ -415,11 +416,13 @@ void TaskDependencyGraphData::generate_analysis_tdg_file(StringRef ModuleName) {
 }
 
 void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName) {
+  /*
   std::string fileName = ModuleName.str();
   size_t lastindex = fileName.find_last_of(".");
   std::string rawFileName = fileName.substr(0, lastindex);
+  */
 
-  std::ofstream tdgfile(rawFileName + "_tdg.c");
+  std::ofstream tdgfile("tdg.c");
 
   if (!tdgfile.is_open()) {
     dbgs() << "Error Opening TDG file \n";

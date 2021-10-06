@@ -10569,6 +10569,10 @@ def err_omp_allocator_not_in_uses_allocators : Error<
   "allocator must be specified in the 'uses_allocators' clause">;
 def err_omp_taskgraph_not_allowed : Error<
   "taskgraph directive must be enabled using -fopenmp-taskgraph">;
+def err_omp_taskgraph_static_required : Error<
+  "taskgraph directive for static tdgs must be enabled using -static-tdg">;
+def err_omp_taskgraph_static_not_allowed : Error<
+  "can not generate static tdgs for dynamic taskgraph directive, disable -static-tdg flag">;
 def note_omp_protected_structured_block
     : Note<"jump bypasses OpenMP structured block">;
 def note_omp_exits_structured_block

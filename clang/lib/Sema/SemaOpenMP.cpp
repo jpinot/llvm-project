@@ -9695,6 +9695,18 @@ StmtResult Sema::ActOnOpenMPTaskgraphDirective(SourceLocation StartLoc,
     return StmtError();
   }
 
+  for (const auto *C : Clauses) {
+    if (auto Tdg_Clause = dyn_cast<OMPTdgTypeClause>(C)) {
+      if (Tdg_Clause->getTdgTypeKind() == OMPC_TDG_TYPE_static) {
+        if (!getLangOpts().OpenMPStaticTaskGraph)
+          Diag(StartLoc, diag::err_omp_taskgraph_static_required);
+      } else if (Tdg_Clause->getTdgTypeKind() == OMPC_TDG_TYPE_dynamic) {
+        if (getLangOpts().OpenMPStaticTaskGraph)
+          Diag(StartLoc, diag::err_omp_taskgraph_static_not_allowed);
+      }
+    }
+  }
+
   return OMPTaskgraphDirective::Create(Context, StartLoc, EndLoc, AStmt,
                                        Clauses);
 }

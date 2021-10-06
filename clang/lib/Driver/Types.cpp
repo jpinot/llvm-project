@@ -354,7 +354,7 @@ types::getCompilationPhases(const clang::driver::Driver &Driver,
            DAL.getLastArg(options::OPT_emit_llvm))
     LastPhase = phases::Backend;
 
-  else if (DAL.getLastArg(options::OPT_c))
+  else if (DAL.getLastArg(options::OPT_c) || DAL.getLastArg(options::OPT_static_tdg))
     LastPhase = phases::Assemble;
 
   // Generally means, do every phase until Link.

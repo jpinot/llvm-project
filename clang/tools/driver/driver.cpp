@@ -345,6 +345,12 @@ static int ExecuteCC1Tool(SmallVectorImpl<const char *> &ArgV) {
   return 1;
 }
 
+bool has_suffix(const std::string &str, const std::string &suffix)
+{
+    std::size_t index = str.find(suffix, str.size() - suffix.size());
+    return (index != std::string::npos);
+}
+
 int main(int Argc, const char **Argv) {
   noteBottomOfStack();
   llvm::InitLLVM X(Argc, Argv);
@@ -548,6 +554,38 @@ int main(int Argc, const char **Argv) {
         TheDriver.generateCompilationDiagnostics(*C, *FailingCommand);
         break;
       }
+    }
+
+    // FIXME: Initial workaround, look for a more elegant solution
+    if (C->getArgs().hasArg(driver::options::OPT_static_tdg)) {
+      //Replace input files by objects files
+      SmallVector <char *, 4> FileNames;
+      auto it = Args.begin();
+      while(it != Args.end()) {
+        if(has_suffix(std::string(*it), ".c") || has_suffix(std::string(*it), ".cpp")){
+          size_t lastindex = std::string(*it).find_last_of(".");
+          std::string rawFileName = std::string(*it).substr(0, lastindex) + ".o";
+          FileNames.push_back(strcpy(new char[rawFileName.length() + 1], rawFileName.c_str()));
+          Args.erase(it);
+        }
+        ++it;
+      }
+
+      for(int i=0; i < (int) FileNames.size(); i++){
+        Args.push_back(FileNames[i]);
+      }
+      //Remove -static-tdg flag
+      for(int i=1; i < (int) Args.size(); i++){
+        if(!strcmp(Args[i], "-static-tdg")){
+          Args.erase(Args.begin()+i);
+          break;
+        }
+      }
+      Args.push_back("tdg.c");
+
+      std::unique_ptr<Compilation> C_tdg(TheDriver.BuildCompilation(Args));
+      SmallVector<std::pair<int, const Command *>, 4> FailingCommands;
+      TheDriver.ExecuteCompilation(*C_tdg, FailingCommands);
     }
   }
 

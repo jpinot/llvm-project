@@ -2265,6 +2265,9 @@ def fno_openmp_cuda_parallel_target_regions : Flag<["-"], "fno-openmp-cuda-paral
 def fopenmp_taskgraph : Flag<["-"], "fopenmp-taskgraph">, Group<f_Group>,
   Flags<[CC1Option, NoArgumentUnused, HelpHidden]>,
   HelpText<"Enable support for #pragma omp taskgraph.">;
+def static_tdg : Flag<["-"], "static-tdg">, Group<f_Group>,
+  Flags<[CC1Option, NoArgumentUnused, HelpHidden]>,
+  HelpText<"Enable support for static taskgraphs.">;
 def static_openmp: Flag<["-"], "static-openmp">,
   HelpText<"Use the static host OpenMP runtime while linking.">;
 def fno_optimize_sibling_calls : Flag<["-"], "fno-optimize-sibling-calls">, Group<f_Group>;
