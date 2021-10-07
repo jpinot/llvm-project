@@ -505,7 +505,23 @@ int main(int Argc, const char **Argv) {
     llvm::CrashRecoveryContext::Enable();
   }
 
-  std::unique_ptr<Compilation> C(TheDriver.BuildCompilation(Args));
+  bool isStaticTdg = false;
+  for (int i = 1; i < (int)Args.size(); i++) {
+    if (!strcmp(Args[i], "-static-tdg")) {
+      isStaticTdg = true;
+      break;
+    }
+  }
+  SmallVector<const char *, 256>  ArgsCopy = Args;
+  if (isStaticTdg) {
+    for (int i = 1; i < (int)ArgsCopy.size(); i++) {
+      if (!strcmp(Args[i], "-o")) {
+        ArgsCopy.erase(ArgsCopy.begin()+i, ArgsCopy.begin() + i + 2);
+        break;
+      }
+    }
+  }
+  std::unique_ptr<Compilation> C(TheDriver.BuildCompilation(ArgsCopy));
   int Res = 1;
   bool IsCrash = false;
   if (C && !C->containsError()) {
@@ -557,18 +573,20 @@ int main(int Argc, const char **Argv) {
     }
 
     // FIXME: Initial workaround, look for a more elegant solution
-    if (C->getArgs().hasArg(driver::options::OPT_static_tdg)) {
+    if (C->getArgs().hasArg(driver::options::OPT_static_tdg) && !IsCrash) {
       //Replace input files by objects files
       SmallVector <char *, 4> FileNames;
-      auto it = Args.begin();
+      auto it = Args.begin()+1;
       while(it != Args.end()) {
         if(has_suffix(std::string(*it), ".c") || has_suffix(std::string(*it), ".cpp")){
           size_t lastindex = std::string(*it).find_last_of(".");
           std::string rawFileName = std::string(*it).substr(0, lastindex) + ".o";
           FileNames.push_back(strcpy(new char[rawFileName.length() + 1], rawFileName.c_str()));
-          Args.erase(it);
+          it = Args.erase(it);
         }
+        else{
         ++it;
+        }
       }
 
       for(int i=0; i < (int) FileNames.size(); i++){
