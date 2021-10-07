@@ -135,7 +135,7 @@ void TaskDependencyGraphData::obtainTaskInfo(TaskInfo &TaskFound,
                         dyn_cast<ConstantInt>(GEP->getOperand(i))) {
                   CurrentTaskDepInfo.index.push_back(CI->getZExtValue());
                 } else {
-                  assert("Not constant access, can not compute task "
+                  llvm_unreachable("Not constant access, can not compute task "
                          "dependencies, check that loops are correctly "
                          "unrolled \n");
                 }
@@ -181,7 +181,7 @@ void TaskDependencyGraphData::obtainTaskInfo(TaskInfo &TaskFound,
                   dyn_cast<ConstantInt>(TypeStore->getValueOperand())) {
             CurrentTaskDepInfo.type = CI->getZExtValue();
           } else {
-            dbgs() << "Type is not constant, something is wrong\n";
+            llvm_unreachable("Type is not constant, something is wrong\n");
           }
         }
       }
