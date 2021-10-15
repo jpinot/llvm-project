@@ -4336,7 +4336,7 @@ CGOpenMPRuntime::emitTaskInit(CodeGenFunction &CGF, SourceLocation Loc,
       CGF.EmitRuntimeCall(
           OMPBuilder.getOrCreateRuntimeFunction(
               CGM.getModule(), OMPRTL___kmpc_set_task_static_id),
-          {NewTask, TaskIDAdded});
+          {NewTask, TaskIDValue});
     }
   }
   

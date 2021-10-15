@@ -377,14 +377,14 @@ void TaskDependencyGraphData::generate_analysis_tdg_file(StringRef ModuleName) {
     dbgs() << "Error Opening TDG file \n";
     exit(1);
   }
-  tdgfile << "struct kmp_task_t;\nstruct kmp_tdg\n{\n";
-  tdgfile << "  unsigned int id;\n  struct kmp_task_t task;\n  unsigned int "
+  tdgfile << "struct tdg\n{\n";
+  tdgfile << "  unsigned int id;\n  unsigned int "
              "offin;\n  unsigned int offout;\n  "
              "unsigned int nin;\n  unsigned int nout;\n};\n";
-  tdgfile << "struct kmp_tdg kmp_tdg_0[" << FunctionTasks.size() << "] = {";
+  tdgfile << "struct tdg tdg_tasks[" << FunctionTasks.size() << "] = {";
   for (int i = 0; i < (int)FunctionTasks.size(); i++) {
     tdgfile << "{ .id =" << FunctionTasks[i].id
-            << ", .task = 0, .offin =" << offin << ", .offout =" << offout
+            << ", .offin =" << offin << ", .offout =" << offout
             << ", .nin =" << FunctionTasks[i].predecessors.size()
             << ", nout =" << FunctionTasks[i].successors.size() << "}";
 
@@ -395,7 +395,7 @@ void TaskDependencyGraphData::generate_analysis_tdg_file(StringRef ModuleName) {
     else
       tdgfile << "};\n";
   }
-  tdgfile << "unsigned int kmp_tdg_ins_0[" << InputList.size() << "] = {";
+  tdgfile << "unsigned int tdg_ins[" << InputList.size() << "] = {";
   for (int i = 0; i < (int)InputList.size(); i++) {
     tdgfile << " " << InputList[i];
     if (i != (int)InputList.size() - 1)
@@ -403,7 +403,7 @@ void TaskDependencyGraphData::generate_analysis_tdg_file(StringRef ModuleName) {
     else
       tdgfile << "};\n";
   }
-  tdgfile << "unsigned int kmp_tdg_outs_0[" << OutputList.size() << "] = {";
+  tdgfile << "unsigned int tdg_outs[" << OutputList.size() << "] = {";
   for (int i = 0; i < (int)OutputList.size(); i++) {
     tdgfile << " " << OutputList[i];
     if (i != (int)OutputList.size() - 1)
@@ -411,7 +411,7 @@ void TaskDependencyGraphData::generate_analysis_tdg_file(StringRef ModuleName) {
     else
       tdgfile << "};\n";
   }
-  tdgfile << "unsigned int gomp_tdg_ntasks = " << FunctionTasks.size() << ";\n";
+  tdgfile << "unsigned int tdg_ntasks = " << FunctionTasks.size() << ";\n";
   tdgfile.close();
 }
 
