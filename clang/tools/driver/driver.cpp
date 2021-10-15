@@ -599,6 +599,21 @@ int main(int Argc, const char **Argv) {
           break;
         }
       }
+      bool isC = false;
+      for (int i = 1; i < (int)Args.size(); i++) {
+        if (!strcmp(Args[i], "-c")) {
+          isC = true;
+          break;
+        }
+      }
+      if (isC) {
+        for (int i = 1; i < (int)Args.size(); i++) {
+          if (!strcmp(Args[i], "-o")) {
+            Args.erase(Args.begin() + i, Args.begin() + i + 2);
+            break;
+          }
+        }
+      }
       Args.push_back("tdg.c");
 
       std::unique_ptr<Compilation> C_tdg(TheDriver.BuildCompilation(Args));
