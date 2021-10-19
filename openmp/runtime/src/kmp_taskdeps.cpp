@@ -956,7 +956,7 @@ void __kmpc_fill_data(ident_t *loc_ref, kmp_int32 gtid, void (*entry)(void *),
 void __kmpc_set_tdg( struct kmp_record_info *tdg, kmp_int32 ntasks, kmp_int32 *roots, kmp_int32 nroots){
 
   if(ntdgs) return;
-  printf("TDG set! \n");
+  //printf("TDG set! \n");
   dynamic_tdgs[ntdgs] = {"static", tdg};
   RecordMap = tdg;
   MapSize = ntasks;
@@ -1026,23 +1026,23 @@ void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid,
 
   for (int i = 0; i < ntdgs; i++) {
     if (dynamic_tdgs[i].loc == loc_ref->psource) {
-      printf("Executing!  \n");
+      //printf("Executing!  \n");
       __kmpc_execute_tdg(loc_ref, gtid);
       return;
     }
   }
   if(tdg_type==DYNAMIC_TDG){
-    printf("Recording! \n");
+    //printf("Recording! \n");
   __kmpc_record(loc_ref, gtid, entry, args);
   }
   else if(tdg_type==STATIC_TDG){
-    printf("Fill data and executing! \n");
+    //printf("Fill data and executing! \n");
     dynamic_tdgs[0].loc= loc_ref->psource;
   __kmpc_fill_data(loc_ref, gtid, entry, args);
   __kmpc_execute_tdg(loc_ref, gtid);
   }
   else{
-    printf("internal error: tdg_type not recognized\n");
+    printf("internal OpenMP error: tdg_type not recognized\n");
   }
 }
 

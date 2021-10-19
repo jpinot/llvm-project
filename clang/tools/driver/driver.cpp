@@ -505,6 +505,7 @@ int main(int Argc, const char **Argv) {
     llvm::CrashRecoveryContext::Enable();
   }
 
+  // FIXME: Initial workaround, look for a more elegant solution
   bool isStaticTdg = false;
   for (int i = 1; i < (int)Args.size(); i++) {
     if (!strcmp(Args[i], "-static-tdg")) {
@@ -512,6 +513,7 @@ int main(int Argc, const char **Argv) {
       break;
     }
   }
+  //Remove -o flag when using static tdgs
   SmallVector<const char *, 256>  ArgsCopy = Args;
   if (isStaticTdg) {
     for (int i = 1; i < (int)ArgsCopy.size(); i++) {
@@ -599,6 +601,7 @@ int main(int Argc, const char **Argv) {
           break;
         }
       }
+      //Check if -c flag is given
       bool isC = false;
       for (int i = 1; i < (int)Args.size(); i++) {
         if (!strcmp(Args[i], "-c")) {
@@ -606,6 +609,7 @@ int main(int Argc, const char **Argv) {
           break;
         }
       }
+      //Remove -o flag when -c is given
       if (isC) {
         for (int i = 1; i < (int)Args.size(); i++) {
           if (!strcmp(Args[i], "-o")) {
