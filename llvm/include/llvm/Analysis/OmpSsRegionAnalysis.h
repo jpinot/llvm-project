@@ -11,12 +11,72 @@
 
 #include "llvm/IR/PassManager.h"
 #include "llvm/Pass.h"
+#include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/IntrinsicInst.h"
+#include "llvm/Analysis/MemoryLocation.h"
+
 
 namespace llvm {
+
+namespace autoscope {
+enum SyncType {
+  FUNCTION_START,
+  FUNCTION_END,
+  TASKWAIT,
+  TASK_SYNC,
+};
+enum VarUse { NOT_USED, WRITTEN, READED, UNKNOWN };
+enum VarDependency { DEP_NONE, DEP_IN, DEP_OUT, DEP_INOUT };
+enum DSAValue {
+  PRIVATE,
+  FIRSTPRIVATE,
+  SHARED,
+  SHARED_OR_FIRSTPRIVATE,
+  UNDEF,
+  RACEFIRSTPRIVATE,
+  RACEPRIVATE,
+  UNINITIALIZED
+};
+enum DependValue {
+  IN,
+  OUT,
+  INOUT,
+};
+enum AliveValue { AFTER_SYNC, BEFORE_ENTRY, AFTER_EXIT, NONE };
+struct SyncInfo {
+  Instruction *Sync;
+  SyncType Type;
+  int NestingLevel;
+};
+
+struct ConcurrentBlock {
+  Instruction *Entry;
+  Instruction *Exit;
+};
+
+struct ValueAccess {
+  Instruction *I;
+  MemoryLocation MemLoc;
+  VarUse Use;
+  bool IsAliveAfterNextSync;
+  bool IsAliveBeforeEntry;
+  bool IsAliveAfterExit;
+  VarUse FirstTaskUse;
+  bool ConcurrentUseInTask;
+  Optional<bool> HasToEscape; // For autorelease
+};
+
+struct MemoryAccessDescription {
+  VarUse UsedInTask;
+  VarUse UsedInConcurrent;
+  VarUse FirstTaskUse;
+  bool IsAliveAfterNextSync;
+  bool ConcurrentUseInTask;
+};
+} // namespace autoscope
 
 // Data-sharing lists.
 struct DirectiveDSAInfo {
@@ -304,6 +364,13 @@ struct DirectiveInfo {
   SmallVector<DirectiveInfo *, 4> InnerDirectiveInfos;
   // The environment of the directive. (clauses).
   DirectiveEnvironment DirEnv;
+
+  // Information of the sync points and concurrent regions
+  SmallVector<autoscope::SyncInfo *, 4> PreSyncs;
+  SmallVector<autoscope::SyncInfo *, 4> PostSyncs;
+  SmallVector<autoscope::ConcurrentBlock, 4> ConcurrentBlocks;
+  int NestingLevel;
+
   DirectiveInfo(Instruction *Entry)
     : Entry(Entry), DirEnv(Entry)
     {}
@@ -351,7 +418,7 @@ public:
   // Walk over each task in RPO identifying uses before entry
   // and after exit. Uses before task entry are then matched with DSA info
   // or Captured info from OperandBundles
-  OmpSsRegionAnalysis(Function &F, DominatorTree &DT);
+  OmpSsRegionAnalysis(Function &F, DominatorTree &DT, AAResults &BAA);
   // Default ctor to clean all stuff and be ready for the next analysis.
   OmpSsRegionAnalysis() = default;
 

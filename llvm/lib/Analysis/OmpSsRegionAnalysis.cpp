@@ -8,12 +8,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Analysis/OmpSsRegionAnalysis.h"
-
-#include "llvm/ADT/DepthFirstIterator.h"
+#include "llvm/IR/DerivedTypes.h"
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/CFG.h"
+#include "llvm/Analysis/CFG.h"
 #include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Intrinsics.h"
@@ -24,6 +24,23 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 using namespace llvm;
+using namespace autoscope;
+
+
+void analyzeFirstTaskUse(BasicBlock *BB, Value *Var, Instruction *Exit,
+                         Instruction *Entry,
+                         SmallPtrSetImpl<BasicBlock *> *Already,
+                         SmallPtrSetImpl<Function *> *AnalyzedFunctions,
+                         ValueAccess &AccessToCheck, AAResults &BAA, AliveValue TypeOfAlive, bool ContinueSubblocks);
+
+// Auxiliar arrays for printing enums
+std::string SyncTypeToString[]{"FUNCTION_START", "FUNCTION_END", "TASKWAIT",
+                               "TASK"};
+std::string VarUseToString[]{"NOT_USED", "WRITTEN", "READED", "UNKNOWN"};
+std::string VarDependencyToString[]{"NONE", "IN", "OUT", "INOUT"};
+std::string DSAToString[]{
+    "PRIVATE", "FIRSTPRIVATE",     "SHARED",     "SHARED_OR_FIRSTPRIVATE",
+    "UNDEF",   "RACEFIRSTPRIVATE", "RACEPRIVATE"};
 
 static cl::opt<bool>
 DisableChecks("disable-checks",
@@ -39,7 +56,9 @@ enum PrintVerbosity {
   PV_DsaVLADimsMissing,
   PV_VLADimsCaptureMissing,
   PV_NonPODDSAMissing,
-  PV_ReductionInitsCombiners
+  PV_ReductionInitsCombiners,
+  PV_AutoScoping,
+  PV_AutoDependencies
 };
 
 static cl::opt<PrintVerbosity>
@@ -53,7 +72,9 @@ PrintVerboseLevel("print-verbosity",
   clEnumValN(PV_DsaVLADimsMissing, "dsa_vla_dims_missing", "Print directive layout with DSAs without VLA info or VLA info without DSAs"),
   clEnumValN(PV_VLADimsCaptureMissing, "vla_dims_capture_missing", "Print directive layout with VLA dimensions without capture"),
   clEnumValN(PV_NonPODDSAMissing, "non_pod_dsa_missing", "Print directive layout with non-pod info without according DSA"),
-  clEnumValN(PV_ReductionInitsCombiners, "reduction_inits_combiners", "Print directive layout with reduction init and combiner functions"))
+  clEnumValN(PV_ReductionInitsCombiners, "reduction_inits_combiners", "Print directive layout with reduction init and combiner functions"),
+  clEnumValN(PV_AutoScoping, "autoscope", "Print autoscoping results"),
+  clEnumValN(PV_AutoDependencies, "autodependencies", "Print autodependencies results"))
   );
 
 
@@ -816,18 +837,907 @@ void OmpSsRegionAnalysis::convertDirectivesTreeToVectorImpl(
   }
 }
 
+
+void printTaskConcurrentBlocks(DirectiveInfo &Task) {
+  if (PrintVerboseLevel == PV_AutoScoping ||
+      PrintVerboseLevel == PV_AutoDependencies){
+    dbgs() << "\n -------- TASK Line: " << Task.Entry->getDebugLoc().getLine()
+           << " ----------- \n \n";
+      }
+  else
+    LLVM_DEBUG(dbgs() << "\n -------- TASK Line: "
+                      << Task.Entry->getDebugLoc().getLine()
+                      << " ----------- \n \n");
+
+  for (auto I = Task.PreSyncs.begin(), IE = Task.PreSyncs.end(); I != IE; ++I) {
+    SyncInfo *sync = *I;
+    LLVM_DEBUG(dbgs() << "Pre sync found: " << SyncTypeToString[sync->Type]
+                      << " " << *(sync->Sync) << " \n");
+  }
+  for (auto I = Task.PostSyncs.begin(), IE = Task.PostSyncs.end(); I != IE;
+       ++I) {
+    SyncInfo *sync = *I;
+    LLVM_DEBUG(dbgs() << "Post sync found: " << SyncTypeToString[sync->Type]
+                      << " " << *(sync->Sync) << " \n");
+  }
+
+  LLVM_DEBUG(dbgs() << "\n");
+
+  for (auto &concurrent : Task.ConcurrentBlocks) {
+    LLVM_DEBUG(dbgs() << "----Concurrent block found---- \n "
+                      << "-> Function: "
+                      << concurrent.Entry->getParent()->getParent()->getName()
+                      << "  " << concurrent.Entry->getParent()->getName()
+                      << "<-"
+                      << "\n"
+                      << " Entry -> "
+                      << " " << *concurrent.Entry << " \n");
+
+    LLVM_DEBUG(dbgs() << concurrent.Exit->getName() << " Exit-> "
+                      << *concurrent.Exit << " \n");
+  }
+}
+
 // child directives will be placed before its parent directives
 void OmpSsRegionAnalysis::convertDirectivesTreeToVector() {
   SmallVector<Instruction *, 4> Stack;
   convertDirectivesTreeToVectorImpl(nullptr, Stack);
 }
 
-OmpSsRegionAnalysis::OmpSsRegionAnalysis(Function &F, DominatorTree &DT) {
+void generatePathsUtil(BasicBlock *SourceParent, BasicBlock *DestParent,
+                       std::vector<BasicBlock *> &Visited,
+                       std::vector<BasicBlock *> &Paths,
+                       std::vector<std::vector<BasicBlock *>> &FinalPaths,
+                       bool ReturnRedundantPath) {
+  bool ContinuePath = true;
+  Paths.push_back(SourceParent);
+
+  if ((SourceParent == DestParent && Paths.size() > 1)) {
+    FinalPaths.push_back(Paths);
+    ContinuePath = false;
+  } else if (ReturnRedundantPath) {
+    for (auto &Node : Visited) {
+      if (Node == SourceParent) {
+        FinalPaths.push_back(Paths);
+        ContinuePath = false;
+        break;
+      }
+    }
+  }
+
+  if (Paths.size() > 1)
+    Visited.push_back(SourceParent);
+  if (ContinuePath) {
+
+    for (succ_iterator pit = succ_begin(SourceParent),
+                       pet = succ_end(SourceParent);
+         pit != pet; ++pit) {
+      bool IsVisited = false;
+      for (auto &Node : Visited) {
+        if (Node == *pit) {
+          IsVisited = true;
+          break;
+        }
+      }
+      if (!IsVisited || ReturnRedundantPath)
+        generatePathsUtil(*pit, DestParent, Visited, Paths, FinalPaths,
+                          ReturnRedundantPath);
+    }
+  }
+
+  Visited.pop_back();
+  Paths.pop_back();
+}
+
+void getPaths(Instruction *Source, Instruction *Dest,
+              std::vector<std::vector<BasicBlock *>> &FinalPaths,
+              DominatorTree &DT, bool ReturnRedundantPath) {
+
+  std::vector<BasicBlock *> Paths;
+
+  if (Source->getParent() == Dest->getParent() && Source != Dest)
+    if (orderedInstructions(DT, Source, Dest)) {
+      Paths.push_back(Source->getParent());
+      FinalPaths.push_back(Paths);
+      return;
+    }
+
+  std::vector<BasicBlock *> Visited;
+
+  generatePathsUtil(Source->getParent(), Dest->getParent(), Visited, Paths,
+                    FinalPaths, ReturnRedundantPath);
+}
+
+// TODO mejorar esto con MemLoc
+bool existsTaskDependency(DirectiveInfo &TaskA, DirectiveInfo &TaskB) {
+  //Not taking into acount already dependencies
+  return false;
+
+  SmallVector<DependInfo, 4> Ins;
+  SmallVector<DependInfo, 4> Outs;
+  for (auto &Dep : TaskA.DirEnv.DependsInfo.List){
+    if (Dep->DepType == DependInfo::DT_in || Dep->DepType == DependInfo::DT_inout)
+      Ins.push_back(*Dep);
+  }
+
+  for (auto &Dep : TaskB.DirEnv.DependsInfo.List){
+    if (Dep->DepType == DependInfo::DT_out || Dep->DepType == DependInfo::DT_inout)
+      Outs.push_back(*Dep);
+  }
+
+  if (Ins.size() == 0)
+    return false;
+
+  for (DependInfo In : Ins) {
+    bool exists = false;
+    for (DependInfo Out : Outs) {
+      if (In.Base == Out.Base) {
+        exists = true;
+        break;
+      }
+    }
+    if (!exists)
+      return false;
+  }
+  return true;
+}
+
+
+void setPreSync(DirectiveInfo &Task, SmallVectorImpl<SyncInfo> &SyncPoints,
+                DominatorTree &DT,
+                SmallVectorImpl<DirectiveInfo *> &PostOrder) {
+
+  // Assign all reacheable sync points
+  SmallVector<SyncInfo *, 4> PossibleSync;
+  for (auto I = SyncPoints.rbegin(), IE = SyncPoints.rend(); I != IE; ++I) {
+    SyncInfo *SyncPoint = &*I;
+    if (isPotentiallyReachable(SyncPoint->Sync, Task.Entry)) {
+      bool visible = true; // Discard invisible taskwaits
+      for (auto &SelectedTask : PostOrder) {
+        if (orderedInstructions(DT, SelectedTask->Entry, SyncPoint->Sync) &&
+            !orderedInstructions(DT,SelectedTask->Exit, SyncPoint->Sync) &&
+            !(orderedInstructions(DT,SelectedTask->Entry, Task.Entry) &&
+              !orderedInstructions(DT,SelectedTask->Exit, Task.Entry))) {
+          visible = false;
+          break;
+        }
+      }
+      if (visible)
+        PossibleSync.push_back(SyncPoint);
+    }
+  }
+
+  SmallVector<SyncInfo *, 4> Redundant;
+  BasicBlock *TaskParent = Task.Entry->getParent();
+
+  // Eliminate redundand syncs inside same block
+  for (unsigned long i = 0; i < PossibleSync.size(); i++) {
+    Instruction *First = PossibleSync[i]->Sync;
+    BasicBlock *FirstParent = First->getParent();
+    for (unsigned long j = i + 1; j < PossibleSync.size(); j++) {
+      Instruction *Second = PossibleSync[j]->Sync;
+      BasicBlock *SecondParent = Second->getParent();
+      if ((FirstParent == SecondParent) && (TaskParent == FirstParent)) {
+        if (orderedInstructions(DT,First, Second) && orderedInstructions(DT,First, Task.Entry) &&
+            orderedInstructions(DT,Task.Entry, Second)) {
+          Redundant.push_back(PossibleSync[i]);
+        } else
+          Redundant.push_back(PossibleSync[j]);
+
+      } else if (FirstParent == SecondParent) {
+        if (orderedInstructions(DT,First, Second))
+          Redundant.push_back(PossibleSync[i]);
+        else
+          Redundant.push_back(PossibleSync[j]);
+      }
+    }
+  }
+
+  SmallVector<SyncInfo *, 4> SyncsForPathing;
+
+  // Remove redundant syncs
+  for (auto &Possible : PossibleSync) {
+    bool Exists = false;
+    for (auto &Red : Redundant) {
+      if (Possible == Red) {
+        Exists = true;
+        break;
+      }
+    }
+    if (!Exists)
+      SyncsForPathing.push_back(Possible);
+  }
+  Redundant.clear();
+
+  // Calculate paths and find more redundant sync points
+  for (auto &SyncPoint : SyncsForPathing) {
+    std::vector<std::vector<BasicBlock *>> FinalPaths;
+    getPaths(SyncPoint->Sync, Task.Entry, FinalPaths, DT, false);
+    int InvalidPaths = 0;
+    for (auto &Node : FinalPaths) {
+      bool Invalid = false;
+      for (auto &BB : Node) {
+        for (auto &PointFound : SyncsForPathing) {
+          if (BB == PointFound->Sync->getParent() && PointFound != SyncPoint) {
+            if (BB != Task.Entry->getParent() ||
+                (BB == Task.Entry->getParent() &&
+                 orderedInstructions(DT,PointFound->Sync, Task.Entry))) {
+              Invalid = true;
+              InvalidPaths++;
+              break;
+            }
+          }
+        }
+        if (Invalid)
+          break;
+      }
+    }
+    if (InvalidPaths == (int)FinalPaths.size()) {
+      Redundant.push_back(SyncPoint);
+    }
+  }
+
+  // Remove redundant syncs again
+  for (auto &Possible : SyncsForPathing) {
+    bool Exists = false;
+    for (auto &Red : Redundant) {
+      if (Possible == Red) {
+        Exists = true;
+        break;
+      }
+    }
+    if (!Exists)
+      Task.PreSyncs.push_back(Possible);
+  }
+
+
+}
+
+
+void setPostSync(DirectiveInfo &Task, SmallVectorImpl<SyncInfo> &SyncPoints,
+                 DominatorTree &DT,
+                 SmallVectorImpl<DirectiveInfo *> &PostOrder) {
+
+  // Assign all reacheable sync points
+  SmallVector<SyncInfo *, 4> PossibleSync;
+  for (auto I = SyncPoints.rbegin(), IE = SyncPoints.rend(); I != IE; ++I) {
+    SyncInfo *SyncPoint = &*I;
+    if (isPotentiallyReachable(Task.Exit, SyncPoint->Sync)) {
+      bool visible = true; // Discard invisible taskwaits
+      for (auto &SelectedTask : PostOrder) {
+        if (orderedInstructions(DT, SelectedTask->Entry, SyncPoint->Sync) &&
+            !orderedInstructions(DT, SelectedTask->Exit, SyncPoint->Sync) &&
+            !(orderedInstructions(DT, SelectedTask->Entry, Task.Entry) &&
+              !orderedInstructions(DT, SelectedTask->Exit, Task.Entry))) {
+          visible = false;
+          break;
+        }
+      }
+      if (visible)
+        PossibleSync.push_back(SyncPoint);
+    }
+  }
+
+  SmallVector<SyncInfo *, 4> Redundant;
+  BasicBlock *TaskParent = Task.Entry->getParent();
+
+  // Eliminate redundand syncs inside same block
+  for (unsigned long i = 0; i < PossibleSync.size(); i++) {
+    Instruction *First = PossibleSync[i]->Sync;
+    BasicBlock *FirstParent = First->getParent();
+    for (unsigned long j = i + 1; j < PossibleSync.size(); j++) {
+      Instruction *Second = PossibleSync[j]->Sync;
+      BasicBlock *SecondParent = Second->getParent();
+      if ((FirstParent == SecondParent) && (TaskParent == FirstParent)) {
+        if (orderedInstructions(DT, First, Second) && orderedInstructions(DT, First, Task.Entry) &&
+            orderedInstructions(DT, Second, Task.Entry)) {
+          Redundant.push_back(PossibleSync[j]);
+        } else
+          Redundant.push_back(PossibleSync[i]);
+
+      } else if (FirstParent == SecondParent) {
+        if (orderedInstructions(DT, First, Second))
+          Redundant.push_back(PossibleSync[j]);
+        else
+          Redundant.push_back(PossibleSync[i]);
+      }
+    }
+  }
+
+  SmallVector<SyncInfo *, 4> SyncsForPathing;
+
+  // Remove redundant syncs
+  for (auto &Possible : PossibleSync) {
+    bool Exists = false;
+    for (auto &Red : Redundant) {
+      if (Possible == Red) {
+        Exists = true;
+        break;
+      }
+    }
+    if (!Exists)
+      SyncsForPathing.push_back(Possible);
+  }
+  Redundant.clear();
+
+  // Calculate paths and find more redundant sync points
+  for (auto &SyncPoint : SyncsForPathing) {
+    std::vector<std::vector<BasicBlock *>> FinalPaths;
+    getPaths(Task.Exit, SyncPoint->Sync, FinalPaths, DT, false);
+    int InvalidPaths = 0;
+    for (auto &Node : FinalPaths) {
+      bool Invalid = false;
+      for (auto &BB : Node) {
+        for (auto &PointFound : SyncsForPathing) {
+          if (BB == PointFound->Sync->getParent() && PointFound != SyncPoint) {
+            if (BB != Task.Exit->getParent() ||
+                (BB == Task.Exit->getParent() &&
+                 orderedInstructions(DT, Task.Exit, PointFound->Sync))) {
+              Invalid = true;
+              InvalidPaths++;
+              break;
+            }
+          }
+        }
+        if (Invalid)
+          break;
+      }
+    }
+    if (InvalidPaths == (int)FinalPaths.size()) {
+      Redundant.push_back(SyncPoint);
+    }
+  }
+
+  // Remove redundant syncs again
+  for (auto &Possible : SyncsForPathing) {
+    bool Exists = false;
+    for (auto &Red : Redundant) {
+      if (Possible == Red) {
+        Exists = true;
+        break;
+      }
+    }
+    if (!Exists)
+      Task.PostSyncs.push_back(Possible);
+  }
+}
+
+
+void setConcurrentTasks(DirectiveInfo &Task, DominatorTree &DT,
+                        SmallVectorImpl<DirectiveInfo *> &PostOrder) {
+
+  SmallVector<DirectiveInfo *, 4> ConcurrentTasks;
+  for (auto &PreSyncs : Task.PreSyncs) {
+    std::vector<std::vector<BasicBlock *>> FinalPaths;
+    getPaths(PreSyncs->Sync, Task.Entry, FinalPaths, DT, false);
+    for (auto &Path : FinalPaths) {
+      for (auto &Node : Path) {
+        for (auto &FocusedTask : PostOrder) {
+          if (FocusedTask->Entry->getParent() == Node && FocusedTask != &Task) {
+            if ((Node == PreSyncs->Sync->getParent() &&
+                 Node != Task.Entry->getParent() &&
+                 (orderedInstructions(DT,PreSyncs->Sync, FocusedTask->Entry))) ||
+                (Node == PreSyncs->Sync->getParent() &&
+                 Node == Task.Entry->getParent() &&
+                 (orderedInstructions(DT,PreSyncs->Sync, FocusedTask->Entry) || PreSyncs->Sync==FocusedTask->Entry) &&
+                 (orderedInstructions(DT,FocusedTask->Entry, Task.Entry))) ||
+                (Node != PreSyncs->Sync->getParent() &&
+                 Node == Task.Entry->getParent() &&
+                 (orderedInstructions(DT,FocusedTask->Entry, Task.Entry))) ||
+                (Node != PreSyncs->Sync->getParent() &&
+                 Node != Task.Entry->getParent())) {
+
+              int Found = 0;
+              for (auto &ConcurrentTask : ConcurrentTasks)
+                if (ConcurrentTask == FocusedTask) {
+                  Found = 1;
+                  break;
+                }
+
+              if ((!isPotentiallyReachable(Task.Exit, FocusedTask->Entry) &&
+                   !Found) &&
+                  !(orderedInstructions(DT,FocusedTask->Entry, Task.Entry) &&
+                    !orderedInstructions(DT,FocusedTask->Exit, Task.Exit))) {
+
+                if (!existsTaskDependency(Task, *FocusedTask))
+                  ConcurrentTasks.push_back(FocusedTask);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  if (isPotentiallyReachable(Task.Exit, Task.Entry))
+    ConcurrentTasks.push_back(&Task);
+
+  for (auto &ConcurrentTask : ConcurrentTasks) {
+    Task.ConcurrentBlocks.push_back(
+        {ConcurrentTask->Entry, ConcurrentTask->Exit});
+  }
+}
+
+void setConcurrentSequential(DirectiveInfo &Task, DominatorTree &DT,
+                             SmallVectorImpl<SyncInfo> &SyncPoints,
+                             SmallVectorImpl<DirectiveInfo *> &PostOrder) {
+
+  SmallVector<BasicBlock *, 10> ProcessedBlocks;
+  SmallVector<ConcurrentBlock *, 10> ConcurrentBlocks;
+  Instruction *Exit = Task.Exit;
+  for (auto &PostSync : Task.PostSyncs) {
+    std::vector<std::vector<BasicBlock *>> FinalPaths;
+    getPaths(Exit, PostSync->Sync, FinalPaths, DT, false);
+    for (auto &Path : FinalPaths) {
+      for (auto &Node : Path) {
+        bool Already = false;
+        for (auto &Processed : ProcessedBlocks) {
+          if (Processed == Node)
+            Already = true;
+        }
+        if (!Already)
+          ProcessedBlocks.push_back(Node);
+
+        bool End = false;
+        ConcurrentBlock Block;
+        for (auto &SyncPoint : SyncPoints) {
+          bool visible = true;
+          for (auto &SelectedTask : PostOrder) {
+            if (orderedInstructions(DT,SelectedTask->Entry, SyncPoint.Sync) &&
+                !orderedInstructions(DT,SelectedTask->Exit, SyncPoint.Sync) &&
+                !(orderedInstructions(DT,SelectedTask->Entry, Task.Entry) &&
+                  !orderedInstructions(DT,SelectedTask->Exit, Task.Entry))) {
+              visible = false;
+              break;
+            }
+          }
+          if (!visible)
+            continue;
+
+          if (Node == SyncPoint.Sync->getParent() &&
+              ((Node != Exit->getParent() ||
+                (Node == Exit->getParent() &&
+                 orderedInstructions(DT,Exit, SyncPoint.Sync))) &&
+               (Node != PostSync->Sync->getParent() ||
+                (Node == PostSync->Sync->getParent() &&
+                 orderedInstructions(DT,SyncPoint.Sync, PostSync->Sync))))) {
+            Block.Entry = &*(Node->begin());
+            Block.Exit = SyncPoint.Sync;
+            if (!Already)
+              Task.ConcurrentBlocks.push_back(Block);
+            End = true;
+            break;
+          }
+        }
+        if (End)
+          break;
+
+        if (Already)
+          continue;
+
+        if (Node != Exit->getParent())
+          Block.Entry = &*(Node->begin());
+        else
+          Block.Entry = Exit;
+
+        if (Node != PostSync->Sync->getParent())
+          Block.Exit = Node->getTerminator();
+        else
+          Block.Exit = PostSync->Sync;
+        Task.ConcurrentBlocks.push_back(Block);
+      }
+    }
+  }
+  if (isPotentiallyReachable(Exit, Task.Entry)) {
+    std::vector<std::vector<BasicBlock *>> FinalPaths;
+    getPaths(Exit, Task.Entry, FinalPaths, DT, true);
+    int State = 0;
+    for (auto &Path : FinalPaths) {
+      int Count = 0;
+      for (auto &Node : Path) {
+
+        bool Already = false;
+        if (Node == Exit->getParent() &&
+            Exit->getParent() == Task.Entry->getParent()) {
+
+          Count++;
+          if (State == 1 || (Count == 1 && State == 0))
+            Already = true;
+          if (Count > 1 && State == 0)
+            State = 1;
+
+        } else
+          for (auto &Processed : ProcessedBlocks) {
+            if (Processed == Node)
+              Already = true;
+          }
+
+        if (!Already)
+          ProcessedBlocks.push_back(Node);
+
+        bool End = false;
+        ConcurrentBlock Block;
+        for (auto &SyncPoint : SyncPoints) {
+          bool visible = true;
+          for (auto &SelectedTask : PostOrder) {
+            if (orderedInstructions(DT,SelectedTask->Entry, SyncPoint.Sync) &&
+                !orderedInstructions(DT,SelectedTask->Exit, SyncPoint.Sync) &&
+                !(orderedInstructions(DT,SelectedTask->Entry, Task.Entry) &&
+                  !orderedInstructions(DT,SelectedTask->Exit, Task.Entry))) {
+              visible = false;
+              break;
+            }
+          }
+          if (!visible)
+            continue;
+          bool Finish = false;
+          if (((Node == SyncPoint.Sync->getParent()) &&
+               (Exit->getParent() == Task.Entry->getParent()) &&
+               Node == Exit->getParent()) &&
+              ((Count == 1 && orderedInstructions(DT,Exit, SyncPoint.Sync)) ||
+               (Count > 1 && orderedInstructions(DT,SyncPoint.Sync, Task.Entry))))
+            Finish = true;
+
+          if ((Node == SyncPoint.Sync->getParent()) &&
+              ((Node != Exit->getParent() ||
+                (Node == Exit->getParent() &&
+                 orderedInstructions(DT,Exit, SyncPoint.Sync))) &&
+               (Node != Task.Entry->getParent() ||
+                (Node == Task.Entry->getParent() &&
+                 orderedInstructions(DT,SyncPoint.Sync, Task.Entry)))))
+            Finish = true;
+
+          if (Finish) {
+            Block.Entry = &*(Node->begin());
+            Block.Exit = SyncPoint.Sync;
+            if (!Already)
+              Task.ConcurrentBlocks.push_back(Block);
+            End = true;
+            break;
+          }
+        }
+        if (End)
+          break;
+        if (Already)
+          continue;
+
+        if (Node != Exit->getParent() ||
+            (Node == Exit->getParent() && Count > 1))
+          Block.Entry = &*(Node->begin());
+        else
+
+          Block.Entry = Exit;
+
+        if (Node != Task.Entry->getParent() ||
+            (Node == Task.Entry->getParent() && Count == 1))
+          Block.Exit = Node->getTerminator();
+        else
+          Block.Exit = Task.Entry;
+        Task.ConcurrentBlocks.push_back(Block);
+      }
+    }
+  }
+}
+
+Value *getArgValue(Value *argVar) {
+  for (User *U : argVar->users()) {
+    if (auto *store = dyn_cast<StoreInst>(U)) {
+      if (store->getValueOperand() == argVar) {
+        Value *newargVar = store->getPointerOperand();
+        return newargVar;
+      }
+    }
+  }
+  return nullptr;
+}
+
+
+Instruction *getArgIns(Value *argVar) {
+  for (User *U : argVar->users()) {
+    if (auto *store = dyn_cast<StoreInst>(U)) {
+      return dyn_cast<Instruction>(store);
+    }
+  }
+  return nullptr;
+}
+
+
+// Core recursive function for detecting a variable usage, given a variable and
+// an instruction
+void valueInInstruction(Instruction *I, Value *Var, VarUse &Usage,
+                        bool GetFirstUsage,
+                        SmallPtrSetImpl<Function *> *AnalyzedFunctions,
+                        SmallVector<ValueAccess, 4> &UsedInValues, bool record,
+                        ValueAccess &AccessToCheck, AAResults &BAA, AliveValue TypeOfAlive, bool ContinueSubblocks) {
+
+  // Is a store instruction
+  if (auto *store = dyn_cast<StoreInst>(I)) {
+    if (store->getPointerOperand() == Var ) {
+      if (Usage != UNKNOWN)
+        Usage = WRITTEN;
+      if (record)
+        UsedInValues.push_back({I, MemoryLocation::get(I), WRITTEN, false,
+                                false, false, NOT_USED, false, false});
+    } else if (Usage == NOT_USED && store->getValueOperand() == Var) {
+      Usage = READED;
+      if (record)
+        UsedInValues.push_back({I, MemoryLocation::get(I), READED, false, false,
+                                false, NOT_USED, false, false});
+    }
+    // Is a load instruction
+  } else if (auto *load = dyn_cast<LoadInst>(I)) {
+    if (load->getPointerOperand() == Var) {
+      if (Usage == NOT_USED){
+        Usage = READED;
+      }
+      if (record)
+        UsedInValues.push_back({I, MemoryLocation::get(I), READED, false, false,
+                                false, NOT_USED, false, false});
+    }
+    // Is a getelement instruction
+  } else if (auto *getElm = dyn_cast<GetElementPtrInst>(I)) {
+    if (getElm->getPointerOperand() == Var) {
+      Value *getElmValue = dyn_cast<Value>(getElm);
+
+      if (GetFirstUsage) {
+        Instruction *sec = I->getNextNode();
+        while (Usage == NOT_USED && sec != &(sec->getParent()->back())) {
+          valueInInstruction(sec, getElmValue, Usage, GetFirstUsage,
+                             AnalyzedFunctions, UsedInValues, record,
+                             AccessToCheck, BAA, TypeOfAlive, ContinueSubblocks);
+          sec = sec->getNextNode();
+        }
+      } else {
+        for (User *getElmUser : getElmValue->users()) {
+          Instruction *userIns = dyn_cast<Instruction>(getElmUser);
+          valueInInstruction(userIns, getElmValue, Usage, GetFirstUsage,
+                             AnalyzedFunctions, UsedInValues, record,
+                             AccessToCheck, BAA, TypeOfAlive, ContinueSubblocks);
+        }
+      }
+    }
+    // Is a call instruction
+  } else if (auto *call = dyn_cast<CallInst>(I)) {
+
+    Function *F = call->getCalledFunction();
+    bool exists = !(AnalyzedFunctions->find(F) == AnalyzedFunctions->end());
+    if (!exists)
+        AnalyzedFunctions->insert(I->getFunction());
+    if (F && !F->isDeclaration() && !exists) {
+      Value *argVar =nullptr;
+      Value *finalVar = nullptr;
+      
+      //Needed for nested variable, in the call should not be nested to go to the function
+      Value *VarAlternative= Var;
+      if(User *prueba = dyn_cast<User>(Var)){
+        if(prueba->getNumOperands()){
+          VarAlternative = prueba->getOperand(0);
+        }
+      }
+     
+
+      if (call->hasArgument(Var) || call->hasArgument(VarAlternative)) {
+        for (unsigned int i = 0; i < call->getNumArgOperands(); i++) {
+          if (call->getArgOperand(i) == Var || call->getArgOperand(i) == VarAlternative) {
+            Argument *arg = (F->arg_begin()) + i;
+            argVar = dyn_cast<Value>(arg);
+            finalVar = getArgValue(argVar);
+          }
+        }
+      }
+      else if (dyn_cast<GlobalValue>(Var) || dyn_cast<GlobalValue>(VarAlternative) ){
+        argVar= Var;
+      }
+      else
+        return;
+
+      if (!GetFirstUsage) {
+          if (finalVar != nullptr){
+                llvm_unreachable("mem2reg analsis required");
+              }
+              else {
+                for (User *lU : argVar->users()) {
+                  if (Instruction *finalVarI = dyn_cast<Instruction>(lU))
+                    valueInInstruction(finalVarI, argVar, Usage, GetFirstUsage,
+                                       AnalyzedFunctions, UsedInValues, true,
+                                       AccessToCheck, BAA, TypeOfAlive, ContinueSubblocks);
+                
+                }
+              }
+            } else {
+              if (finalVar != nullptr) {
+                llvm_unreachable("mem2reg analsis required");
+
+                
+              } else {
+
+
+                SmallPtrSet<BasicBlock *, 10> AnalizedBasicBlocks;
+
+                analyzeFirstTaskUse(&F->getEntryBlock(), argVar,
+                                F->back().getTerminator() , F->getEntryBlock().getFirstNonPHI(),
+                                &AnalizedBasicBlocks, AnalyzedFunctions,
+                                AccessToCheck, BAA, TypeOfAlive, ContinueSubblocks);
+              }
+            }
+      } else {
+        if (F && F->getIntrinsicID() != Intrinsic::directive_region_entry && F->getIntrinsicID() != Intrinsic::directive_region_exit &&
+            !exists) {
+          MemoryLocation dummy;
+          UsedInValues.push_back(
+              {I, dummy, UNKNOWN, false, false, false, NOT_USED, false, false});
+          Usage = UNKNOWN;
+        }
+      }
+  
+    // Is a bitcast instruction
+  } else if (auto *BitCast = dyn_cast<CastInst>(I)) {
+    Value *BitCastValue = dyn_cast<Value>(BitCast);
+    if (BitCast->getOperand(0) == Var)
+      for (User *BitCastUser : I->users()) {
+        Instruction *userIns = dyn_cast<Instruction>(BitCastUser);
+        valueInInstruction(userIns, BitCastValue, Usage, GetFirstUsage,
+                           AnalyzedFunctions, UsedInValues, record,
+                           AccessToCheck, BAA, TypeOfAlive, ContinueSubblocks);
+      }
+  }
+}
+
+void analyzeFirstTaskUse(BasicBlock *BB, Value *Var, Instruction *Exit,
+                         Instruction *Entry,
+                         SmallPtrSetImpl<BasicBlock *> *Already,
+                         SmallPtrSetImpl<Function *> *AnalyzedFunctions,
+                         ValueAccess &AccessToCheck, AAResults &BAA, AliveValue TypeOfAlive, bool ContinueSubblocks) {
+
+  // Dont analyze first uses of unknown.
+  if (!AccessToCheck.MemLoc.Ptr)
+    return;
+
+  Instruction *InsPointer;
+  Already->insert(BB);
+
+  if (Entry->getParent() == BB)
+    InsPointer = Entry;
+  else
+    InsPointer = &(BB->front());
+
+  VarUse Usage = NOT_USED;
+  VarUse LocalUsage;
+  SmallVector<ValueAccess, 4> AccessFound;
+
+  while (InsPointer != Exit && InsPointer != &(BB->back()) &&
+         Usage == NOT_USED) {
+
+    LocalUsage = NOT_USED;
+    valueInInstruction(InsPointer, Var, LocalUsage, true, AnalyzedFunctions,
+                       AccessFound, true, AccessToCheck, BAA, TypeOfAlive, true);
+
+    if (LocalUsage == UNKNOWN)
+      Usage = LocalUsage;
+
+    // Alias analyses dont work through different functions
+    else if (LocalUsage != NOT_USED && (AccessFound[0].I->getFunction() !=
+                                        AccessToCheck.I->getFunction()))
+      Usage = LocalUsage;
+    else if (LocalUsage != NOT_USED &&
+             BAA.alias(AccessFound[0].MemLoc, AccessToCheck.MemLoc) ==
+                 MustAlias)
+      Usage = LocalUsage;
+
+    // If an usage is found, fill it with priority caution because of
+    // recursive calls
+    if (Usage != NOT_USED) {
+
+      if(Usage == READED || Usage == UNKNOWN){
+        if (TypeOfAlive == AFTER_SYNC)
+          AccessToCheck.IsAliveAfterNextSync = true;
+        else if (TypeOfAlive == BEFORE_ENTRY){
+           AccessToCheck.IsAliveBeforeEntry = true;
+        }
+        else if (TypeOfAlive == AFTER_EXIT)
+          AccessToCheck.IsAliveAfterExit = true;
+      }
+
+      if (AccessToCheck.FirstTaskUse == NOT_USED)
+        AccessToCheck.FirstTaskUse = Usage;
+      else if (AccessToCheck.FirstTaskUse == READED &&
+               (Usage == WRITTEN || Usage == UNKNOWN))
+        AccessToCheck.FirstTaskUse = Usage;
+    }
+
+    AccessFound.clear();
+
+    InsPointer = InsPointer->getNextNode();
+  }
+
+  // Check child blocks
+  if (InsPointer == &(BB->back()) && Usage == NOT_USED && ContinueSubblocks) {
+    for (BasicBlock *Succ : successors(BB)) {
+      if (Already->find(Succ) == Already->end()) {
+        analyzeFirstTaskUse(Succ, Var, Exit, Entry, Already, AnalyzedFunctions,
+                            AccessToCheck, BAA, TypeOfAlive, ContinueSubblocks);
+      }
+    }
+  }
+}
+
+bool isMustAlias(MemoryLocation first, MemoryLocation second, AAResults &BAA) {
+  AliasResult Result = BAA.alias(first, second);
+  dbgs() << "Alias result is " << Result << " \n";
+  if (Result == MustAlias)
+    return true;
+  return false;
+}
+
+bool compareMemoryLocations(MemoryLocation first, MemoryLocation second,
+                            AAResults &BAA) {
+  AliasResult Result = BAA.alias(first, second);
+  dbgs() << "Alias result is " << Result << " \n";
+  if (Result == NoAlias)
+    return false;
+  return true;
+}
+
+//Handle possible global variable access from other function reacheable from task
+bool UseIsInExternalCall(Instruction *I, Instruction *Entry, Instruction *Exit, DominatorTree &DT, SmallPtrSetImpl<Function *> &AnalyzedFunctions){
+
+ Function *FunctionUsed= I->getFunction();
+ AnalyzedFunctions.insert(FunctionUsed);
+ if(FunctionUsed != Entry->getFunction()){
+      for(User *FunctionUser : FunctionUsed->users()){
+          if(Instruction *NewI = dyn_cast<Instruction>(FunctionUser)){
+            if (NewI->getFunction() == Entry->getFunction() && orderedInstructions(DT, Entry, NewI) &&
+            !orderedInstructions(DT, Exit, NewI)){
+              return true;
+            }
+            else if(NewI->getFunction() != Entry->getFunction()){
+
+
+              bool exists = !(AnalyzedFunctions.find(NewI->getFunction()) == AnalyzedFunctions.end());
+              if(!exists){
+                  if(UseIsInExternalCall (NewI, Entry, Exit, DT, AnalyzedFunctions))
+                  return true;
+              }
+            }
+      }
+    }
+  }
+  return false;
+}
+
+void obtainCallsInside(Instruction *I, Instruction *Entry, Instruction *Exit, DominatorTree &DT, SmallPtrSetImpl<Function *> &AnalyzedFunctions, SmallVectorImpl<Instruction *> &CallList){
+
+
+ Function *FunctionUsed= I->getFunction();
+ AnalyzedFunctions.insert(FunctionUsed);
+ if(FunctionUsed != Entry->getFunction()){
+      for(User *FunctionUser : FunctionUsed->users()){
+          if(Instruction *NewI = dyn_cast<Instruction>(FunctionUser)){
+            if (NewI->getFunction() == Entry->getFunction() && orderedInstructions(DT, Entry, NewI) &&
+            !orderedInstructions(DT, Exit, NewI)){
+               CallList.push_back(NewI);
+            }
+            else if(NewI->getFunction() != Entry->getFunction()){
+              bool exists = !(AnalyzedFunctions.find(NewI->getFunction()) == AnalyzedFunctions.end());
+              if(!exists){
+                  obtainCallsInside (NewI, Entry, Exit, DT, AnalyzedFunctions, CallList);
+              }
+            }
+      }
+    }
+  }
+}
+
+OmpSsRegionAnalysis::OmpSsRegionAnalysis(Function &F, DominatorTree &DT, AAResults &BAA) {
 
   MapVector<BasicBlock *, SmallVector<Instruction *, 4>> BBDirectiveStacks;
   SmallVector<BasicBlock*, 8> Worklist;
   SmallPtrSet<BasicBlock*, 8> Visited;
 
+  SmallVector<SyncInfo, 4> SyncPoints;
+
+// Add the function start as the first sync point
+  SyncPoints.push_back({F.getEntryBlock().getFirstNonPHI() , FUNCTION_START, 0});
   Worklist.push_back(&F.getEntryBlock());
   Visited.insert(&F.getEntryBlock());
   while (!Worklist.empty()) {
@@ -838,6 +1748,11 @@ OmpSsRegionAnalysis::OmpSsRegionAnalysis(Function &F, DominatorTree &DT) {
     SmallVectorImpl<Instruction *> &Stack = BBDirectiveStacks[BB];
 
     for (Instruction &I : *BB) {
+
+      // Add function end as the last sync point
+      if (dyn_cast<ReturnInst>(&I))
+        SyncPoints.push_back({&I, FUNCTION_END, (int)Stack.size()});
+
       if (auto *II = dyn_cast<IntrinsicInst>(&I)) {
         if (II->getIntrinsicID() == Intrinsic::directive_region_entry) {
           assert(II->hasOneUse() && "Directive entry has more than one user.");
@@ -871,7 +1786,7 @@ OmpSsRegionAnalysis::OmpSsRegionAnalysis(Function &F, DominatorTree &DT) {
 
           Stack.pop_back();
         } else if (II->getIntrinsicID() == Intrinsic::directive_marker) {
-
+          SyncPoints.push_back({&I, TASKWAIT, (int)Stack.size()});
           // directive_marker does not push into the stack
           if (Stack.empty()) {
             // outer directive, insert into nullptr
@@ -948,13 +1863,923 @@ OmpSsRegionAnalysis::OmpSsRegionAnalysis(Function &F, DominatorTree &DT) {
 
   convertDirectivesTreeToVector();
 
+  int GnumUnknown = 0, GnumShared = 0, GnumFirstPrivate = 0, GnumPrivate = 0;
+
+  for (auto &SelectedTask : DirectiveFuncInfo.PostOrder) {
+
+    // Activate Autodependency
+    bool AutoDeps = true;
+
+    // Find pre sync points
+    setPreSync(*SelectedTask, SyncPoints, DT, DirectiveFuncInfo.PostOrder);
+    // Find post sync points
+    setPostSync(*SelectedTask, SyncPoints, DT, DirectiveFuncInfo.PostOrder);
+    // Find concurrent tasks
+    setConcurrentTasks(*SelectedTask, DT, DirectiveFuncInfo.PostOrder);
+    // Find concurrent sequential code
+    setConcurrentSequential(*SelectedTask, DT, SyncPoints,
+                            DirectiveFuncInfo.PostOrder);
+
+     // Print concurrent code blocks
+    printTaskConcurrentBlocks(*SelectedTask);
+
+    SmallVector<std::pair<Value *, DSAValue>, 10> ScopedVariables;
+
+    // Clean scope of variables
+    for (Value *Var : SelectedTask->DirEnv.DSAInfo.Firstprivate)
+      ScopedVariables.push_back(
+          std::pair<Value *, DSAValue>(Var, FIRSTPRIVATE));
+    SelectedTask->DirEnv.DSAInfo.Firstprivate.clear();
+
+    for (Value *Var : SelectedTask->DirEnv.DSAInfo.Private)
+      ScopedVariables.push_back(std::pair<Value *, DSAValue>(Var, PRIVATE));
+    SelectedTask->DirEnv.DSAInfo.Private.clear();
+
+    for (Value *Var : SelectedTask->DirEnv.DSAInfo.Shared)
+      ScopedVariables.push_back(std::pair<Value *, DSAValue>(Var, SHARED));
+    SelectedTask->DirEnv.DSAInfo.Shared.clear();
+
+
+    //Requires so global variables used in the task are added as variables to analyze, even they are not detected by Clang
+    for (auto &Global : F.getParent()->getGlobalList()){
+        Value *Variable = dyn_cast<Value>(&Global);
+
+        for (User *U : Variable->users()){
+          SmallVector<Instruction *, 4> CallList;
+          SmallPtrSet<Function *, 10> AnalyzedFunctions;
+
+          if(Instruction *I = dyn_cast<Instruction>(U)){
+            obtainCallsInside(I, SelectedTask->Entry, SelectedTask->Exit ,DT, AnalyzedFunctions, CallList);
+          }
+          else{
+             for (User *UNew : U->users()) {
+               if(Instruction *I = dyn_cast<Instruction>(UNew)){
+                  obtainCallsInside(I, SelectedTask->Entry, SelectedTask->Exit ,DT, AnalyzedFunctions, CallList);
+               }
+             }
+          }
+          //If there is a call, that means that the variable is used inside the task
+          if(CallList.size()){
+             bool exists= false;
+             for (auto AlreadyVariable : ScopedVariables){
+               if(AlreadyVariable.first==Variable){
+                 exists=true;
+                 break;
+               }
+             }
+             if(!exists)
+              ScopedVariables.push_back(std::pair<Value *, DSAValue>(Variable, SHARED));
+
+             break;
+          }
+        }
+    }
+
+
+    // Count scope of variables
+    int numUnknown = 0, numShared = 0, numFirstPrivate = 0, numPrivate = 0;
+    // Iterate over task variables
+    for (auto Variable : ScopedVariables) {
+
+      Value *Var = Variable.first;
+      dbgs() << "\n\033[1mAnalyzing variable: \033[0m";
+      Var->printAsOperand(dbgs(), false); 
+      dbgs() << "\n";
+
+      // Declare important attributes for the task, to be filled and used in
+      // the algorithm
+      bool AutoDepsActivated = false;
+      DSAValue OriginalDSA = Variable.second;
+      DSAValue CorrectedDSA = UNDEF;
+      VarUse UsedInConcurrent = NOT_USED;
+      VarUse UsedInTask = NOT_USED;
+      bool IsGlobalVariable = false;
+      bool IsComposited;
+
+      // Find if the variable is composited
+      if (Var->getType()->isPointerTy()){
+       auto *VarType=
+            dyn_cast<Type>(Var->getType()->getPointerElementType());
+            if(VarType->isStructTy() || VarType->isArrayTy() || VarType->isPointerTy() || VarType->isVectorTy())
+              IsComposited= true;
+      }
+      else
+        IsComposited = false;
+
+      // Find if the variable is a Pointer
+      bool IsPointer;
+      if (Var->getType()->isPointerTy())
+        IsPointer = Var->getType()->getContainedType(0)->isPointerTy();
+
+      // Vector for storing variable uses in concurrent blocks, inside and
+      // outside tasks
+      SmallVector<ValueAccess, 4> UsedInTaskValues;
+      SmallVector<ValueAccess, 4> UsedInConcurrentValues;
+
+      // Dummy ValueAccess, temporal fix
+      ValueAccess dummy;
+
+
+      for (User *U : Var->users()) {
+        if (Instruction *I = dyn_cast<Instruction>(U)) {
+
+          SmallPtrSet<Function *, 10> AnalyzedFunctions;
+
+          int TaskContainsCall=UseIsInExternalCall(I, SelectedTask->Entry, SelectedTask->Exit, DT, AnalyzedFunctions );
+  
+          // Use is inside the task
+          if ((orderedInstructions(DT, SelectedTask->Entry, I) &&
+              !orderedInstructions(DT, SelectedTask->Exit, I)) || TaskContainsCall) {
+            AnalyzedFunctions.clear();
+            valueInInstruction(I, Var, UsedInTask, false, &AnalyzedFunctions,
+                               UsedInTaskValues, true, dummy, BAA, NONE, true);
+          }
+          for (ConcurrentBlock &Block : SelectedTask->ConcurrentBlocks) {
+
+            AnalyzedFunctions.clear();
+            bool TaskContainsCall=UseIsInExternalCall(I, Block.Entry, Block.Exit ,DT, AnalyzedFunctions);
+
+            // Use is inside a concurrent block
+            if ((orderedInstructions(DT, Block.Entry, I) &&
+                 !orderedInstructions(DT, Block.Exit, I)) ||
+                I == Block.Entry || I == Block.Exit || TaskContainsCall) {
+              AnalyzedFunctions.clear();
+              int previousSize = UsedInConcurrentValues.size();
+              VarUse PreviousUsedInConcurrent = UsedInConcurrent;
+              valueInInstruction(I, Var, UsedInConcurrent, false,
+                                 &AnalyzedFunctions, UsedInConcurrentValues,
+                                 true, dummy, BAA, NONE, true);
+              int numAdditions= UsedInConcurrentValues.size() - previousSize;
+              // Check if the use was inside a task or not
+              if(Block.Entry->getFunction() == I->getFunction()){
+                for (auto ThisTask : DirectiveFuncInfo.PostOrder) {
+                  
+                  if ((orderedInstructions(DT, ThisTask->Entry, I) &&
+                      !orderedInstructions(DT, ThisTask->Exit, I))) {
+                    /*
+                    bool isPrivatized= false;
+                    for(auto VarScope : ThisTask.DSAInfo.Private){
+                      if(VarScope == Var) isPrivatized =true;
+                    }
+                    for(auto VarScope : ThisTask.DSAInfo.Firstprivate){
+                      if(VarScope == Var) isPrivatized =true;
+                    }
+                    */
+                    //Check if exists a taskdependency, if it exists we remove the use since is no concurrent anymore
+                    if(isPotentiallyReachable(SelectedTask->Exit, ThisTask->Entry) && !existsTaskDependency(*ThisTask, *SelectedTask)){
+                      UsedInConcurrentValues.back().ConcurrentUseInTask = true;
+                      break;
+                    }
+                    else{
+                      UsedInConcurrentValues.pop_back();
+                      break;
+                    }
+                  }
+                }
+              }
+              else{
+                //Obtain a vector of all calls inside the concurrent block
+                SmallVector<Instruction *, 4> CallList;
+                AnalyzedFunctions.clear();
+                obtainCallsInside(I, Block.Entry, Block.Exit ,DT, AnalyzedFunctions, CallList);
+                //See if it exists a call in the vector that is not inside in a task
+                bool AllInsideTask=true;
+                SmallVector<DirectiveInfo *,4> TaskWithCall;
+                for(Instruction *Call : CallList){
+                   bool InsideTask=false;
+                   for (auto ThisTask : DirectiveFuncInfo.PostOrder) {
+                       if ((orderedInstructions(DT, ThisTask->Entry, Call) &&
+                      !orderedInstructions(DT, ThisTask->Exit, Call))){
+                        TaskWithCall.push_back(ThisTask);
+                        InsideTask=true;
+                        break;
+                      }
+                   }
+
+                   if(!InsideTask){
+                     AllInsideTask=false;
+                     break;
+                   }
+                }
+                //If all are in tasks, check if all the tasks are syncronized with the main
+                if(AllInsideTask){
+                  bool AllSynchronized= true;
+                  for( auto ThisTask: TaskWithCall){
+                    /*
+                    bool isPrivatized= false;
+                    for(auto VarScope : ThisTask.DSAInfo.Private){
+                      if(VarScope == Var) isPrivatized =true;
+                    }
+                    for(auto VarScope : ThisTask.DSAInfo.Firstprivate){
+                      if(VarScope == Var) isPrivatized =true;
+                    }
+                    if(isPrivatized) continue;
+                    */
+
+                    if(!existsTaskDependency(*ThisTask, *SelectedTask)){
+                      AllSynchronized=false;
+                      break;
+                    }
+                  }
+                  // If they are syncronized, erase the last values added, else mark ConcurrentUseInTask as true
+                  if(AllSynchronized){
+                    //Restore
+                    UsedInConcurrent =PreviousUsedInConcurrent;
+                    for(int i=0; i< numAdditions; i++)
+                      UsedInConcurrentValues.pop_back();
+                  }
+                  else{
+                     for(int i=0; i< numAdditions; i++)
+                      UsedInConcurrentValues[UsedInConcurrentValues.size()-1-i].ConcurrentUseInTask=true;
+                  }
+                }
+              }
+            }
+          }
+        } else {
+          // In case the use is not an instruction, check for its uses again
+          for (User *UNew : U->users()) {
+            if (Instruction *I = dyn_cast<Instruction>(UNew)) {
+              SmallPtrSet<Function *, 10> AnalyzedFunctions;
+              int TaskContainsCall=UseIsInExternalCall(I, SelectedTask->Entry, SelectedTask->Exit, DT, AnalyzedFunctions);
+
+              if ((orderedInstructions(DT, SelectedTask->Entry, I) &&
+                  !orderedInstructions(DT, SelectedTask->Exit, I)) || TaskContainsCall) {
+                AnalyzedFunctions.clear();
+                valueInInstruction(I, U, UsedInTask, false, &AnalyzedFunctions,
+                                   UsedInTaskValues, true, dummy, BAA, NONE , true);
+              }
+              for (ConcurrentBlock &Block : SelectedTask->ConcurrentBlocks) {
+
+                AnalyzedFunctions.clear();
+                int TaskContainsCall=UseIsInExternalCall(I, Block.Entry, Block.Exit ,DT, AnalyzedFunctions);
+
+                // Use is inside a concurrent block
+                if ((orderedInstructions(DT, Block.Entry, I) &&
+                    !orderedInstructions(DT, Block.Exit, I)) ||
+                    I == Block.Entry || I == Block.Exit || TaskContainsCall) {
+                  AnalyzedFunctions.clear();
+                  int previousSize = UsedInConcurrentValues.size();
+                  VarUse PreviousUsedInConcurrent = UsedInConcurrent;
+                  valueInInstruction(I, U, UsedInConcurrent, false,
+                                    &AnalyzedFunctions, UsedInConcurrentValues,
+                                    true, dummy, BAA, NONE, true);
+
+                  int numAdditions= UsedInConcurrentValues.size() - previousSize;
+
+                  // Check if the use was inside a task or not
+                  if(Block.Entry->getFunction() == I->getFunction()){
+
+                    for (auto ThisTask : DirectiveFuncInfo.PostOrder) {
+
+                      if ((orderedInstructions(DT, ThisTask->Entry, I) &&
+                          !orderedInstructions(DT, ThisTask->Exit, I))) {
+                        /*
+                        bool isPrivatized= false;
+                        for(auto VarScope : ThisTask.DSAInfo.Private){
+                          if(VarScope == Var) isPrivatized =true;
+                        }
+                        for(auto VarScope : ThisTask.DSAInfo.Firstprivate){
+                          if(VarScope == Var) isPrivatized =true;
+                        }
+                        */
+                        //Check if exists a taskdependency, if it exists we remove the use since is no concurrent anymore
+                        if(isPotentiallyReachable(SelectedTask->Exit, ThisTask->Entry) && !existsTaskDependency(*ThisTask, *SelectedTask)){
+                          UsedInConcurrentValues.back().ConcurrentUseInTask = true;
+                          break;
+                        }
+                        else{
+                          UsedInConcurrentValues.pop_back();
+                          break;
+                        }
+                      }
+                    }
+                  }
+                  else{
+
+                    //Obtain a vector of all calls inside the concurrent block
+                    SmallVector<Instruction *, 4> CallList;
+                    AnalyzedFunctions.clear();
+                    obtainCallsInside(I, Block.Entry, Block.Exit ,DT, AnalyzedFunctions, CallList);
+                    //See if it exists a call in the vector that is not inside in a task
+                    bool AllInsideTask=true;
+                    SmallVector<DirectiveInfo *,4> TaskWithCall;
+                    for(Instruction *Call : CallList){
+
+                      bool InsideTask=false;
+                      for (auto ThisTask : DirectiveFuncInfo.PostOrder) {
+                          if ((orderedInstructions(DT, ThisTask->Entry, Call) &&
+                          !orderedInstructions(DT, ThisTask->Exit, Call))){
+                            TaskWithCall.push_back(ThisTask);
+                            InsideTask=true;
+                            break;
+                          }
+                      }
+
+                      if(!InsideTask){
+                        AllInsideTask=false;
+                        break;
+                      }
+                    }
+                    //If all are in tasks, check if all the tasks are syncronized with the main
+                    if(AllInsideTask){
+                      bool AllSynchronized= true;
+                      for( auto ThisTask: TaskWithCall){
+                        /*
+                        bool isPrivatized= false;
+                        for(auto VarScope : ThisTask.DSAInfo.Private){
+                          if(VarScope == Var) isPrivatized =true;
+                        }
+                        for(auto VarScope : ThisTask.DSAInfo.Firstprivate){
+                          if(VarScope == Var) isPrivatized =true;
+                        }
+                        if(isPrivatized) continue;
+                        */
+                        if(!existsTaskDependency(*ThisTask, *SelectedTask)){
+                          AllSynchronized=false;
+                          break;
+                        }
+                      }
+                      // If they are syncronized, erase the last values added, else mark ConcurrentUseInTask as true
+                      if(AllSynchronized){
+                        //Restore
+                        UsedInConcurrent =PreviousUsedInConcurrent;
+                        for(int i=0; i< numAdditions; i++)
+                          UsedInConcurrentValues.pop_back();
+                      }
+                      else{
+                        for(int i=0; i< numAdditions; i++)
+                          UsedInConcurrentValues[UsedInConcurrentValues.size()-1-i].ConcurrentUseInTask=true;
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+     // Auxiliar vectors for storing already visited functions and blocks
+      SmallPtrSet<BasicBlock *, 10> AnalizedBasicBlocks;
+      SmallPtrSet<Function *, 10> AnalyzedFunctions;
+
+      // Analyze the first use inside the task, to know if it is a read or a
+      // write
+      for (User *U : Var->users()) {
+        if (!dyn_cast<Instruction>(U)) {
+          // Case the use is not an instruction
+          for (auto &AccessToCheck : UsedInTaskValues) {
+            AnalizedBasicBlocks.clear();
+            AnalyzedFunctions.clear();
+            analyzeFirstTaskUse(SelectedTask->Entry->getParent(), U,
+                                SelectedTask->Exit, SelectedTask->Entry,
+                                &AnalizedBasicBlocks, &AnalyzedFunctions,
+                                AccessToCheck, BAA, BEFORE_ENTRY, true);
+          }
+        }
+      }
+
+      // Case the use is an instruction
+      for (auto &AccessToCheck : UsedInTaskValues) {
+        AnalizedBasicBlocks.clear();
+        AnalyzedFunctions.clear();
+        analyzeFirstTaskUse(SelectedTask->Entry->getParent(), Var,
+                            SelectedTask->Exit, SelectedTask->Entry,
+                            &AnalizedBasicBlocks, &AnalyzedFunctions,
+                            AccessToCheck, BAA , BEFORE_ENTRY, true);
+      }
+
+      // Analyze variable is alive after next sync
+      for (SyncInfo *nextSync : SelectedTask->PostSyncs)
+        for (auto &AccessToCheck : UsedInTaskValues) {
+          AnalizedBasicBlocks.clear();
+          AnalyzedFunctions.clear();
+          for (auto U : Var->users())
+            if (!dyn_cast<Instruction>(U))
+              analyzeFirstTaskUse(nextSync->Sync->getParent(), U, nullptr,
+                             nextSync->Sync, &AnalizedBasicBlocks,
+                             &AnalyzedFunctions, AccessToCheck, BAA, AFTER_SYNC,
+                             true);
+          AnalizedBasicBlocks.clear();
+          AnalyzedFunctions.clear();
+          analyzeFirstTaskUse(nextSync->Sync->getParent(), Var, nullptr,
+                         nextSync->Sync, &AnalizedBasicBlocks,
+                         &AnalyzedFunctions, AccessToCheck, BAA, AFTER_SYNC,
+                         true);
+        }
+
+      // Analyze variable is alive after task exit
+      for (auto &SyncPoint : SelectedTask->PostSyncs) {
+        std::vector<std::vector<BasicBlock *>> FinalPaths;
+        getPaths(SelectedTask->Exit, SyncPoint->Sync, FinalPaths, DT, false);
+        for (auto &Node : FinalPaths) {
+          for (auto &BB : Node) {
+            for (auto &AccessToCheck : UsedInTaskValues) {
+              AnalizedBasicBlocks.clear();
+              AnalyzedFunctions.clear();
+              for (auto U : Var->users())
+                if (!dyn_cast<Instruction>(U))
+                  analyzeFirstTaskUse(BB, U, SyncPoint->Sync, SelectedTask->Exit,
+                                 &AnalizedBasicBlocks, &AnalyzedFunctions,
+                                 AccessToCheck, BAA, AFTER_EXIT, false);
+
+              AnalizedBasicBlocks.clear();
+              AnalyzedFunctions.clear();
+              analyzeFirstTaskUse(BB, Var, SyncPoint->Sync, SelectedTask->Exit,
+                             &AnalizedBasicBlocks, &AnalyzedFunctions,
+                             AccessToCheck, BAA, AFTER_EXIT, false);
+            }
+          }
+        }
+      }
+
+      // Check if the variable is global
+      if (dyn_cast<GlobalValue>(Var))
+        IsGlobalVariable = true;
+
+      LLVM_DEBUG(dbgs() << "Var " << Var->getName() << " is "
+                        << VarUseToString[UsedInConcurrent]
+                        << " in a concurrent region and "
+                        << VarUseToString[UsedInTask] << " inside the task"
+                        << ", global: " << IsGlobalVariable << " Composited: "
+                        << IsComposited << " Pointer " << IsPointer << " \n");
+      SmallVector<ValueAccess, 4> DefinitiveUsedValues;
+      SmallVector<ValueAccess, 4> ProcessedValueAccess;
+
+      SmallVector<ValueAccess, 4> CopyUsedInTaskValues = UsedInTaskValues;
+      // Eliminate uses of same memory address
+      for (ValueAccess FirstTaskMemUse : UsedInTaskValues) {
+
+        bool Already = false;
+        for (auto &VA : ProcessedValueAccess) {
+          if ((FirstTaskMemUse.MemLoc.Ptr != nullptr &&
+               VA.MemLoc.Ptr != nullptr) &&
+              ((FirstTaskMemUse.I->getFunction() != VA.I->getFunction()) ||
+               (BAA.alias(FirstTaskMemUse.MemLoc, VA.MemLoc) != NoAlias))) {
+            Already = true;
+            break;
+          }
+        }
+        if (Already)
+          continue;
+        ProcessedValueAccess.push_back(FirstTaskMemUse);
+
+        SmallVector<VarUse, 4> Scopes;
+        Scopes.push_back(FirstTaskMemUse.Use);
+
+        for (ValueAccess SecondTaskMemUse : UsedInTaskValues) {
+          if (FirstTaskMemUse.I != SecondTaskMemUse.I &&
+              FirstTaskMemUse.MemLoc.Ptr != nullptr &&
+              SecondTaskMemUse.MemLoc.Ptr != nullptr) {
+            if ((FirstTaskMemUse.I->getFunction() !=
+                 SecondTaskMemUse.I->getFunction()) ||
+                (BAA.alias(FirstTaskMemUse.MemLoc, SecondTaskMemUse.MemLoc) !=
+                 NoAlias)) {
+              Scopes.push_back(SecondTaskMemUse.Use);
+            }
+          }
+        }
+
+        VarUse FinalUse = NOT_USED;
+        for (auto TypeOfUse : Scopes) {
+          if (TypeOfUse == UNKNOWN) {
+            FinalUse = TypeOfUse;
+            break;
+          }
+          if (FinalUse == NOT_USED ||
+              (TypeOfUse == WRITTEN && FinalUse == READED))
+            FinalUse = TypeOfUse;
+        }
+        FirstTaskMemUse.Use = FinalUse;
+        DefinitiveUsedValues.push_back(FirstTaskMemUse);
+      }
+      UsedInTaskValues = DefinitiveUsedValues;
+
+      DefinitiveUsedValues.clear();
+      ProcessedValueAccess.clear();
+
+      // Eliminate uses of same memory address
+      for (ValueAccess &FirstConcurrentMemUse : UsedInConcurrentValues) {
+
+        bool Already = false;
+        for (auto &VA : ProcessedValueAccess) {
+          if ((FirstConcurrentMemUse.MemLoc.Ptr != nullptr &&
+               VA.MemLoc.Ptr != nullptr) &&
+              ((FirstConcurrentMemUse.I->getFunction() !=
+                VA.I->getFunction()) ||
+               (BAA.alias(FirstConcurrentMemUse.MemLoc, VA.MemLoc) !=
+                NoAlias))) {
+            Already = true;
+            break;
+          }
+        }
+        if (Already)
+          continue;
+        ProcessedValueAccess.push_back(FirstConcurrentMemUse);
+
+        SmallVector<VarUse, 4> Scopes;
+        Scopes.push_back(FirstConcurrentMemUse.Use);
+
+        for (ValueAccess SecondConcurrentMemUse : UsedInConcurrentValues) {
+          if (FirstConcurrentMemUse.I != SecondConcurrentMemUse.I &&
+              FirstConcurrentMemUse.MemLoc.Ptr != nullptr &&
+              SecondConcurrentMemUse.MemLoc.Ptr != nullptr) {
+            if ((FirstConcurrentMemUse.I->getFunction() !=
+                 SecondConcurrentMemUse.I->getFunction()) ||
+                (BAA.alias(FirstConcurrentMemUse.MemLoc,
+                           SecondConcurrentMemUse.MemLoc) != NoAlias)) {
+              Scopes.push_back(SecondConcurrentMemUse.Use);
+              //Required to know if there is a concurrent use outside the task, since we are eliminating it
+              if(FirstConcurrentMemUse.ConcurrentUseInTask == true
+              && SecondConcurrentMemUse.ConcurrentUseInTask == false){
+                FirstConcurrentMemUse.ConcurrentUseInTask= false;
+              } 
+            }
+          }
+        }
+
+        VarUse FinalUse = NOT_USED;
+        for (auto TypeOfUse : Scopes) {
+          if (TypeOfUse == UNKNOWN) {
+            FinalUse = TypeOfUse;
+            break;
+          }
+          if (FinalUse == NOT_USED ||
+              (TypeOfUse == WRITTEN && FinalUse == READED))
+            FinalUse = TypeOfUse;
+        }
+        FirstConcurrentMemUse.Use = FinalUse;
+        DefinitiveUsedValues.push_back(FirstConcurrentMemUse);
+      }
+      UsedInConcurrentValues = DefinitiveUsedValues;
+
+      // Analyze variables that satisfy the conditions
+      if (UsedInTask != UNKNOWN && UsedInTask != NOT_USED &&
+          UsedInConcurrent != UNKNOWN) {
+
+        SmallVector<MemoryAccessDescription, 4> AllUses;
+        SmallVector<DSAValue, 4> DSA;
+
+        for (ValueAccess TaskMemUse : UsedInTaskValues) {
+
+          VarUse LocalUsedInTask = TaskMemUse.Use;
+          VarUse LocalUsedInConcurrent = NOT_USED;
+          VarUse FirstTaskUse = TaskMemUse.FirstTaskUse;
+          bool IsAliveAfterNextSync = TaskMemUse.IsAliveAfterNextSync;
+          bool Found = false;
+          LLVM_DEBUG(dbgs() << "Alive before entry: " << TaskMemUse.IsAliveBeforeEntry << " Alive after Exit: " << TaskMemUse.IsAliveAfterExit << " Alive after next sync: " << TaskMemUse.IsAliveAfterNextSync << " \n");
+
+          for (ValueAccess ConcurrentMemUse : UsedInConcurrentValues) {
+
+            if ((TaskMemUse.I->getFunction() !=
+                 ConcurrentMemUse.I->getFunction()) ||
+                BAA.alias(TaskMemUse.MemLoc, ConcurrentMemUse.MemLoc) !=
+                    NoAlias) {
+              Found = true;
+              LocalUsedInConcurrent = ConcurrentMemUse.Use;
+              AllUses.push_back({LocalUsedInTask, LocalUsedInConcurrent,
+                                 FirstTaskUse, IsAliveAfterNextSync,
+                                 ConcurrentMemUse.ConcurrentUseInTask});
+            }
+          }
+          if (!Found) {
+            AllUses.push_back({LocalUsedInTask, LocalUsedInConcurrent,
+                               FirstTaskUse, IsAliveAfterNextSync, false});
+          }
+        }
+
+        for (auto ThisUse : AllUses) {
+          VarUse TaskUse = ThisUse.UsedInTask;
+          VarUse ConcurrentUse = ThisUse.UsedInConcurrent;
+          VarUse FirstInTask = ThisUse.FirstTaskUse;
+          bool IsAliveAfterNextSync = ThisUse.IsAliveAfterNextSync;
+          bool ConcurrentUseInTask = ThisUse.ConcurrentUseInTask;
+
+          LLVM_DEBUG(dbgs()
+                     << " Use found, task use " << VarUseToString[TaskUse]
+                     << " ,concurrent use " << VarUseToString[ConcurrentUse]
+                     << " ,first in task " << VarUseToString[FirstInTask]
+                     << " , is alive " << IsAliveAfterNextSync
+                     << " , ConcurrentUseInTask " << ConcurrentUseInTask
+                     << " \n");
+
+          if (ConcurrentUse == NOT_USED) {
+            if (TaskUse == READED)
+              DSA.push_back(SHARED_OR_FIRSTPRIVATE);
+            else if (TaskUse == WRITTEN) {
+              if (IsGlobalVariable || IsAliveAfterNextSync)
+                DSA.push_back(SHARED);
+              else if (FirstInTask == WRITTEN)
+                DSA.push_back(PRIVATE);
+              else if (FirstInTask == READED || FirstInTask == UNKNOWN)
+                DSA.push_back(SHARED_OR_FIRSTPRIVATE);
+            }
+          } else {
+            if (TaskUse == READED && ConcurrentUse == READED)
+              DSA.push_back(SHARED_OR_FIRSTPRIVATE);
+            else if (TaskUse == WRITTEN || ConcurrentUse == WRITTEN) {
+              // TODO: No Data Race (critical section)
+              if (AutoDeps) {
+                if (IsAliveAfterNextSync && !ConcurrentUseInTask)
+                  DSA.push_back(UNDEF);
+                else if (!ConcurrentUseInTask) {
+                  if (FirstInTask == WRITTEN)
+                    DSA.push_back(RACEPRIVATE);
+                  else
+                    DSA.push_back(RACEFIRSTPRIVATE);
+                } else {
+                  dbgs()<< "Possible race condition with other tasks, running Autodeps \n";
+                  AutoDepsActivated=true;
+                  DSA.push_back(SHARED);
+                }
+              } else {
+                if (IsAliveAfterNextSync)
+                  DSA.push_back(UNDEF);
+                else if (FirstInTask == WRITTEN)
+                  DSA.push_back(RACEPRIVATE);
+                else
+                  DSA.push_back(RACEFIRSTPRIVATE);
+              }
+            }
+          }
+        }
+
+        if (IsComposited) {
+
+          SmallVector<std::pair<DSAValue, DSAValue>, 4> DSAPairs;
+
+          for (int i = 0; i < (int)DSA.size(); i++)
+            for (int j = i; j < (int)DSA.size(); j++)
+              DSAPairs.push_back({DSA[i], DSA[j]});
+
+          bool AllEqual = true;
+          bool AllRaces = true;
+          bool ExistsUndefined = false;
+          bool ConditionA = false;
+          bool ConditionB = true;
+          bool ConditionC = true;
+          bool ConditionC1 = true;
+          bool ConditionD = false;
+
+          for (auto Pair : DSAPairs) {
+            if (Pair.first != Pair.second)
+              AllEqual = false;
+
+            if (Pair.first == UNDEF || Pair.second == UNDEF)
+              ExistsUndefined = true;
+
+            if (((Pair.first == RACEFIRSTPRIVATE ||
+                  Pair.first == RACEPRIVATE) &&
+                 Pair.second == SHARED) ||
+                (((Pair.second == RACEFIRSTPRIVATE ||
+                   Pair.second == RACEPRIVATE) &&
+                  Pair.first == SHARED)))
+              ConditionA = true;
+
+            if (!((Pair.first == SHARED_OR_FIRSTPRIVATE ||
+                   Pair.first == SHARED) &&
+                  (Pair.second == SHARED_OR_FIRSTPRIVATE ||
+                   Pair.second == SHARED)))
+              ConditionB = false;
+
+            if (!((Pair.first == RACEPRIVATE || Pair.first == PRIVATE) &&
+                  (Pair.second == RACEPRIVATE || Pair.second == PRIVATE)))
+              ConditionC = false;
+
+            if (!((Pair.first == RACEFIRSTPRIVATE || Pair.first == PRIVATE) &&
+                  (Pair.second == RACEFIRSTPRIVATE || Pair.second == PRIVATE)))
+              ConditionC1 = false;
+
+            if ((Pair.first == SHARED_OR_FIRSTPRIVATE &&
+                 (Pair.second == RACEPRIVATE ||
+                  Pair.second == RACEFIRSTPRIVATE || Pair.second == PRIVATE)) ||
+                (Pair.second == SHARED_OR_FIRSTPRIVATE &&
+                 (Pair.first == RACEPRIVATE || Pair.first == RACEFIRSTPRIVATE ||
+                  Pair.first == PRIVATE)))
+              ConditionD = true;
+
+            if (!((Pair.first == RACEPRIVATE ||
+                   Pair.first == RACEFIRSTPRIVATE) &&
+                  (Pair.second == RACEPRIVATE ||
+                   Pair.second == RACEFIRSTPRIVATE)))
+              AllRaces = false;
+          }
+
+          if (AllEqual || DSA.size() == 1)
+            CorrectedDSA = DSA[0];
+          else if (ExistsUndefined || ConditionA)
+            CorrectedDSA = UNDEF;
+          else if (ConditionB)
+            CorrectedDSA = SHARED;
+          else if (ConditionC)
+            CorrectedDSA = PRIVATE;
+          else if (ConditionD || ConditionC1 || AllRaces)
+            CorrectedDSA = FIRSTPRIVATE;
+          else
+            assert(false && "Error: DSA not found");
+        } else {
+
+          DSAValue FinalDSA = UNINITIALIZED;
+
+          for (auto ThisDSA : DSA) {
+            if (ThisDSA == UNDEF) {
+              FinalDSA = ThisDSA;
+              break;
+            }
+            if (ThisDSA == FIRSTPRIVATE || ThisDSA == RACEFIRSTPRIVATE) {
+              FinalDSA = ThisDSA;
+            }
+            if ((ThisDSA == PRIVATE || ThisDSA == RACEPRIVATE) &&
+                (FinalDSA == SHARED_OR_FIRSTPRIVATE || FinalDSA == SHARED ||
+                 FinalDSA == UNINITIALIZED))
+              FinalDSA = ThisDSA;
+
+            if (ThisDSA == SHARED && (FinalDSA == UNINITIALIZED ||
+                                      FinalDSA == SHARED_OR_FIRSTPRIVATE))
+              FinalDSA = ThisDSA;
+
+            if (ThisDSA == SHARED_OR_FIRSTPRIVATE &&
+                (FinalDSA == UNINITIALIZED))
+              FinalDSA = ThisDSA;
+          }
+
+          CorrectedDSA = FinalDSA;
+
+          assert(CorrectedDSA != UNINITIALIZED && "Error: DSA not found");
+        }
+
+        if (CorrectedDSA == RACEPRIVATE){
+          CorrectedDSA = PRIVATE;
+          dbgs() << "Race condition detected, can not be solved with autodeps, privatizing the variable \n";
+        }
+        else if (CorrectedDSA == RACEFIRSTPRIVATE){
+          dbgs() << "Race condition detected, can not be solved with autodeps, firstprivatizing the variable \n";
+          CorrectedDSA = FIRSTPRIVATE;
+        }
+      }
+
+      bool isUnknown = false;
+      ;
+      if (CorrectedDSA == UNDEF) {
+        if (UsedInTask != NOT_USED) {
+          isUnknown = true;
+          numUnknown++;
+        }
+        CorrectedDSA = OriginalDSA;
+      } else if (CorrectedDSA == SHARED)
+        numShared++;
+      else if (CorrectedDSA == PRIVATE)
+        numPrivate++;
+      else if (CorrectedDSA == FIRSTPRIVATE)
+        numFirstPrivate++;
+      else if (CorrectedDSA == SHARED_OR_FIRSTPRIVATE) {
+        if (IsComposited || IsPointer) {
+          numShared++;
+        } else {
+          numFirstPrivate++;
+        }
+      }
+
+      if (CorrectedDSA == SHARED)
+        SelectedTask->DirEnv.DSAInfo.Shared.insert(Var);
+      else if (CorrectedDSA == PRIVATE)
+        SelectedTask->DirEnv.DSAInfo.Private.insert(Var);
+      else if (CorrectedDSA == FIRSTPRIVATE)
+        SelectedTask->DirEnv.DSAInfo.Firstprivate.insert(Var);
+      else if (CorrectedDSA == SHARED_OR_FIRSTPRIVATE) {
+        if (IsComposited || IsPointer) {
+          SelectedTask->DirEnv.DSAInfo.Shared.insert(Var);
+          CorrectedDSA = SHARED;
+        } else {
+          SelectedTask->DirEnv.DSAInfo.Firstprivate.insert(Var);
+          CorrectedDSA = FIRSTPRIVATE;
+        }
+      }
+
+      if (PrintVerboseLevel == PV_AutoScoping) {
+        Var->printAsOperand(dbgs(), false);
+        if (isUnknown)
+          dbgs() << " detected scope: UNKNOWN";
+        else
+          dbgs() << " detected scope: " << DSAToString[CorrectedDSA];
+
+        if (CorrectedDSA != OriginalDSA)
+          dbgs() << ", modified original scope was: "
+                 << DSAToString[OriginalDSA];
+
+        dbgs() << " \n";
+      }
+    
+      if (AutoDeps && AutoDepsActivated && CorrectedDSA == SHARED) {
+
+         int VarDependency = DependInfo::DT_unknown;
+
+        for (auto VarUse : CopyUsedInTaskValues) {
+
+          bool UsedBeforeEntry = false;
+          bool UsedAfterExit = VarUse.IsAliveAfterExit;
+          bool ConditionA = true;
+    
+          if (VarUse.IsAliveBeforeEntry) {
+
+            UsedBeforeEntry = true;
+            bool UsedInConcurrent = false;
+            bool UsedInATask = false;
+
+            for (auto ConcurrentUse : UsedInConcurrentValues)
+              if (ConcurrentUse.I == VarUse.I)
+                UsedInConcurrent = true;
+
+            // TODO ONLY TASK at same level
+            for (auto ThisTask : DirectiveFuncInfo.PostOrder) {
+              if (orderedInstructions(DT, ThisTask->Entry, VarUse.I) &&
+                  !orderedInstructions(DT, ThisTask->Exit, VarUse.I))
+                UsedInATask = true;
+            }
+
+            if (!UsedInATask && UsedInConcurrent) {
+              ConditionA = false;
+            }
+          }
+
+          if (UsedBeforeEntry && UsedAfterExit && UsedInTask==WRITTEN) {
+            VarDependency= DependInfo::DT_inout;
+            //dbgs() << "VAR SHOULD BE INOUT \n";
+          } else if (UsedAfterExit && UsedInTask==WRITTEN) {
+             if(VarDependency == DependInfo::DT_unknown)
+              VarDependency = DependInfo::DT_out;
+             else if(VarDependency==DependInfo::DT_in)
+              VarDependency= DependInfo::DT_inout;
+              //dbgs() << "VAR SHOULD BE OUT \n";
+
+          } else if (UsedBeforeEntry) {
+            if (ConditionA){
+              if(VarDependency == DependInfo::DT_unknown)
+              VarDependency = DependInfo::DT_in;
+             else if(VarDependency==DEP_OUT)
+              VarDependency=DependInfo::DT_inout;
+              //dbgs() << "VAR SHOULD BE INPUT \n";
+            }
+          }
+
+          //dbgs() << " Before entry " << UsedBeforeEntry << " After Exit "
+           //      << UsedAfterExit << " Condition A  " << ConditionA << " \n";
+        }
+
+        if (VarDependency != DependInfo::DT_unknown) {
+          bool correctDEP = false;
+          for (auto &Dep : SelectedTask->DirEnv.DependsInfo.List) {
+            if (Var == Dep->Base && Dep->DepType == VarDependency) {
+              correctDEP = true;
+              break;
+            }
+          }
+          if (!correctDEP) {
+            dbgs() << "\033[1;31mPossible ERROR: ";
+            Var->printAsOperand(dbgs(), false);
+            dbgs() << " should be " << VarDependencyToString[VarDependency]
+                   << " \033[0m\n";
+          } else {
+            dbgs() << "\033[1;32mDependencies seems OK! \033[0m\n";
+          }
+        }
+      } else if (!AutoDepsActivated) {
+        bool depExists= false;
+        for (auto &Dep : SelectedTask->DirEnv.DependsInfo.List) {
+          if (Var == Dep->Base) {
+            depExists = true;
+            break;
+          }
+        }
+        
+        if(depExists){
+          dbgs() << "\033[1;35mPossible Warning: ";
+          Var->printAsOperand(dbgs(), false);
+          dbgs() << " should not be a dependency \033[0m\n";
+        }
+      }
+    }
+    LLVM_DEBUG(dbgs() << "Num SHARED " << numShared << " Num PRIVATE "
+                      << numPrivate << " Num FIRSTPRIVATE " << numFirstPrivate
+                      << " Num UNDEF " << numUnknown << " \n");
+
+    GnumShared += numShared;
+    GnumPrivate += numPrivate;
+    GnumFirstPrivate += numFirstPrivate;
+    GnumUnknown += numUnknown;
+  }
+  if ((GnumShared + GnumPrivate + GnumUnknown + GnumFirstPrivate) > 0)
+    LLVM_DEBUG(dbgs() << "GLOBAL Num SHARED " << GnumShared << " Num PRIVATE "
+                      << GnumPrivate << " Num FIRSTPRIVATE " << GnumFirstPrivate
+                      << " Num UNDEF " << GnumUnknown << " \n");
 }
 
 // OmpSsRegionAnalysisLegacyPass
 //
 bool OmpSsRegionAnalysisLegacyPass::runOnFunction(Function &F) {
   auto &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
-  ORA = OmpSsRegionAnalysis(F, DT);
+  auto &BAA = getAnalysis<AAResultsWrapperPass>().getAAResults();
+  ORA = OmpSsRegionAnalysis(F, DT, BAA);
 
   return false;
 }
@@ -966,6 +2791,7 @@ void OmpSsRegionAnalysisLegacyPass::releaseMemory() {
 void OmpSsRegionAnalysisLegacyPass::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.setPreservesAll();
   AU.addRequired<DominatorTreeWrapperPass>();
+  AU.addRequired<AAResultsWrapperPass>();
 }
 
 char OmpSsRegionAnalysisLegacyPass::ID = 0;
@@ -983,6 +2809,7 @@ OmpSsRegionAnalysis& OmpSsRegionAnalysisLegacyPass::getResult() { return ORA; }
 INITIALIZE_PASS_BEGIN(OmpSsRegionAnalysisLegacyPass, "ompss-2-regions",
                       "Classify OmpSs-2 inside region uses", false, true)
 INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(AAResultsWrapperPass)
 INITIALIZE_PASS_END(OmpSsRegionAnalysisLegacyPass, "ompss-2-regions",
                     "Classify OmpSs-2 inside region uses", false, true)
 
@@ -994,7 +2821,9 @@ AnalysisKey OmpSsRegionAnalysisPass::Key;
 OmpSsRegionAnalysis OmpSsRegionAnalysisPass::run(
     Function &F, FunctionAnalysisManager &FAM) {
   auto *DT = &FAM.getResult<DominatorTreeAnalysis>(F);
-  return OmpSsRegionAnalysis(F, *DT);
+  auto *BAA = &FAM.getResult<AAManager>(F);
+
+  return OmpSsRegionAnalysis(F, *DT, *BAA);
 }
 
 // OmpSsRegionPrinterPass
