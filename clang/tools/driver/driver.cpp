@@ -513,6 +513,10 @@ int main(int Argc, const char **Argv) {
       break;
     }
   }
+  //Add -O2 flag to force loop unrolling when using static tdgs
+  if(isStaticTdg){
+    Args.push_back("-O2");
+  }
   //Remove -o flag when using static tdgs
   SmallVector<const char *, 256>  ArgsCopy = Args;
   if (isStaticTdg) {
@@ -522,6 +526,7 @@ int main(int Argc, const char **Argv) {
         break;
       }
     }
+
   }
   std::unique_ptr<Compilation> C(TheDriver.BuildCompilation(ArgsCopy));
   int Res = 1;
@@ -583,6 +588,7 @@ int main(int Argc, const char **Argv) {
         if(has_suffix(std::string(*it), ".c") || has_suffix(std::string(*it), ".cpp")){
           size_t lastindex = std::string(*it).find_last_of(".");
           std::string rawFileName = std::string(*it).substr(0, lastindex) + ".o";
+          rawFileName = rawFileName.substr(rawFileName.find_last_of("/\\") + 1);
           FileNames.push_back(strcpy(new char[rawFileName.length() + 1], rawFileName.c_str()));
           it = Args.erase(it);
         }

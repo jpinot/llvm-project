@@ -1363,7 +1363,7 @@ void EmitAssemblyHelper::EmitAssemblyWithNewPassManager(
           });
     }
 
-    if (LangOpts.OpenMPTaskGraph) {
+    if (LangOpts.OpenMPTaskGraph && LangOpts.OpenMPStaticTaskGraph) {
       PB.registerOptimizerLastEPCallback(
           [](ModulePassManager &MPM, PassBuilder::OptimizationLevel Level) {
             if (Level != PassBuilder::OptimizationLevel::O0 && Level != PassBuilder::OptimizationLevel::O1)

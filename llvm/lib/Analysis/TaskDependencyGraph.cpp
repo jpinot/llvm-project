@@ -286,11 +286,11 @@ void TaskDependencyGraphData::print_tdg() {
 
 void TaskDependencyGraphData::print_tdg_to_dot(StringRef ModuleName) {
 
-  std::string fileName = ModuleName.str();
-  size_t lastindex = fileName.find_last_of(".");
-  std::string rawFileName = fileName.substr(0, lastindex);
+  //std::string fileName = ModuleName.str();
+  //size_t lastindex = fileName.find_last_of(".");
+  //std::string rawFileName = fileName.substr(0, lastindex);
 
-  std::ofstream tdgfile(rawFileName + "_tdg.dot");
+  std::ofstream tdgfile("tdg.dot");
 
   if (!tdgfile.is_open()) {
     dbgs() << "Error Opening TDG file \n";
