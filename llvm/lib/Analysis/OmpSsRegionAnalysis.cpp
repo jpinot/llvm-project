@@ -26,6 +26,7 @@
 using namespace llvm;
 using namespace autoscope;
 
+#define DEBUG_TYPE "ompss-2-regions"
 
 void analyzeFirstTaskUse(BasicBlock *BB, Value *Var, Instruction *Exit,
                          Instruction *Entry,
