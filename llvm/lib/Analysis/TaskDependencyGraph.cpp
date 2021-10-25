@@ -391,7 +391,7 @@ void TaskDependencyGraphData::generate_analysis_tdg_file(StringRef ModuleName) {
     offin += FunctionTasks[i].predecessors.size();
     offout += FunctionTasks[i].successors.size();
     if (i != (int)FunctionTasks.size() - 1)
-      tdgfile << ",";
+      tdgfile << ",\n";
     else
       tdgfile << "};\n";
   }
@@ -473,7 +473,7 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName) {
 
     offout += FunctionTasks[i].successors.size();
     if (i != (int)FunctionTasks.size() - 1)
-      tdgfile << ",";
+      tdgfile << ",\n";
     else
       tdgfile << "};\n";
   }
