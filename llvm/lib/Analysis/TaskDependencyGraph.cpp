@@ -292,7 +292,7 @@ void TaskDependencyGraphData::print_tdg_to_dot(StringRef ModuleName) {
   std::error_code EC;
   llvm::raw_fd_ostream Tdgfile("tdg.dot", EC);
 
-  if (!Tdgfile.has_error()) {
+  if (Tdgfile.has_error()) {
     llvm_unreachable("Error Opening TDG file \n");
   }
 
@@ -375,7 +375,7 @@ void TaskDependencyGraphData::generate_analysis_tdg_file(StringRef ModuleName) {
   int offin = 0;
   int offout = 0;
 
-  if (!Tdgfile.has_error()) {
+  if (Tdgfile.has_error()) {
     llvm_unreachable("Error Opening TDG file \n");
   }
   Tdgfile << "struct tdg\n{\n";
@@ -425,7 +425,7 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName) {
   std::error_code EC;
   llvm::raw_fd_ostream Tdgfile("tdg.c", EC);
 
-  if (!Tdgfile.has_error()) {
+  if (Tdgfile.has_error()) {
     llvm_unreachable("Error Opening TDG file \n");
   }
 
@@ -463,10 +463,10 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName) {
   Tdgfile << "struct kmp_record_info kmp_tdg_0[" << FunctionTasks.size()
           << "] = {";
   for (int i = 0; i < (int)FunctionTasks.size(); i++) {
-    Tdgfile << "{ .static_id =" << FunctionTasks[i].id
+    Tdgfile << "{ .static_id = " << FunctionTasks[i].id
             << ", .task = NULL, .succesors = &kmp_tdg_outs_0[" << offout << "]"
-            << ", .nsuccessors =" << FunctionTasks[i].successors.size()
-            << ", .npredecessors_counter ="
+            << ", .nsuccessors = " << FunctionTasks[i].successors.size()
+            << ", .npredecessors_counter = "
             << FunctionTasks[i].predecessors.size()
             << ", .npredecessors = " << FunctionTasks[i].predecessors.size()
             << ", .successors_size = 0"
