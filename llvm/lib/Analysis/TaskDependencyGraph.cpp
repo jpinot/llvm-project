@@ -1,4 +1,5 @@
-//===- TaskDependencyGraph.cpp - Generation of a static task dependency graph
+//===- TaskDependencyGraph.cpp - Generation of a static OpenMP task dependency
+//graph
 //--------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -6,7 +7,7 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
-// Detects single entry single exit regions in the control flow graph.
+// Generates an static OpenMP task dependency graph.
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Analysis/TaskDependencyGraph.h"
@@ -25,11 +26,9 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
-#include <fstream>
-#include <iostream>
 
 using namespace llvm;
-const StringRef color_names[] = {
+const StringRef Color_names[] = {
     "aquamarine3", "crimson",         "chartreuse",  "blue2",
     "darkorchid3", "darkgoldenrod1",  "deeppink4",   "gray19",
     "indigo",      "indianred",       "forestgreen", "navy",
@@ -135,9 +134,10 @@ void TaskDependencyGraphData::obtainTaskInfo(TaskInfo &TaskFound,
                         dyn_cast<ConstantInt>(GEP->getOperand(i))) {
                   CurrentTaskDepInfo.index.push_back(CI->getZExtValue());
                 } else {
-                  llvm_unreachable("Not constant access, can not compute task "
-                         "dependencies, check that loops are correctly "
-                         "unrolled \n");
+                  llvm_unreachable(
+                      "not constant access, can not compute task "
+                      "dependencies, check that loops are correctly "
+                      "unrolled \n");
                 }
               }
             } else {
@@ -181,7 +181,7 @@ void TaskDependencyGraphData::obtainTaskInfo(TaskInfo &TaskFound,
                   dyn_cast<ConstantInt>(TypeStore->getValueOperand())) {
             CurrentTaskDepInfo.type = CI->getZExtValue();
           } else {
-            llvm_unreachable("Type is not constant, something is wrong\n");
+            llvm_unreachable("type is not constant, something is wrong\n");
           }
         }
       }
@@ -213,20 +213,20 @@ bool TaskDependencyGraphData::checkDependency(TaskDependInfo &Source,
 
 // Depth First Search to look for transitive edges
 void TaskDependencyGraphData::traverse_node(
-    SmallVectorImpl<uint64_t> &edges_to_check, int node, int master,
-    int nesting_level, std::vector<bool> &Visited) {
+    SmallVectorImpl<uint64_t> &Edges_to_check, int Node, int Master,
+    int Nesting_level, std::vector<bool> &Visited) {
 
-  Visited[node] = true;
+  Visited[Node] = true;
 
-  for (int i = 0; i < (int)FunctionTasks[node].successors.size(); i++) {
-    int successor = FunctionTasks[node].successors[i];
-    for (int j = 0; j < (int)edges_to_check.size(); j++) {
-      int edge = edges_to_check[j];
-      if (edge == successor) {
+  for (int i = 0; i < (int)FunctionTasks[Node].successors.size(); i++) {
+    int Successor = FunctionTasks[Node].successors[i];
+    for (int j = 0; j < (int)Edges_to_check.size(); j++) {
+      int edge = Edges_to_check[j];
+      if (edge == Successor) {
         // Remove edge
-        edges_to_check.erase(edges_to_check.begin() + j);
+        Edges_to_check.erase(Edges_to_check.begin() + j);
         for (int x = 0; x < (int)FunctionTasks[edge].predecessors.size(); x++) {
-          if ((int)FunctionTasks[edge].predecessors[x] == master) {
+          if ((int)FunctionTasks[edge].predecessors[x] == Master) {
             FunctionTasks[edge].predecessors.erase(
                 FunctionTasks[edge].predecessors.begin() + x);
             break;
@@ -235,8 +235,8 @@ void TaskDependencyGraphData::traverse_node(
         break;
       }
     }
-    if (Visited[successor] == false && nesting_level < MaxNesting)
-      traverse_node(edges_to_check, successor, master, nesting_level + 1,
+    if (Visited[Successor] == false && Nesting_level < MaxNesting)
+      traverse_node(Edges_to_check, Successor, Master, Nesting_level + 1,
                     Visited);
   }
 }
@@ -286,73 +286,73 @@ void TaskDependencyGraphData::print_tdg() {
 
 void TaskDependencyGraphData::print_tdg_to_dot(StringRef ModuleName) {
 
-  //std::string fileName = ModuleName.str();
-  //size_t lastindex = fileName.find_last_of(".");
-  //std::string rawFileName = fileName.substr(0, lastindex);
+  // std::string fileName = ModuleName.str();
+  // size_t lastindex = fileName.find_last_of(".");
+  // std::string rawFileName = fileName.substr(0, lastindex);
+  std::error_code EC;
+  llvm::raw_fd_ostream Tdgfile("tdg.dot", EC);
 
-  std::ofstream tdgfile("tdg.dot");
-
-  if (!tdgfile.is_open()) {
-    dbgs() << "Error Opening TDG file \n";
-    exit(1);
+  if (!Tdgfile.has_error()) {
+    llvm_unreachable("Error Opening TDG file \n");
   }
 
-  tdgfile << "digraph TDG {\n";
-  tdgfile << "   compound=true\n";
-  tdgfile << "   subgraph cluster_0 {\n";
-  tdgfile << "      label=TDG_0\n";
+  Tdgfile << "digraph TDG {\n";
+  Tdgfile << "   compound=true\n";
+  Tdgfile << "   subgraph cluster_0 {\n";
+  Tdgfile << "      label=TDG_0\n";
 
   for (auto &Task : FunctionTasks) {
 
-    StringRef color = "";
-    StringRef ident = Task.ident;
+    StringRef Color = "";
+    StringRef Ident = Task.ident;
 
     for (auto &identColor : ColorMap) {
-      if (identColor.ident == ident)
-        color = identColor.color;
+      if (identColor.ident == Ident)
+        Color = identColor.color;
     }
 
-    if (color.equals("")) {
-      color = color_names[ColorsUsed];
-      ColorMap.push_back({ident, color_names[ColorsUsed]});
-      ColorsUsed++;
+    if (Color.equals("")) {
+      Color = Color_names[ColorsUsed];
+      ColorMap.push_back({Ident, Color_names[ColorsUsed]});
+      size_t Ncolors = sizeof(Color_names) / sizeof(Color_names[0]);
+      ColorsUsed = (ColorsUsed + 1) % Ncolors;
     }
 
-    tdgfile << "      " << Task.id << "[color=" << color.str()
+    Tdgfile << "      " << Task.id << "[color=" << Color.str()
             << ",style=bold]\n";
   }
-  tdgfile << "   }\n";
+  Tdgfile << "   }\n";
 
   for (int i = 0; i < (int)FunctionTasks.size(); i++) {
 
     int nsuccessors = FunctionTasks[i].successors.size();
     if (nsuccessors) {
       for (int j = 0; j < nsuccessors; j++) {
-        tdgfile << "   " << FunctionTasks[i].id << " -> "
+        Tdgfile << "   " << FunctionTasks[i].id << " -> "
                 << FunctionTasks[i].successors[j] << " \n";
       }
     } else {
-      tdgfile << "   " << FunctionTasks[i].id << " \n";
+      Tdgfile << "   " << FunctionTasks[i].id << " \n";
     }
   }
 
-  tdgfile << "   node [shape=plaintext];\n";
-  tdgfile << "    subgraph cluster_1000 {\n";
-  tdgfile << "      label=\"User functions:\"; style=\"rounded\";\n";
-  tdgfile << " user_funcs [label=<<table border=\"0\" cellspacing=\"10\" "
+  Tdgfile << "   node [shape=plaintext];\n";
+  Tdgfile << "    subgraph cluster_1000 {\n";
+  Tdgfile << "      label=\"User functions:\"; style=\"rounded\";\n";
+  Tdgfile << " user_funcs [label=<<table border=\"0\" cellspacing=\"10\" "
              "cellborder=\"0\">\n";
 
   for (auto &identColor : ColorMap) {
-    tdgfile << "      <tr>\n";
-    tdgfile << "         <td bgcolor=\"" << identColor.color.str()
+    Tdgfile << "      <tr>\n";
+    Tdgfile << "         <td bgcolor=\"" << identColor.color.str()
             << "\" width=\"15px\" border=\"1\"></td>\n";
 
-    tdgfile << "         <td>" << identColor.ident.str() << "</td>\n";
-    tdgfile << "      </tr>\n";
+    Tdgfile << "         <td>" << identColor.ident.str() << "</td>\n";
+    Tdgfile << "      </tr>\n";
   }
-  tdgfile << "      </table>>]\n";
-  tdgfile << "}}\n";
-  tdgfile.close();
+  Tdgfile << "      </table>>]\n";
+  Tdgfile << "}}\n";
+  Tdgfile.close();
 }
 
 void TaskDependencyGraphData::generate_analysis_tdg_file(StringRef ModuleName) {
@@ -361,7 +361,9 @@ void TaskDependencyGraphData::generate_analysis_tdg_file(StringRef ModuleName) {
   size_t lastindex = fileName.find_last_of(".");
   std::string rawFileName = fileName.substr(0, lastindex);
   */
-  std::ofstream tdgfile("analysis_tdg.c");
+  std::error_code EC;
+  llvm::raw_fd_ostream Tdgfile("analysis_tdg.c", EC);
+
   SmallVector<int, 10> InputList;
   SmallVector<int, 10> OutputList;
   for (int i = 0; i < (int)FunctionTasks.size(); i++) {
@@ -373,46 +375,45 @@ void TaskDependencyGraphData::generate_analysis_tdg_file(StringRef ModuleName) {
   int offin = 0;
   int offout = 0;
 
-  if (!tdgfile.is_open()) {
-    dbgs() << "Error Opening TDG file \n";
-    exit(1);
+  if (!Tdgfile.has_error()) {
+    llvm_unreachable("Error Opening TDG file \n");
   }
-  tdgfile << "struct tdg\n{\n";
-  tdgfile << "  unsigned int id;\n  unsigned int "
+  Tdgfile << "struct tdg\n{\n";
+  Tdgfile << "  unsigned int id;\n  unsigned int "
              "offin;\n  unsigned int offout;\n  "
              "unsigned int nin;\n  unsigned int nout;\n};\n";
-  tdgfile << "struct tdg tdg_tasks[" << FunctionTasks.size() << "] = {";
+  Tdgfile << "struct tdg tdg_tasks[" << FunctionTasks.size() << "] = {";
   for (int i = 0; i < (int)FunctionTasks.size(); i++) {
-    tdgfile << "{ .id =" << FunctionTasks[i].id
-            << ", .offin =" << offin << ", .offout =" << offout
+    Tdgfile << "{ .id =" << FunctionTasks[i].id << ", .offin =" << offin
+            << ", .offout =" << offout
             << ", .nin =" << FunctionTasks[i].predecessors.size()
             << ", nout =" << FunctionTasks[i].successors.size() << "}";
 
     offin += FunctionTasks[i].predecessors.size();
     offout += FunctionTasks[i].successors.size();
     if (i != (int)FunctionTasks.size() - 1)
-      tdgfile << ",\n";
+      Tdgfile << ",\n";
     else
-      tdgfile << "};\n";
+      Tdgfile << "};\n";
   }
-  tdgfile << "unsigned int tdg_ins[" << InputList.size() << "] = {";
+  Tdgfile << "unsigned int tdg_ins[" << InputList.size() << "] = {";
   for (int i = 0; i < (int)InputList.size(); i++) {
-    tdgfile << " " << InputList[i];
+    Tdgfile << " " << InputList[i];
     if (i != (int)InputList.size() - 1)
-      tdgfile << ",";
+      Tdgfile << ",";
     else
-      tdgfile << "};\n";
+      Tdgfile << "};\n";
   }
-  tdgfile << "unsigned int tdg_outs[" << OutputList.size() << "] = {";
+  Tdgfile << "unsigned int tdg_outs[" << OutputList.size() << "] = {";
   for (int i = 0; i < (int)OutputList.size(); i++) {
-    tdgfile << " " << OutputList[i];
+    Tdgfile << " " << OutputList[i];
     if (i != (int)OutputList.size() - 1)
-      tdgfile << ",";
+      Tdgfile << ",";
     else
-      tdgfile << "};\n";
+      Tdgfile << "};\n";
   }
-  tdgfile << "unsigned int tdg_ntasks = " << FunctionTasks.size() << ";\n";
-  tdgfile.close();
+  Tdgfile << "unsigned int tdg_ntasks = " << FunctionTasks.size() << ";\n";
+  Tdgfile.close();
 }
 
 void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName) {
@@ -421,13 +422,13 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName) {
   size_t lastindex = fileName.find_last_of(".");
   std::string rawFileName = fileName.substr(0, lastindex);
   */
+  std::error_code EC;
+  llvm::raw_fd_ostream Tdgfile("tdg.c", EC);
 
-  std::ofstream tdgfile("tdg.c");
-
-  if (!tdgfile.is_open()) {
-    dbgs() << "Error Opening TDG file \n";
-    exit(1);
+  if (!Tdgfile.has_error()) {
+    llvm_unreachable("Error Opening TDG file \n");
   }
+
   SmallVector<int, 10> OutputList;
   SmallVector<int, 2> TdgRoots;
   for (int i = 0; i < (int)FunctionTasks.size(); i++) {
@@ -439,30 +440,30 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName) {
   }
 
   int offout = 0;
-  tdgfile << "#include <stddef.h>\n";
-  tdgfile << "struct kmp_task_t;\nstruct kmp_record_info\n{\n";
-  tdgfile << "  int static_id;\n  struct kmp_task_t *task;\n  int "
+  Tdgfile << "#include <stddef.h>\n";
+  Tdgfile << "struct kmp_task_t;\nstruct kmp_record_info\n{\n";
+  Tdgfile << "  int static_id;\n  struct kmp_task_t *task;\n  int "
              "* succesors;\n  int nsuccessors;\n  "
              "int npredecessors_counter;\n  int npredecessors;\n  int "
              "successors_size;\n};\n";
-  tdgfile << "extern void __kmpc_set_tdg(struct kmp_record_info *tdg, int "
+  Tdgfile << "extern void __kmpc_set_tdg(struct kmp_record_info *tdg, int "
              "ntasks, int *roots, int nroots);\n";
-  tdgfile << "int kmp_tdg_outs_0[" << OutputList.size() << "] = {";
+  Tdgfile << "int kmp_tdg_outs_0[" << OutputList.size() << "] = {";
   if (OutputList.size()) {
     for (int i = 0; i < (int)OutputList.size(); i++) {
-      tdgfile << " " << OutputList[i];
+      Tdgfile << " " << OutputList[i];
       if (i != (int)OutputList.size() - 1)
-        tdgfile << ",";
+        Tdgfile << ",";
       else
-        tdgfile << "};\n";
+        Tdgfile << "};\n";
     }
   } else {
-    tdgfile << "};\n";
+    Tdgfile << "};\n";
   }
-  tdgfile << "struct kmp_record_info kmp_tdg_0[" << FunctionTasks.size()
+  Tdgfile << "struct kmp_record_info kmp_tdg_0[" << FunctionTasks.size()
           << "] = {";
   for (int i = 0; i < (int)FunctionTasks.size(); i++) {
-    tdgfile << "{ .static_id =" << FunctionTasks[i].id
+    Tdgfile << "{ .static_id =" << FunctionTasks[i].id
             << ", .task = NULL, .succesors = &kmp_tdg_outs_0[" << offout << "]"
             << ", .nsuccessors =" << FunctionTasks[i].successors.size()
             << ", .npredecessors_counter ="
@@ -473,22 +474,22 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName) {
 
     offout += FunctionTasks[i].successors.size();
     if (i != (int)FunctionTasks.size() - 1)
-      tdgfile << ",\n";
+      Tdgfile << ",\n";
     else
-      tdgfile << "};\n";
+      Tdgfile << "};\n";
   }
-  tdgfile << "int kmp_tdg_roots[" << TdgRoots.size() << "] = {";
+  Tdgfile << "int kmp_tdg_roots[" << TdgRoots.size() << "] = {";
   for (int i = 0; i < (int)TdgRoots.size(); i++) {
-    tdgfile << " " << TdgRoots[i];
+    Tdgfile << " " << TdgRoots[i];
     if (i != (int)TdgRoots.size() - 1)
-      tdgfile << ",";
+      Tdgfile << ",";
     else
-      tdgfile << "};\n";
+      Tdgfile << "};\n";
   }
-  tdgfile << "void kmp_set_tdg()\n{\n  __kmpc_set_tdg(kmp_tdg_0,"
+  Tdgfile << "void kmp_set_tdg()\n{\n  __kmpc_set_tdg(kmp_tdg_0, "
           << FunctionTasks.size() << ", kmp_tdg_roots, " << TdgRoots.size()
           << ");\n};";
-  tdgfile.close();
+  Tdgfile.close();
 }
 
 void TaskDependencyGraphData::findOpenMPTasks(Function &F, DominatorTree &DT) {
@@ -514,25 +515,24 @@ void TaskDependencyGraphData::findOpenMPTasks(Function &F, DominatorTree &DT) {
             II->getCalledFunction()->getName() == "__kmpc_omp_task_with_deps") {
           TaskInfo TaskFound;
           TaskFound.id = NumTasks;
-          NumTasks++;
-          // Fill Task Deps Info
+          ++NumTasks;
+          // Fill Task Deps and Ident info
           obtainTaskInfo(TaskFound, *II, DT);
           obtainTaskIdent(TaskFound, *II);
-          // Store Task Info
+          // Store Task info
           FunctionTasks.push_back(TaskFound);
         }
       }
       // Look for task without deps
-
       if (CallInst *II = dyn_cast<CallInst>(&I)) {
         if (II->getCalledFunction() &&
             II->getCalledFunction()->getName() == "__kmpc_omp_task") {
           TaskInfo TaskFound;
           TaskFound.id = NumTasks;
-          NumTasks++;
-          // Fill Task Deps Info
+          ++NumTasks;
+          // Fill Task Ident info
           obtainTaskIdent(TaskFound, *II);
-          // Store Task Info
+          // Store Task info
           FunctionTasks.push_back(TaskFound);
         }
       }
@@ -551,13 +551,17 @@ void TaskDependencyGraphData::findOpenMPTasks(Function &F, DominatorTree &DT) {
   for (int i = 0; i < (int)FunctionTasks.size(); i++) {
     for (int j = i + 1; j < (int)FunctionTasks.size(); j++) {
       for (auto FirstTaskDepInfo : FunctionTasks[i].TaskDepInfo) {
+        bool DepExists = false;
         for (auto SecondTaskDepInfo : FunctionTasks[j].TaskDepInfo) {
           if (checkDependency(FirstTaskDepInfo, SecondTaskDepInfo)) {
             FunctionTasks[i].successors.push_back(FunctionTasks[j].id);
             FunctionTasks[j].predecessors.push_back(FunctionTasks[i].id);
+            DepExists = true;
             break;
           }
         }
+        if (DepExists)
+          break;
       }
     }
   }
