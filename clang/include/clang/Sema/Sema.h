@@ -10936,7 +10936,11 @@ public:
                                            SourceLocation StartLoc,
                                            SourceLocation LParenLoc,
                                            SourceLocation EndLoc);
-
+  /// Called on well-formed 'num_preallocs' clause.
+  OMPClause *ActOnOpenMPNumPreallocsClause(Expr *NumPreallocs,
+                                         SourceLocation StartLoc,
+                                         SourceLocation LParenLoc,
+                                         SourceLocation EndLoc);
   /// Called on well-formed 'order' clause.
   OMPClause *ActOnOpenMPOrderClause(OpenMPOrderClauseKind Kind,
                                     SourceLocation KindLoc,

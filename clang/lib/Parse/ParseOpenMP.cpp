@@ -2754,6 +2754,7 @@ OMPClause *Parser::ParseOpenMPClause(OpenMPDirectiveKind DKind,
   switch (CKind) {
   case OMPC_final:
   case OMPC_num_threads:
+  case OMPC_num_preallocs:
   case OMPC_safelen:
   case OMPC_simdlen:
   case OMPC_collapse:

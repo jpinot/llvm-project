@@ -490,6 +490,12 @@ void OMPClauseProfiler::VisitOMPProcBindClause(const OMPProcBindClause *C) { }
 
 void OMPClauseProfiler::VisitOMPTdgTypeClause(const OMPTdgTypeClause *C) { }
 
+void OMPClauseProfiler::VisitOMPNumPreallocsClause(const OMPNumPreallocsClause *C) {
+  VistOMPClauseWithPreInit(C);
+  if (C->getNumPreallocs())
+    Profiler->VisitStmt(C->getNumPreallocs());
+}
+
 void OMPClauseProfiler::VisitOMPUnifiedAddressClause(
     const OMPUnifiedAddressClause *C) {}
 

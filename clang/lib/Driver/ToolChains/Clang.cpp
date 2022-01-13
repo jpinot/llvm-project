@@ -5582,6 +5582,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
       // Forward taskgraph support.
       Args.AddAllArgs(CmdArgs, options::OPT_fopenmp_taskgraph);
       Args.AddAllArgs(CmdArgs, options::OPT_static_tdg);
+      Args.AddAllArgs(CmdArgs, options::OPT_prealloc_tdg);
       break;
     default:
       // By default, if Clang doesn't know how to generate useful OpenMP code

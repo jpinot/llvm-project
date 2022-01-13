@@ -1599,6 +1599,12 @@ void OMPClausePrinter::VisitOMPTdgTypeClause(OMPTdgTypeClause *Node) {
      << ")";
 }
 
+void OMPClausePrinter::VisitOMPNumPreallocsClause(OMPNumPreallocsClause *Node) {
+  OS << "num_preallocs(";
+  Node->getNumPreallocs()->printPretty(OS, nullptr, Policy, 0);
+  OS << ")";
+}
+
 void OMPClausePrinter::VisitOMPUnifiedAddressClause(OMPUnifiedAddressClause *) {
   OS << "unified_address";
 }

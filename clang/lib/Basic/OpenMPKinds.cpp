@@ -133,6 +133,7 @@ unsigned clang::getOpenMPSimpleClauseType(OpenMPClauseKind Kind, StringRef Str,
   case OMPC_if:
   case OMPC_final:
   case OMPC_num_threads:
+  case OMPC_num_preallocs:
   case OMPC_safelen:
   case OMPC_simdlen:
   case OMPC_sizes:
@@ -384,6 +385,7 @@ const char *clang::getOpenMPSimpleClauseTypeName(OpenMPClauseKind Kind,
   case OMPC_if:
   case OMPC_final:
   case OMPC_num_threads:
+  case OMPC_num_preallocs:
   case OMPC_safelen:
   case OMPC_simdlen:
   case OMPC_sizes:

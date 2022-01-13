@@ -21,9 +21,15 @@
 
 #if LIBOMP_TASKGRAPH
 extern kmp_futex_lock_t taskgraph_lock;
-extern kmp_record_info *RecordMap; 
+extern kmp_record_info *RecordMap;
 extern int recording;
 extern int fill_data;
+extern int prealloc;
+extern kmp_task_t *kmp_init_lazy_task(int static_id, kmp_task_t *current_task,
+                                      kmp_int32 gtid);
+extern void insert_to_waiting_tdg(struct kmp_record_info *tdg);
+extern int check_waiting_tdg();
+extern struct kmp_record_info *get_from_waiting_tdg();
 #endif
 
 static inline void __kmp_node_deref(kmp_info_t *thread, kmp_depnode_t *node) {
@@ -96,25 +102,38 @@ static inline void __kmp_release_deps(kmp_int32 gtid, kmp_taskdata_t *task) {
 
 #if LIBOMP_TASKGRAPH
   kmp_task_t *this_task = KMP_TASKDATA_TO_TASK(task);
-  if (!recording && !fill_data && this_task->part_id!=-1) {
+  if (!recording && !fill_data && task->is_taskgraph) {
     // TODO: Not needed when taskifying
     __kmp_acquire_futex_lock(&taskgraph_lock, 0);
     // printf("[OpenMP] ---- Task %d ends, checking successors ----\n",
     // this_task->part_id);
     kmp_record_info *TaskInfo = &(RecordMap[this_task->part_id]);
+
     for (int i = 0; i < TaskInfo->nsuccessors; i++) {
       kmp_int32 successorNumber = TaskInfo->successors[i];
       kmp_record_info *successor = &(RecordMap[successorNumber]);
       // printf("  [OpenMP] Found one successor %d , deps : %d \n",
       // successorNumber, successor->npredecessors_counter);
       successor->npredecessors_counter--;
-      if (successor->task != nullptr && !successor->npredecessors_counter) {
-        // printf("  [OpenMP] Successor ready, executing \n");
-        __kmp_omp_task(gtid, successor->task, false);
-
+      if (prealloc) {
+        if (!successor->npredecessors_counter) {
+          kmp_task_t *NextTask = kmp_init_lazy_task(
+              successorNumber, KMP_TASKDATA_TO_TASK(task->td_parent), gtid);
+          if (NextTask == nullptr) {
+            insert_to_waiting_tdg(successor);
+            //printf("Me guardo %d \n", successorNumber);
+          } else
+            __kmp_omp_task(gtid, NextTask, false);
+        }
       } else {
-        // printf("  [OpenMP] Task not ready , npredecessors %d \n",
-        // successor->npredecessors_counter);
+        if (successor->task != nullptr && !successor->npredecessors_counter) {
+          // printf("  [OpenMP] Successor ready, executing \n");
+          __kmp_omp_task(gtid, successor->task, false);
+
+        } else {
+          // printf("  [OpenMP] Task not ready , npredecessors %d \n",
+          // successor->npredecessors_counter);
+        }
       }
     }
     __kmp_release_futex_lock(&taskgraph_lock, 0);

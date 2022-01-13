@@ -129,6 +129,10 @@ def OMPC_TdgType : Clause<"tdg_type"> {
     OMP_TDG_TYPE_static
   ];
 }
+def OMPC_NumPreallocs : Clause<"num_preallocs"> {
+  let clangClass = "OMPNumPreallocsClause";
+  let flangClass = "ScalarIntExpr";
+}
 
 // static and auto are C++ keywords so need a capital to disambiguate.
 def OMP_SCHEDULE_Static : ClauseVal<"Static", 2, 1> {}
@@ -457,7 +461,8 @@ def OMP_TaskWait : Directive<"taskwait"> {
 }
 def OMP_TaskGraph : Directive<"taskgraph"> {
   let allowedClauses = [
-    VersionedClause<OMPC_TdgType>
+    VersionedClause<OMPC_TdgType>,
+    VersionedClause<OMPC_NumPreallocs>
   ];
 }
 def OMP_TaskGroup : Directive<"taskgroup"> {

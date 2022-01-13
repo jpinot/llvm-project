@@ -1198,6 +1198,80 @@ public:
   }
 };
 
+/// This represents 'num_preallocs' clause in the '#pragma omp taskgraph'
+/// directive.
+///
+/// \code
+/// #pragma omp taskgraph num_preallocs(6)
+/// \endcode
+/// In this example directive '#pragma omp taskgraph' has simple 'num_preallocs'
+/// clause with number of preallocs '6'.
+class OMPNumPreallocsClause : public OMPClause, public OMPClauseWithPreInit {
+  friend class OMPClauseReader;
+
+  /// Location of '('.
+  SourceLocation LParenLoc;
+
+  /// Condition of the 'num_threads' clause.
+  Stmt *NumPreallocs = nullptr;
+
+  /// Set condition.
+  void setNumPreallocs(Expr *NPreallocs) { NumPreallocs = NPreallocs; }
+
+public:
+  /// Build 'num_threads' clause with condition \a NumThreads.
+  ///
+  /// \param NumPreallocs Number of Preallocs for the construct.
+  /// \param HelperNumPreallocs Helper Number of Preallocs for the construct.
+  /// \param CaptureRegion Innermost OpenMP region where expressions in this
+  /// clause must be captured.
+  /// \param StartLoc Starting location of the clause.
+  /// \param LParenLoc Location of '('.
+  /// \param EndLoc Ending location of the clause.
+  OMPNumPreallocsClause(Expr *NumPreallocs, Stmt *HelperNumPreallocs,
+                      OpenMPDirectiveKind CaptureRegion,
+                      SourceLocation StartLoc, SourceLocation LParenLoc,
+                      SourceLocation EndLoc)
+      : OMPClause(llvm::omp::OMPC_num_preallocs, StartLoc, EndLoc),
+        OMPClauseWithPreInit(this), LParenLoc(LParenLoc),
+        NumPreallocs(NumPreallocs) {
+    setPreInitStmt(HelperNumPreallocs, CaptureRegion);
+  }
+
+  /// Build an empty clause.
+  OMPNumPreallocsClause()
+      : OMPClause(llvm::omp::OMPC_num_preallocs, SourceLocation(),
+                  SourceLocation()),
+        OMPClauseWithPreInit(this) {}
+
+  /// Sets the location of '('.
+  void setLParenLoc(SourceLocation Loc) { LParenLoc = Loc; }
+
+  /// Returns the location of '('.
+  SourceLocation getLParenLoc() const { return LParenLoc; }
+
+  /// Returns number of threads.
+  Expr *getNumPreallocs() const { return cast_or_null<Expr>(NumPreallocs); }
+
+  child_range children() { return child_range(&NumPreallocs, &NumPreallocs + 1); }
+
+  const_child_range children() const {
+    return const_child_range(&NumPreallocs, &NumPreallocs + 1);
+  }
+
+  child_range used_children() {
+    return child_range(child_iterator(), child_iterator());
+  }
+  const_child_range used_children() const {
+    return const_child_range(const_child_iterator(), const_child_iterator());
+  }
+
+  static bool classof(const OMPClause *T) {
+    return T->getClauseKind() == llvm::omp::OMPC_num_preallocs;
+  }
+};
+
+
 /// This represents 'unified_address' clause in the '#pragma omp requires'
 /// directive.
 ///

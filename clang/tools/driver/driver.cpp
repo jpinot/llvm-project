@@ -624,7 +624,8 @@ int main(int Argc, const char **Argv) {
           }
         }
       }
-      Args.push_back("tdg.c");
+      Args.push_back("tdg.cpp");
+      Args.push_back("--driver-mode=g++");
 
       std::unique_ptr<Compilation> C_tdg(TheDriver.BuildCompilation(Args));
       SmallVector<std::pair<int, const Command *>, 4> FailingCommands;

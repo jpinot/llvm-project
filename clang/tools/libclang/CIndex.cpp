@@ -2241,6 +2241,11 @@ void OMPClauseEnqueue::VisitOMPProcBindClause(const OMPProcBindClause *C) {}
 
 void OMPClauseEnqueue::VisitOMPTdgTypeClause(const OMPTdgTypeClause *C) { }
 
+void OMPClauseEnqueue::VisitOMPNumPreallocsClause(const OMPNumPreallocsClause *C) {
+  VisitOMPClauseWithPreInit(C);
+  Visitor->AddStmt(C->getNumPreallocs());
+}
+
 void OMPClauseEnqueue::VisitOMPScheduleClause(const OMPScheduleClause *C) {
   VisitOMPClauseWithPreInit(C);
   Visitor->AddStmt(C->getChunkSize());

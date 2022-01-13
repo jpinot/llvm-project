@@ -11736,6 +11736,9 @@ OMPClause *OMPClauseReader::readClause() {
   case llvm::omp::OMPC_num_threads:
     C = new (Context) OMPNumThreadsClause();
     break;
+  case llvm::omp::OMPC_num_preallocs:
+    C = new (Context) OMPNumPreallocsClause();
+    break;
   case llvm::omp::OMPC_safelen:
     C = new (Context) OMPSafelenClause();
     break;
@@ -12074,6 +12077,12 @@ void OMPClauseReader::VisitOMPTdgTypeClause(OMPTdgTypeClause *C) {
        static_cast<OpenMPTdgTypeClauseKind>(Record.readInt()));
   C->setLParenLoc(Record.readSourceLocation());
   C->setTdgTypeKindKwLoc(Record.readSourceLocation());
+}
+
+void OMPClauseReader::VisitOMPNumPreallocsClause(OMPNumPreallocsClause *C) {
+  VisitOMPClauseWithPreInit(C);
+  C->setNumPreallocs(Record.readSubExpr());
+  C->setLParenLoc(Record.readSourceLocation());
 }
 
 void OMPClauseReader::VisitOMPScheduleClause(OMPScheduleClause *C) {

@@ -27,11 +27,16 @@
 // Taskgraph
 extern int recording;
 extern int fill_data;
+extern int prealloc;
 extern int MapSize;
 extern int MapIncrement;
 extern int SuccessorsSize;
 extern int id_counter;
 extern ident_task *TaskIdentMap;
+extern struct kmp_task_alloc_info *task_static_table;
+extern kmp_task_t *kmp_get_free_task_from_indexer();
+extern void kmp_insert_task_in_indexer(kmp_task_t *task);
+extern kmp_futex_lock_t taskgraph_lock;
 #endif
 
 /* forward declaration */
@@ -747,7 +752,7 @@ static void __kmp_free_task(kmp_int32 gtid, kmp_taskdata_t *taskdata,
 // deallocate the taskdata and shared variable blocks associated with this task
 #if LIBOMP_TASKGRAPH
   kmp_task *task = KMP_TASKDATA_TO_TASK(taskdata);
-  if (task->part_id == -1) {
+  if (!taskdata->is_taskgraph) {
 #endif // LIBOMP_TASKGRAPH
     // only free tasks created outside taskgraph
 #if USE_FAST_MEMORY
@@ -758,25 +763,44 @@ static void __kmp_free_task(kmp_int32 gtid, kmp_taskdata_t *taskdata,
     KA_TRACE(20, ("__kmp_free_task: T#%d freed task %p\n", gtid, taskdata));
 #if LIBOMP_TASKGRAPH
   } else {
+    if (prealloc) {
 
-    taskdata->td_flags.complete = 0;
-    taskdata->td_flags.started = 0;
-    taskdata->td_flags.freed = 0;
-    taskdata->td_flags.executing = 0;
-    taskdata->td_flags.task_serial =
-        (taskdata->td_parent->td_flags.final ||
-         taskdata->td_flags.team_serial || taskdata->td_flags.tasking_ser);
+      __kmp_acquire_futex_lock(&taskgraph_lock, 0);
+      if (RecordMap) {
+        RecordMap[task->part_id].npredecessors_counter =
+            RecordMap[task->part_id].npredecessors;
+        RecordMap[task->part_id].task = nullptr;
+      }
 
-    taskdata->td_allow_completion_event.pending_events_count = 1;
-    KMP_ATOMIC_ST_RLX(&taskdata->td_untied_count, 0);
+      kmp_insert_task_in_indexer(task);
+      if (check_waiting_tdg()) {
+        kmp_record_info *Next = get_from_waiting_tdg();
+        kmp_task_t *NextTask = kmp_init_lazy_task(
+            Next->static_id, KMP_TASKDATA_TO_TASK(taskdata->td_parent), gtid);
+        __kmp_omp_task(gtid, NextTask, false);
+      }
+      __kmp_release_futex_lock(&taskgraph_lock, 0);
 
-    KMP_ATOMIC_ST_RLX(&taskdata->td_incomplete_child_tasks, 0);
-    // start at one because counts current task and children
-    KMP_ATOMIC_ST_RLX(&taskdata->td_allocated_child_tasks, 1);
+    } else {
+      taskdata->td_flags.complete = 0;
+      taskdata->td_flags.started = 0;
+      taskdata->td_flags.freed = 0;
+      taskdata->td_flags.executing = 0;
+      taskdata->td_flags.task_serial =
+          (taskdata->td_parent->td_flags.final ||
+           taskdata->td_flags.team_serial || taskdata->td_flags.tasking_ser);
 
-    if (RecordMap) {
-      RecordMap[task->part_id].npredecessors_counter =
-          RecordMap[task->part_id].npredecessors;
+      taskdata->td_allow_completion_event.pending_events_count = 1;
+      KMP_ATOMIC_ST_RLX(&taskdata->td_untied_count, 0);
+
+      KMP_ATOMIC_ST_RLX(&taskdata->td_incomplete_child_tasks, 0);
+      // start at one because counts current task and children
+      KMP_ATOMIC_ST_RLX(&taskdata->td_allocated_child_tasks, 1);
+
+      if (RecordMap) {
+        RecordMap[task->part_id].npredecessors_counter =
+            RecordMap[task->part_id].npredecessors;
+      }
     }
   }
 #endif
@@ -938,8 +962,8 @@ static void __kmp_task_finish(kmp_int32 gtid, kmp_task_t *task,
   KMP_DEBUG_ASSERT(taskdata->td_flags.freed == 0);
 
   // Remove task finish event
-  kmp_uint32 pending_events_count
-    = KMP_TEST_THEN_ADD32(&taskdata->td_allow_completion_event.pending_events_count, -1);
+  kmp_uint32 pending_events_count = KMP_TEST_THEN_ADD32(
+      &taskdata->td_allow_completion_event.pending_events_count, -1);
 
   bool detach = pending_events_count != 1;
 #if OMPT_SUPPORT
@@ -964,6 +988,7 @@ static void __kmp_task_finish(kmp_int32 gtid, kmp_task_t *task,
       // Predecrement simulated by "- 1" calculation
       children =
           KMP_ATOMIC_DEC(&taskdata->td_parent->td_incomplete_child_tasks) - 1;
+
       KMP_DEBUG_ASSERT(children >= 0);
       if (taskdata->td_taskgroup)
         KMP_ATOMIC_DEC(&taskdata->td_taskgroup->count);
@@ -1183,7 +1208,7 @@ void __kmp_free_implicit_task(kmp_info_t *thread) {
 
 // Round up a size to a power of two specified by val: Used to insert padding
 // between structures co-allocated using a single malloc() call
-static size_t __kmp_round_up_to_val(size_t size, size_t val) {
+size_t __kmp_round_up_to_val(size_t size, size_t val) {
   if (size & (val - 1)) {
     size &= ~(val - 1);
     if (size <= KMP_SIZE_T_MAX - val) {
@@ -1193,18 +1218,19 @@ static size_t __kmp_round_up_to_val(size_t size, size_t val) {
   return size;
 } // __kmp_round_up_to_va
 
-// __kmp_enable_tasking_in_serial_mode: This is used when a TASK_PROXY, TASK_DETACHABLE
-// or hidden_helper task is allocated to ensure we have tasking enabled.
-// Also is used by TAMPI to tell the runtime tasks (detachable) with events will be made
+// __kmp_enable_tasking_in_serial_mode: This is used when a TASK_PROXY,
+// TASK_DETACHABLE or hidden_helper task is allocated to ensure we have tasking
+// enabled. Also is used by TAMPI to tell the runtime tasks (detachable) with
+// events will be made
 //
 // loc_ref: source location information
 // gtid: global thread number.
 // proxy: allocated proxy task
 // detachable: allocated detachable task
 // hidden_helper: allocated hidden_helper task
-void __kmp_enable_tasking_in_serial_mode(
-    ident_t *loc_ref, kmp_int32 gtid,
-    bool proxy, bool detachable, bool hidden_helper) {
+void __kmp_enable_tasking_in_serial_mode(ident_t *loc_ref, kmp_int32 gtid,
+                                         bool proxy, bool detachable,
+                                         bool hidden_helper) {
   kmp_info_t *thread = __kmp_threads[gtid];
   kmp_team_t *team = thread->th.th_team;
   kmp_info_t *encountering_thread = thread;
@@ -1215,9 +1241,9 @@ void __kmp_enable_tasking_in_serial_mode(
     /* This should only happen if the team is serialized
         setup a task team and propagate it to the thread */
     KMP_DEBUG_ASSERT(team->t.t_serialized);
-    KA_TRACE(30,
-             ("T#%d creating task team in __kmp_task_alloc for proxy task\n",
-              gtid));
+    KA_TRACE(
+        30,
+        ("T#%d creating task team in __kmp_task_alloc for proxy task\n", gtid));
     __kmp_task_team_setup(
         encountering_thread, team,
         1); // 1 indicates setup the current team regardless of nthreads
@@ -1228,9 +1254,8 @@ void __kmp_enable_tasking_in_serial_mode(
 
   /* tasking must be enabled now as the task might not be pushed */
   if (!KMP_TASKING_ENABLED(task_team)) {
-    KA_TRACE(
-        30,
-        ("T#%d enabling tasking in __kmp_task_alloc for proxy task\n", gtid));
+    KA_TRACE(30, ("T#%d enabling tasking in __kmp_task_alloc for proxy task\n",
+                  gtid));
     __kmp_enable_tasking(task_team, encountering_thread);
     kmp_int32 tid = encountering_thread->th.th_info.ds.ds_tid;
     kmp_thread_data_t *thread_data = &task_team->tt.tt_threads_data[tid];
@@ -1239,11 +1264,9 @@ void __kmp_enable_tasking_in_serial_mode(
       __kmp_alloc_task_deque(encountering_thread, thread_data);
     }
   }
-  if ((proxy || detachable) &&
-      task_team->tt.tt_found_proxy_tasks == FALSE)
+  if ((proxy || detachable) && task_team->tt.tt_found_proxy_tasks == FALSE)
     TCW_4(task_team->tt.tt_found_proxy_tasks, TRUE);
-  if (hidden_helper &&
-      task_team->tt.tt_hidden_helper_task_encountered == FALSE)
+  if (hidden_helper && task_team->tt.tt_hidden_helper_task_encountered == FALSE)
     TCW_4(task_team->tt.tt_hidden_helper_task_encountered, TRUE);
 }
 
@@ -1323,9 +1346,8 @@ kmp_task_t *__kmp_task_alloc(ident_t *loc_ref, kmp_int32 gtid,
       flags->merged_if0 = 1;
     }
     __kmp_enable_tasking_in_serial_mode(
-      loc_ref, gtid,
-      flags->proxy == TASK_PROXY, flags->detachable == TASK_DETACHABLE,
-      flags->hidden_helper);
+        loc_ref, gtid, flags->proxy == TASK_PROXY,
+        flags->detachable == TASK_DETACHABLE, flags->hidden_helper);
   }
 
   // Calculate shared structure offset including padding after kmp_task_t struct
@@ -1341,11 +1363,21 @@ kmp_task_t *__kmp_task_alloc(ident_t *loc_ref, kmp_int32 gtid,
 
   // Avoid double allocation here by combining shareds with taskdata
 #if USE_FAST_MEMORY
-  taskdata = (kmp_taskdata_t *)__kmp_fast_allocate(
-      encountering_thread, shareds_offset + sizeof_shareds);
+#if LIBOMP_TASKGRAPH
+ // if (prealloc) {
+ //   taskdata = KMP_TASK_TO_TASKDATA(kmp_get_free_task_from_indexer());
+ // } else
+    taskdata = (kmp_taskdata_t *)__kmp_fast_allocate(
+        encountering_thread, shareds_offset + sizeof_shareds);
+#endif
 #else /* ! USE_FAST_MEMORY */
-  taskdata = (kmp_taskdata_t *)__kmp_thread_malloc(
-      encountering_thread, shareds_offset + sizeof_shareds);
+#if LIBOMP_TASKGRAPH
+ // if (prealloc) {
+ //   taskdata = KMP_TASK_TO_TASKDATA(kmp_get_free_task_from_indexer());
+ // } else
+    taskdata = (kmp_taskdata_t *)__kmp_thread_malloc(
+        encountering_thread, shareds_offset + sizeof_shareds);
+#endif
 #endif /* USE_FAST_MEMORY */
   ANNOTATE_HAPPENS_AFTER(taskdata);
 
@@ -1434,8 +1466,8 @@ kmp_task_t *__kmp_task_alloc(ident_t *loc_ref, kmp_int32 gtid,
   taskdata->td_allow_completion_event.pending_events_count = 1;
   taskdata->td_allow_completion_event.ed.task = task;
 #if LIBOMP_TASKGRAPH
-  //When filling data, we only need to create empty tasks
-  if(fill_data)
+  // When filling data, we only need to create empty tasks
+  if (fill_data)
     return task;
 #endif
 
@@ -1472,16 +1504,16 @@ kmp_task_t *__kmp_task_alloc(ident_t *loc_ref, kmp_int32 gtid,
 }
 
 #if LIBOMP_TASKGRAPH
-//Mark tasks created outside a taskgraph with part_id -1, to differenciate them, this is used to decide if task should be freed and also when task ends and we look por successors.
+// Mark tasks created outside a taskgraph with part_id -1, to differenciate
+// them, this is used to decide if task should be freed and also when task ends
+// and we look por successors.
 void __kmpc_set_task_static_id(kmp_task_t *task, kmp_int32 staticID) {
   kmp_taskdata_t *taskdata = KMP_TASK_TO_TASKDATA(task);
   if (recording || fill_data) {
     task->part_id = id_counter;
     taskdata->td_task_id = staticID;
+    taskdata->is_taskgraph = 1;
     id_counter++;
-  }
-  else{
-    task->part_id = -1;
   }
 }
 #endif
@@ -1809,25 +1841,43 @@ kmp_int32 __kmp_omp_task(kmp_int32 gtid, kmp_task_t *new_task,
       MapSize += MapIncrement;
       RecordMap = (kmp_record_info *)realloc(RecordMap,
                                              MapSize * sizeof(kmp_record_info));
-      TaskIdentMap = (ident_task *)realloc(TaskIdentMap,
-                                             MapSize * sizeof(ident_task));
+      TaskIdentMap =
+          (ident_task *)realloc(TaskIdentMap, MapSize * sizeof(ident_task));
 
       for (int i = OldSize; i < MapSize; i++) {
         kmp_int32 *successorsList =
             (kmp_int32 *)malloc(SuccessorsSize * sizeof(kmp_int32));
-        kmp_record_info newRecord = {0, nullptr, successorsList, 0, 0, 0, SuccessorsSize};
+        kmp_record_info newRecord = {0, nullptr, successorsList, 0,
+                                     0, 0,       SuccessorsSize};
         RecordMap[i] = newRecord;
       }
     }
 
     if (RecordMap[new_task->part_id].task == nullptr) {
-      TaskIdentMap[new_task->part_id].td_ident = new_taskdata->td_ident->psource;
+      TaskIdentMap[new_task->part_id].td_ident =
+          new_taskdata->td_ident->psource;
       RecordMap[new_task->part_id].static_id = new_taskdata->td_task_id;
       RecordMap[new_task->part_id].task = new_task;
+      RecordMap[new_task->part_id].parent_task = new_taskdata->td_parent;
     }
   }
-  if (fill_data){
+  if (fill_data) {
     RecordMap[new_task->part_id].task = new_task;
+    kmp_record_info *TaskInfo = &(RecordMap[new_task->part_id]);
+
+    TaskInfo->task = new_task;
+    TaskInfo->parent_task = new_taskdata->td_parent;
+    /*
+    if (prealloc) {
+      size_t sizeOfPrivates =
+          task_static_table[TaskInfo->pragma_id].sizeOfTask -
+          sizeof(kmp_task_t);
+      TaskInfo->task = nullptr;
+      memcpy(TaskInfo->private_data, new_task + 1, sizeOfPrivates);
+      memcpy(TaskInfo->shared_data, new_task->shareds,
+             task_static_table[TaskInfo->pragma_id].sizeOfShareds);
+      kmp_insert_task_in_indexer(new_task);
+    }*/
     return TASK_CURRENT_NOT_QUEUED;
   }
 #endif
@@ -3008,7 +3058,6 @@ static inline int __kmp_execute_tasks_template(
   KMP_DEBUG_ASSERT(nthreads > 1 || task_team->tt.tt_found_proxy_tasks ||
                    task_team->tt.tt_hidden_helper_task_encountered);
   KMP_DEBUG_ASSERT(*unfinished_threads >= 0);
-
   while (1) { // Outer loop keeps trying to find tasks in case of single thread
     // getting tasks from target constructs
     while (1) { // Inner loop to find a task and execute it
@@ -3793,7 +3842,6 @@ void __kmp_task_team_wait(
 
   KMP_DEBUG_ASSERT(__kmp_tasking_mode != tskm_immediate_exec);
   KMP_DEBUG_ASSERT(task_team == this_thr->th.th_task_team);
-
   if ((task_team != NULL) && KMP_TASKING_ENABLED(task_team)) {
     if (wait) {
       KA_TRACE(20, ("__kmp_task_team_wait: Master T#%d waiting for all tasks "
@@ -4091,8 +4139,8 @@ kmp_event_t *__kmpc_task_allow_completion_event(ident_t *loc_ref, int gtid,
   KMP_DEBUG_ASSERT(td->td_allow_completion_event.ed.task != nullptr);
   KMP_DEBUG_ASSERT(td->td_allow_completion_event.pending_events_count != -1);
 
-  kmp_uint32 pending_events_count
-    = KMP_TEST_THEN_ADD32( &td->td_allow_completion_event.pending_events_count, 1);
+  kmp_uint32 pending_events_count = KMP_TEST_THEN_ADD32(
+      &td->td_allow_completion_event.pending_events_count, 1);
 
   KMP_DEBUG_ASSERT(pending_events_count != 0);
 
@@ -4107,8 +4155,8 @@ void __kmp_fulfill_event(kmp_event_t *event) {
   kmp_taskdata_t *taskdata = KMP_TASK_TO_TASKDATA(ptask);
   int gtid = __kmp_get_gtid();
 
-  kmp_uint32 pending_events_count
-    = KMP_TEST_THEN_ADD32(&taskdata->td_allow_completion_event.pending_events_count, -1);
+  kmp_uint32 pending_events_count = KMP_TEST_THEN_ADD32(
+      &taskdata->td_allow_completion_event.pending_events_count, -1);
 
   KMP_DEBUG_ASSERT(pending_events_count != 0);
 
@@ -4124,13 +4172,14 @@ void __kmp_fulfill_event(kmp_event_t *event) {
     // task finished execution
     KMP_DEBUG_ASSERT(taskdata->td_flags.executing == 1);
     taskdata->td_flags.executing = 0; // suspend the finishing task
-    taskdata->td_flags.proxy = TASK_PROXY; // proxify!
+    taskdata->td_flags.proxy =
+        TASK_PROXY; // proxify!
 
 #if OMPT_SUPPORT
-      // We free ptask afterwards and know the task is finished,
-      // so locking is not necessary
-      if (UNLIKELY(ompt_enabled.enabled))
-        __ompt_task_finish(ptask, NULL, ompt_task_late_fulfill);
+                    // We free ptask afterwards and know the task is finished,
+    // so locking is not necessary
+    if (UNLIKELY(ompt_enabled.enabled))
+      __ompt_task_finish(ptask, NULL, ompt_task_late_fulfill);
 #endif
     // If the task detached complete the proxy task
     if (gtid >= 0) {
