@@ -29,7 +29,6 @@ extern int recording;
 extern int fill_data;
 extern int prealloc;
 extern int MapSize;
-extern int MapIncrement;
 extern int SuccessorsSize;
 extern int id_counter;
 extern ident_task *TaskIdentMap;
@@ -797,10 +796,15 @@ static void __kmp_free_task(kmp_int32 gtid, kmp_taskdata_t *taskdata,
       // start at one because counts current task and children
       KMP_ATOMIC_ST_RLX(&taskdata->td_allocated_child_tasks, 1);
 
+      
       if (RecordMap) {
+        __kmp_acquire_futex_lock(&taskgraph_lock, 0);
         RecordMap[task->part_id].npredecessors_counter =
             RecordMap[task->part_id].npredecessors;
+        __kmp_release_futex_lock(&taskgraph_lock, 0);
+
       }
+      
     }
   }
 #endif
@@ -1838,9 +1842,12 @@ kmp_int32 __kmp_omp_task(kmp_int32 gtid, kmp_task_t *new_task,
     // Extend Map Size if needed
     if (new_task->part_id >= MapSize) {
       int OldSize = MapSize;
-      MapSize += MapIncrement;
+      MapSize = MapSize * 2;
+      __kmp_acquire_futex_lock(&taskgraph_lock, 0);
       RecordMap = (kmp_record_info *)realloc(RecordMap,
                                              MapSize * sizeof(kmp_record_info));
+
+      __kmp_release_futex_lock(&taskgraph_lock, 0);
       TaskIdentMap =
           (ident_task *)realloc(TaskIdentMap, MapSize * sizeof(ident_task));
 

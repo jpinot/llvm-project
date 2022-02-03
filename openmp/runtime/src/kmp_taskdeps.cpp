@@ -46,7 +46,6 @@ int *rootTasks;
 // Sizes
 kmp_int32 MaxNesting = 4;
 kmp_int32 MapSize = 50;
-kmp_int32 MapIncrement = 50;
 kmp_int32 SuccessorsSize = 10;
 kmp_int32 SuccessorsIncrement = 5;
 kmp_int32 ColorMapSize = 20;
@@ -605,9 +604,11 @@ kmp_int32 __kmpc_omp_task_with_deps(ident_t *loc_ref, kmp_int32 gtid,
     if (new_task->part_id >= MapSize) {
 
       int OldSize = MapSize;
-      MapSize += MapIncrement;
+      MapSize = MapSize *2;
+      __kmp_acquire_futex_lock(&taskgraph_lock, 0);
       RecordMap = (kmp_record_info *)realloc(RecordMap,
                                              MapSize * sizeof(kmp_record_info));
+      __kmp_release_futex_lock(&taskgraph_lock, 0);
       TaskIdentMap =
           (ident_task *)realloc(TaskIdentMap, MapSize * sizeof(ident_task));
 
@@ -785,7 +786,7 @@ void __ompt_taskwait_dep_finish(kmp_taskdata_t *current_task,
 
 #if LIBOMP_TASKGRAPH
 void print_tdg() {
-  for (int i = 1; i < MapSize; i++) {
+  for (int i = 0; i < MapSize; i++) {
     if (RecordMap[i].task == nullptr)
       break;
     printf("TASK: %d Successors: ", RecordMap[i].static_id);
@@ -826,7 +827,7 @@ void traverse_node(kmp_int32 *edges_to_check, kmp_int32 *num_edges,
 }
 
 void erase_transitive_edges() {
-  for (int i = 1; i < MapSize; i++) {
+  for (int i = 0; i < MapSize; i++) {
 
     if (RecordMap[i].task == nullptr)
       break;
@@ -873,7 +874,7 @@ void print_tdg_to_dot(void) {
   fprintf(f, "   subgraph cluster_0 {\n");
   fprintf(f, "      label=TDG_%d\n", ntdgs);
 
-  for (int i = 1; i < MapSize; i++) {
+  for (int i = 0; i < MapSize; i++) {
 
     if (RecordMap[i].task == nullptr)
       break;
@@ -902,7 +903,7 @@ void print_tdg_to_dot(void) {
   }
   fprintf(f, "   }\n");
 
-  for (int i = 1; i < MapSize; i++) {
+  for (int i = 0; i < MapSize; i++) {
 
     if (RecordMap[i].task == nullptr)
       break;
