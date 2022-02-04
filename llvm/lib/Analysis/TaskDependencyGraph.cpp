@@ -649,7 +649,7 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName) {
     Tdgfile << "  int flags;\n  int sizeOfTask;\n  int sizeOfShareds;\n  void* "
                "taskEntry;\n  int *sharedDataPositions;\n  int *firstPrivateDataPositions;\n  int *firstPrivateDataOffsets;\n  int *firstPrivateDataSizes;\n  int numFirstPrivates;\n};\n";
     Tdgfile << "extern  \"C\"  void  __kmpc_prealloc_tasks(struct "
-               "kmp_task_alloc_info *task_static_data, void "
+               "kmp_task_alloc_info *task_static_data, char "
                "*preallocated_tasks, void *preallocated_nodes, unsigned int "
                "n_task_constructs,unsigned int "
                "max_concurrent_tasks, unsigned int task_size);\n";
@@ -828,7 +828,7 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName) {
   Tdgfile << "extern \"C\" void kmp_set_tdg(int num_preallocs)\n{\n";
   if (Prealloc) {
     // Tdgfile << "printf(\" es: %d \", sizeof(struct kmp_task));\n";
-    Tdgfile << "  __kmpc_prealloc_tasks(task_static_data, preallocated_tasks, "
+    Tdgfile << "  __kmpc_prealloc_tasks(task_static_data, (char *) preallocated_tasks, "
                "preallocated_nodes, "
             << FunctionTasks.size()
             << ", num_preallocs, sizeof(struct kmp_task));\n";

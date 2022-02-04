@@ -3895,7 +3895,7 @@ KMP_EXPORT void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid,
                                  void (*entry)(void *), void *args,
                                  kmp_int32 tdg_type);
 KMP_EXPORT void __kmpc_prealloc_tasks(
-    kmp_task_alloc_info *task_static_data, void *preallocated_tasks,
+    kmp_task_alloc_info *task_static_data, char *preallocated_tasks,
     kmp_space_indexer_node *preallocated_nodes, kmp_uint32 n_task_constructs,
     kmp_uint32 max_concurrent_tasks, kmp_uint32 task_size);
 KMP_EXPORT void __kmpc_set_task_static_id(kmp_task_t *task, int staticID);

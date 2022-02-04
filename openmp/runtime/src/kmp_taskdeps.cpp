@@ -1088,7 +1088,7 @@ void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid, void (*entry)(void *),
         int *SharedPositions = task_static_table[Pragma].sharedDataPositions;
         int NumShareds = task_static_table[Pragma].sizeOfShareds/sizeof(void *);
         for(int j=0; j< NumShareds; j++){
-          memcpy(RecordMap[i].shared_data+j*sizeof(void *), args+SharedPositions[j]*sizeof(void *), sizeof(void *));
+          memcpy((char *)RecordMap[i].shared_data+j*sizeof(void *), (char *)args+SharedPositions[j]*sizeof(void *), sizeof(void *));
         }
 
         int *FirstPrivatePositions = task_static_table[Pragma].firstPrivateDataPositions;
@@ -1102,8 +1102,8 @@ void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid, void (*entry)(void *),
           CurrentPosition = FirstPrivatePositions[j];
           CurrentOffset = FirstPrivateOffsets[j];
           CurrentSize = FirstPrivateSizes[j];
-          void *** AdressValue = (void ***) (args+CurrentPosition*sizeof(void *));
-          memcpy(RecordMap[i].private_data +CurrentOffset, *AdressValue, CurrentSize); 
+          char *** AdressValue = (char ***) ((char *)args+CurrentPosition*sizeof(void *));
+          memcpy((char *)RecordMap[i].private_data +CurrentOffset, *AdressValue, CurrentSize); 
         } 
       }
     }
@@ -1264,7 +1264,7 @@ void kmp_insert_task_in_indexer(kmp_task_t *task) {
 }
 
 void __kmpc_prealloc_tasks(kmp_task_alloc_info *task_static_data,
-                           void *preallocated_tasks,
+                           char *preallocated_tasks,
                            kmp_space_indexer_node *preallocated_nodes,
                            unsigned int n_task_constructs,
                            unsigned int max_concurrent_tasks,
