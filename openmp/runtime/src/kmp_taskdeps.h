@@ -107,7 +107,7 @@ static inline void __kmp_release_deps(kmp_int32 gtid, kmp_taskdata_t *task) {
     __kmp_acquire_futex_lock(&taskgraph_lock, 0);
     // printf("[OpenMP] ---- Task %d ends, checking successors ----\n",
     // this_task->part_id);
-    kmp_record_info *TaskInfo = &(RecordMap[this_task->part_id]);
+    kmp_record_info *TaskInfo = &(RecordMap[task->td_task_id]);
 
     for (int i = 0; i < TaskInfo->nsuccessors; i++) {
       kmp_int32 successorNumber = TaskInfo->successors[i];

@@ -340,7 +340,6 @@ static void __kmp_realloc_task_deque(kmp_info_t *thread,
 static kmp_int32 __kmp_push_task(kmp_int32 gtid, kmp_task_t *task) {
   kmp_info_t *thread = __kmp_threads[gtid];
   kmp_taskdata_t *taskdata = KMP_TASK_TO_TASKDATA(task);
-
   // We don't need to map to shadow gtid if it is already hidden helper thread
   if (taskdata->td_flags.hidden_helper && !KMP_HIDDEN_HELPER_THREAD(gtid)) {
     gtid = KMP_GTID_TO_SHADOW_GTID(gtid);
@@ -766,9 +765,9 @@ static void __kmp_free_task(kmp_int32 gtid, kmp_taskdata_t *taskdata,
 
       __kmp_acquire_futex_lock(&taskgraph_lock, 0);
       if (RecordMap) {
-        RecordMap[task->part_id].npredecessors_counter =
-            RecordMap[task->part_id].npredecessors;
-        RecordMap[task->part_id].task = nullptr;
+        RecordMap[taskdata->td_task_id].npredecessors_counter =
+            RecordMap[taskdata->td_task_id].npredecessors;
+        RecordMap[taskdata->td_task_id].task = nullptr;
       }
 
       kmp_insert_task_in_indexer(task);
@@ -799,8 +798,8 @@ static void __kmp_free_task(kmp_int32 gtid, kmp_taskdata_t *taskdata,
       
       if (RecordMap) {
         __kmp_acquire_futex_lock(&taskgraph_lock, 0);
-        RecordMap[task->part_id].npredecessors_counter =
-            RecordMap[task->part_id].npredecessors;
+        RecordMap[taskdata->td_task_id].npredecessors_counter =
+            RecordMap[taskdata->td_task_id].npredecessors;
         __kmp_release_futex_lock(&taskgraph_lock, 0);
 
       }
@@ -1514,7 +1513,7 @@ kmp_task_t *__kmp_task_alloc(ident_t *loc_ref, kmp_int32 gtid,
 void __kmpc_set_task_static_id(kmp_task_t *task, kmp_int32 staticID) {
   kmp_taskdata_t *taskdata = KMP_TASK_TO_TASKDATA(task);
   if (recording || fill_data) {
-    task->part_id = id_counter;
+    //task->part_id = id_counter;
     taskdata->td_task_id = staticID;
     taskdata->is_taskgraph = 1;
     id_counter++;
@@ -1840,7 +1839,7 @@ kmp_int32 __kmp_omp_task(kmp_int32 gtid, kmp_task_t *new_task,
 #if LIBOMP_TASKGRAPH
   if (recording) {
     // Extend Map Size if needed
-    if (new_task->part_id >= MapSize) {
+    if (new_taskdata->td_task_id >= MapSize) {
       int OldSize = MapSize;
       MapSize = MapSize * 2;
       __kmp_acquire_futex_lock(&taskgraph_lock, 0);
@@ -1860,17 +1859,17 @@ kmp_int32 __kmp_omp_task(kmp_int32 gtid, kmp_task_t *new_task,
       }
     }
 
-    if (RecordMap[new_task->part_id].task == nullptr) {
-      TaskIdentMap[new_task->part_id].td_ident =
+    if (RecordMap[new_taskdata->td_task_id].task == nullptr) {
+      TaskIdentMap[new_taskdata->td_task_id].td_ident =
           new_taskdata->td_ident->psource;
-      RecordMap[new_task->part_id].static_id = new_taskdata->td_task_id;
-      RecordMap[new_task->part_id].task = new_task;
-      RecordMap[new_task->part_id].parent_task = new_taskdata->td_parent;
+      RecordMap[new_taskdata->td_task_id].static_id = new_taskdata->td_task_id;
+      RecordMap[new_taskdata->td_task_id].task = new_task;
+      RecordMap[new_taskdata->td_task_id].parent_task = new_taskdata->td_parent;
     }
   }
   if (fill_data) {
-    RecordMap[new_task->part_id].task = new_task;
-    kmp_record_info *TaskInfo = &(RecordMap[new_task->part_id]);
+    RecordMap[new_taskdata->td_task_id].task = new_task;
+    kmp_record_info *TaskInfo = &(RecordMap[new_taskdata->td_task_id]);
 
     TaskInfo->task = new_task;
     TaskInfo->parent_task = new_taskdata->td_parent;
@@ -1888,6 +1887,15 @@ kmp_int32 __kmp_omp_task(kmp_int32 gtid, kmp_task_t *new_task,
     return TASK_CURRENT_NOT_QUEUED;
   }
 #endif
+  
+  /*
+  int newGtid= __kmp_gtid_from_tid(2, __kmp_threads[gtid]->th.th_team);
+  __kmp_assert_valid_gtid(newGtid);
+ 
+  while ( __kmp_threads[newGtid]->th.th_task_team == nullptr){
+   __asm__ volatile("nop");
+  }
+  */
   /* Should we execute the new task or queue it? For now, let's just always try
      to queue it.  If the queue fills up, then we'll execute it.  */
   if (new_taskdata->td_flags.proxy == TASK_PROXY ||

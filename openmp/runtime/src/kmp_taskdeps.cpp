@@ -258,11 +258,13 @@ static inline void __kmp_track_dependence(kmp_int32 gtid, kmp_depnode_t *source,
                                           kmp_depnode_t *sink,
                                           kmp_task_t *sink_task) {
 #if LIBOMP_TASKGRAPH
+  kmp_taskdata_t *task_source = KMP_TASK_TO_TASKDATA(source->dn.task);
+  kmp_taskdata_t *task_sink = KMP_TASK_TO_TASKDATA(sink_task);
   if (recording) {
     kmp_record_info *SourceInfo = &(RecordMap[source->dn.part_id]);
     bool exists = false;
     for (int i = 0; i < SourceInfo->nsuccessors; i++) {
-      if (SourceInfo->successors[i] == sink_task->part_id) {
+      if (SourceInfo->successors[i] == task_sink->td_task_id) {
         exists = true;
         break;
       }
@@ -275,10 +277,10 @@ static inline void __kmp_track_dependence(kmp_int32 gtid, kmp_depnode_t *source,
             SourceInfo->successors_size * sizeof(kmp_int32));
       }
 
-      SourceInfo->successors[SourceInfo->nsuccessors] = sink_task->part_id;
+      SourceInfo->successors[SourceInfo->nsuccessors] = task_sink->td_task_id;
       SourceInfo->nsuccessors++;
 
-      kmp_record_info *SinkInfo = &(RecordMap[sink_task->part_id]);
+      kmp_record_info *SinkInfo = &(RecordMap[task_sink->td_task_id]);
       SinkInfo->npredecessors++;
     }
   }
@@ -601,7 +603,7 @@ kmp_int32 __kmpc_omp_task_with_deps(ident_t *loc_ref, kmp_int32 gtid,
 #if LIBOMP_TASKGRAPH
   if (recording) {
     // Extend Map Size if needed
-    if (new_task->part_id >= MapSize) {
+    if (new_taskdata->td_task_id >= MapSize) {
 
       int OldSize = MapSize;
       MapSize = MapSize *2;
@@ -620,14 +622,14 @@ kmp_int32 __kmpc_omp_task_with_deps(ident_t *loc_ref, kmp_int32 gtid,
         RecordMap[i] = newRecord;
       }
     }
-    TaskIdentMap[new_task->part_id].td_ident = new_taskdata->td_ident->psource;
-    RecordMap[new_task->part_id].static_id = new_taskdata->td_task_id;
-    RecordMap[new_task->part_id].task = new_task;
-    RecordMap[new_task->part_id].parent_task = new_taskdata->td_parent;
+    TaskIdentMap[new_taskdata->td_task_id].td_ident = new_taskdata->td_ident->psource;
+    RecordMap[new_taskdata->td_task_id].static_id = new_taskdata->td_task_id;
+    RecordMap[new_taskdata->td_task_id].task = new_task;
+    RecordMap[new_taskdata->td_task_id].parent_task = new_taskdata->td_parent;
   }
 
   if (fill_data) {
-    kmp_record_info *TaskInfo = &(RecordMap[new_task->part_id]);
+    kmp_record_info *TaskInfo = &(RecordMap[new_taskdata->td_task_id]);
     TaskInfo->task = new_task;
     TaskInfo->parent_task = new_taskdata->td_parent;
     //if (prealloc) {
@@ -730,7 +732,7 @@ kmp_int32 __kmpc_omp_task_with_deps(ident_t *loc_ref, kmp_int32 gtid,
 
     __kmp_init_node(node);
 #if LIBOMP_TASKGRAPH
-    node->dn.part_id = new_task->part_id;
+    node->dn.part_id = new_taskdata->td_task_id;
 #endif
     new_taskdata->td_depnode = node;
 
@@ -1327,9 +1329,9 @@ kmp_task_t *kmp_init_lazy_task(int static_id, kmp_task_t *current_task,
 
   new_task->routine = tdg_static_data.taskEntry;
 
-  new_task->part_id = tdg.static_id;
+  //new_task->part_id = tdg.static_id;
   new_taskdata->is_taskgraph = 1;
-  new_taskdata->td_task_id = KMP_GEN_TASK_ID();
+  new_taskdata->td_task_id = tdg.static_id;
   new_taskdata->td_team = thread->th.th_team;
   new_taskdata->td_alloc_thread = thread;
   new_taskdata->td_parent = parent_task;
