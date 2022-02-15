@@ -519,7 +519,6 @@ TaskDependencyGraphData::get_task_layout(std::string LongestPrivateName,
             "  void *td_dephash;\n"
             "  void *td_depnode;\n"
             "  void *td_task_team;\n"
-            "  int32_t encountering_gtid;\n"
             "  size_t td_size_alloc;\n"
             "  int32_t td_size_loop_bounds;\n"
             "  void *td_last_tied;\n"
@@ -921,7 +920,6 @@ int TaskDependencyGraphData::findPragmaId(CallInst &TaskCallInst,
       TaskPrivatesType.push_back(PrivatesType->getStructElementType(j));
   }
 
-  
   // Look for constant values for the private data
   SmallVector<int64_t> PrivateValues;
   SmallVector<int, 2> FinalFirstPrivateOffsets;
@@ -1033,12 +1031,25 @@ int TaskDependencyGraphData::findPragmaId(CallInst &TaskCallInst,
       int position = dyn_cast<ConstantInt>(PositionValue)->getSExtValue();
       if (LoadInst *ArgLoad = dyn_cast<LoadInst>(GetArg->getNextNode())) {
         ArgPositions[position] = ArgLoad;
+      } else {
+        Start = dyn_cast<Instruction>(TaskAlloc)->getPrevNode();
+        bool Found = false;
+        while (!Found) {
+          if (LoadInst *ArgLoad = dyn_cast<LoadInst>(Start)) {
+            if (ArgLoad->getPointerOperand() == GetArg){
+              ArgPositions[position] = ArgLoad;
+              Found = true;
+            }
+          }
+          Start = Start->getPrevNode();
+        }
       }
     }
   }
-  
+
   Start = dyn_cast<Instruction>(TaskAlloc);
   End = dyn_cast<Instruction>(&TaskCallInst);
+
   while (Start != End) {
     for (int i = 0; i < (int)ArgPositions.size(); i++)
       for (Value *ArgUser : ArgPositions[i]->users()) {
@@ -1051,7 +1062,7 @@ int TaskDependencyGraphData::findPragmaId(CallInst &TaskCallInst,
       }
     Start = Start->getNextNode();
   }
-  
+
   int i;
   for (i = 0; i < (int)TasksAllocInfo.size(); i++) {
     if (TasksAllocInfo[i].entryPoint == EntryPoint) {

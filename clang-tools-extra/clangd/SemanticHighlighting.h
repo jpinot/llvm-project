@@ -37,6 +37,7 @@ enum class HighlightingKind {
   Field,
   StaticField,
   Class,
+  Interface,
   Enum,
   EnumConstant,
   Typedef,
@@ -65,7 +66,10 @@ enum class HighlightingModifier {
   Readonly,
   Static,
   Abstract,
+  Virtual,
   DependentName,
+  DefaultLibrary,
+  UsedAsMutableReference,
 
   FunctionScope,
   ClassScope,

@@ -1,8 +1,13 @@
-//===---- DebugObjectManagerPlugin.h - JITLink debug objects ---*- C++ -*-===//
+//===------- DebugObjectManagerPlugin.cpp - JITLink debug objects ---------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+//
+// FIXME: Update Plugin to poke the debug object into a new JITLink section,
+//        rather than creating a new allocation.
 //
 //===----------------------------------------------------------------------===//
 
@@ -18,6 +23,7 @@
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/Errc.h"
+#include "llvm/Support/MSVCErrorWorkarounds.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/raw_ostream.h"
@@ -36,7 +42,7 @@ class DebugObjectSection {
 public:
   virtual void setTargetMemoryRange(SectionRange Range) = 0;
   virtual void dump(raw_ostream &OS, StringRef Name) {}
-  virtual ~DebugObjectSection() {}
+  virtual ~DebugObjectSection() = default;
 };
 
 template <typename ELFT>
@@ -50,6 +56,8 @@ public:
   void setTargetMemoryRange(SectionRange Range) override;
   void dump(raw_ostream &OS, StringRef Name) override;
 
+  Error validateInBounds(StringRef Buffer, const char *Name) const;
+
 private:
   typename ELFT::Shdr *Header;
 
@@ -59,18 +67,9 @@ private:
 template <typename ELFT>
 void ELFDebugObjectSection<ELFT>::setTargetMemoryRange(SectionRange Range) {
   // Only patch load-addresses for executable and data sections.
-  if (isTextOrDataSection()) {
-    Header->sh_addr = static_cast<typename ELFT::uint>(Range.getStart());
-  }
-}
-
-template <typename ELFT>
-void ELFDebugObjectSection<ELFT>::dump(raw_ostream &OS, StringRef Name) {
-  if (auto Addr = static_cast<JITTargetAddress>(Header->sh_addr)) {
-    OS << formatv("  {0:x16} {1}\n", Addr, Name);
-  } else {
-    OS << formatv("                     {0}\n", Name);
-  }
+  if (isTextOrDataSection())
+    Header->sh_addr =
+        static_cast<typename ELFT::uint>(Range.getStart().getValue());
 }
 
 template <typename ELFT>
@@ -83,64 +82,108 @@ bool ELFDebugObjectSection<ELFT>::isTextOrDataSection() const {
   return false;
 }
 
-static constexpr sys::Memory::ProtectionFlags ReadOnly =
-    static_cast<sys::Memory::ProtectionFlags>(sys::Memory::MF_READ);
+template <typename ELFT>
+Error ELFDebugObjectSection<ELFT>::validateInBounds(StringRef Buffer,
+                                                    const char *Name) const {
+  const uint8_t *Start = Buffer.bytes_begin();
+  const uint8_t *End = Buffer.bytes_end();
+  const uint8_t *HeaderPtr = reinterpret_cast<uint8_t *>(Header);
+  if (HeaderPtr < Start || HeaderPtr + sizeof(typename ELFT::Shdr) > End)
+    return make_error<StringError>(
+        formatv("{0} section header at {1:x16} not within bounds of the "
+                "given debug object buffer [{2:x16} - {3:x16}]",
+                Name, &Header->sh_addr, Start, End),
+        inconvertibleErrorCode());
+  if (Header->sh_offset + Header->sh_size > Buffer.size())
+    return make_error<StringError>(
+        formatv("{0} section data [{1:x16} - {2:x16}] not within bounds of "
+                "the given debug object buffer [{3:x16} - {4:x16}]",
+                Name, Start + Header->sh_offset,
+                Start + Header->sh_offset + Header->sh_size, Start, End),
+        inconvertibleErrorCode());
+  return Error::success();
+}
+
+template <typename ELFT>
+void ELFDebugObjectSection<ELFT>::dump(raw_ostream &OS, StringRef Name) {
+  if (auto Addr = static_cast<JITTargetAddress>(Header->sh_addr)) {
+    OS << formatv("  {0:x16} {1}\n", Addr, Name);
+  } else {
+    OS << formatv("                     {0}\n", Name);
+  }
+}
 
 enum class Requirement {
   // Request final target memory load-addresses for all sections.
   ReportFinalSectionLoadAddresses,
 };
 
-/// The plugin creates a debug object from JITLinkContext when JITLink starts
-/// processing the corresponding LinkGraph. It provides access to the pass
-/// configuration of the LinkGraph and calls the finalization function, once
-/// the resulting link artifact was emitted.
+/// The plugin creates a debug object from when JITLink starts processing the
+/// corresponding LinkGraph. It provides access to the pass configuration of
+/// the LinkGraph and calls the finalization function, once the resulting link
+/// artifact was emitted.
 ///
 class DebugObject {
 public:
-  DebugObject(JITLinkContext &Ctx) : Ctx(Ctx) {}
+  DebugObject(JITLinkMemoryManager &MemMgr, const JITLinkDylib *JD,
+              ExecutionSession &ES)
+      : MemMgr(MemMgr), JD(JD), ES(ES) {}
 
   void set(Requirement Req) { Reqs.insert(Req); }
   bool has(Requirement Req) const { return Reqs.count(Req) > 0; }
 
-  using FinalizeContinuation = std::function<void(Expected<sys::MemoryBlock>)>;
+  using FinalizeContinuation = std::function<void(Expected<ExecutorAddrRange>)>;
+
   void finalizeAsync(FinalizeContinuation OnFinalize);
+
+  virtual ~DebugObject() {
+    if (Alloc) {
+      std::vector<FinalizedAlloc> Allocs;
+      Allocs.push_back(std::move(Alloc));
+      if (Error Err = MemMgr.deallocate(std::move(Allocs)))
+        ES.reportError(std::move(Err));
+    }
+  }
 
   virtual void reportSectionTargetMemoryRange(StringRef Name,
                                               SectionRange TargetMem) {}
-  virtual ~DebugObject() {}
 
 protected:
-  using Allocation = JITLinkMemoryManager::Allocation;
+  using InFlightAlloc = JITLinkMemoryManager::InFlightAlloc;
+  using FinalizedAlloc = JITLinkMemoryManager::FinalizedAlloc;
 
-  virtual Expected<std::unique_ptr<Allocation>>
-  finalizeWorkingMemory(JITLinkContext &Ctx) = 0;
+  virtual Expected<SimpleSegmentAlloc> finalizeWorkingMemory() = 0;
+
+  JITLinkMemoryManager &MemMgr;
+  const JITLinkDylib *JD = nullptr;
 
 private:
-  JITLinkContext &Ctx;
+  ExecutionSession &ES;
   std::set<Requirement> Reqs;
-  std::unique_ptr<Allocation> Alloc{nullptr};
+  FinalizedAlloc Alloc;
 };
 
 // Finalize working memory and take ownership of the resulting allocation. Start
 // copying memory over to the target and pass on the result once we're done.
 // Ownership of the allocation remains with us for the rest of our lifetime.
 void DebugObject::finalizeAsync(FinalizeContinuation OnFinalize) {
-  assert(Alloc == nullptr && "Cannot finalize more than once");
+  assert(!Alloc && "Cannot finalize more than once");
 
-  auto AllocOrErr = finalizeWorkingMemory(Ctx);
-  if (!AllocOrErr)
-    OnFinalize(AllocOrErr.takeError());
-  Alloc = std::move(*AllocOrErr);
-
-  Alloc->finalizeAsync([this, OnFinalize](Error Err) {
-    if (Err)
-      OnFinalize(std::move(Err));
-    else
-      OnFinalize(sys::MemoryBlock(
-          jitTargetAddressToPointer<void *>(Alloc->getTargetMemory(ReadOnly)),
-          Alloc->getWorkingMemory(ReadOnly).size()));
-  });
+  if (auto SimpleSegAlloc = finalizeWorkingMemory()) {
+    auto ROSeg = SimpleSegAlloc->getSegInfo(MemProt::Read);
+    ExecutorAddrRange DebugObjRange(ExecutorAddr(ROSeg.Addr),
+                                    ExecutorAddrDiff(ROSeg.WorkingMem.size()));
+    SimpleSegAlloc->finalize(
+        [this, DebugObjRange,
+         OnFinalize = std::move(OnFinalize)](Expected<FinalizedAlloc> FA) {
+          if (FA) {
+            Alloc = std::move(*FA);
+            OnFinalize(DebugObjRange);
+          } else
+            OnFinalize(FA.takeError());
+        });
+  } else
+    OnFinalize(SimpleSegAlloc.takeError());
 }
 
 /// The current implementation of ELFDebugObject replicates the approach used in
@@ -150,31 +193,35 @@ void DebugObject::finalizeAsync(FinalizeContinuation OnFinalize) {
 ///
 class ELFDebugObject : public DebugObject {
 public:
-  static Expected<std::unique_ptr<DebugObject>> Create(MemoryBufferRef Buffer,
-                                                       JITLinkContext &Ctx);
+  static Expected<std::unique_ptr<DebugObject>>
+  Create(MemoryBufferRef Buffer, JITLinkContext &Ctx, ExecutionSession &ES);
 
   void reportSectionTargetMemoryRange(StringRef Name,
                                       SectionRange TargetMem) override;
 
-protected:
-  Expected<std::unique_ptr<Allocation>>
-  finalizeWorkingMemory(JITLinkContext &Ctx) override;
+  StringRef getBuffer() const { return Buffer->getMemBufferRef().getBuffer(); }
 
+protected:
+  Expected<SimpleSegmentAlloc> finalizeWorkingMemory() override;
+
+  template <typename ELFT>
   Error recordSection(StringRef Name,
-                      std::unique_ptr<DebugObjectSection> Section);
+                      std::unique_ptr<ELFDebugObjectSection<ELFT>> Section);
   DebugObjectSection *getSection(StringRef Name);
 
 private:
   template <typename ELFT>
   static Expected<std::unique_ptr<ELFDebugObject>>
-  CreateArchType(MemoryBufferRef Buffer, JITLinkContext &Ctx);
+  CreateArchType(MemoryBufferRef Buffer, JITLinkMemoryManager &MemMgr,
+                 const JITLinkDylib *JD, ExecutionSession &ES);
 
-  static Expected<std::unique_ptr<WritableMemoryBuffer>>
-  CopyBuffer(MemoryBufferRef Buffer);
+  static std::unique_ptr<WritableMemoryBuffer>
+  CopyBuffer(MemoryBufferRef Buffer, Error &Err);
 
   ELFDebugObject(std::unique_ptr<WritableMemoryBuffer> Buffer,
-                 JITLinkContext &Ctx)
-      : DebugObject(Ctx), Buffer(std::move(Buffer)) {
+                 JITLinkMemoryManager &MemMgr, const JITLinkDylib *JD,
+                 ExecutionSession &ES)
+      : DebugObject(MemMgr, JD, ES), Buffer(std::move(Buffer)) {
     set(Requirement::ReportFinalSectionLoadAddresses);
   }
 
@@ -193,24 +240,34 @@ static bool isDwarfSection(StringRef SectionName) {
   return DwarfSectionNames.count(SectionName) == 1;
 }
 
-Expected<std::unique_ptr<WritableMemoryBuffer>>
-ELFDebugObject::CopyBuffer(MemoryBufferRef Buffer) {
+std::unique_ptr<WritableMemoryBuffer>
+ELFDebugObject::CopyBuffer(MemoryBufferRef Buffer, Error &Err) {
+  ErrorAsOutParameter _(&Err);
   size_t Size = Buffer.getBufferSize();
   StringRef Name = Buffer.getBufferIdentifier();
-  auto Copy = WritableMemoryBuffer::getNewUninitMemBuffer(Size, Name);
-  if (!Copy)
-    return errorCodeToError(make_error_code(errc::not_enough_memory));
+  if (auto Copy = WritableMemoryBuffer::getNewUninitMemBuffer(Size, Name)) {
+    memcpy(Copy->getBufferStart(), Buffer.getBufferStart(), Size);
+    return Copy;
+  }
 
-  memcpy(Copy->getBufferStart(), Buffer.getBufferStart(), Size);
-  return std::move(Copy);
+  Err = errorCodeToError(make_error_code(errc::not_enough_memory));
+  return nullptr;
 }
 
 template <typename ELFT>
 Expected<std::unique_ptr<ELFDebugObject>>
-ELFDebugObject::CreateArchType(MemoryBufferRef Buffer, JITLinkContext &Ctx) {
+ELFDebugObject::CreateArchType(MemoryBufferRef Buffer,
+                               JITLinkMemoryManager &MemMgr,
+                               const JITLinkDylib *JD, ExecutionSession &ES) {
   using SectionHeader = typename ELFT::Shdr;
 
-  Expected<ELFFile<ELFT>> ObjRef = ELFFile<ELFT>::create(Buffer.getBuffer());
+  Error Err = Error::success();
+  std::unique_ptr<ELFDebugObject> DebugObj(
+      new ELFDebugObject(CopyBuffer(Buffer, Err), MemMgr, JD, ES));
+  if (Err)
+    return std::move(Err);
+
+  Expected<ELFFile<ELFT>> ObjRef = ELFFile<ELFT>::create(DebugObj->getBuffer());
   if (!ObjRef)
     return ObjRef.takeError();
 
@@ -222,13 +279,6 @@ ELFDebugObject::CreateArchType(MemoryBufferRef Buffer, JITLinkContext &Ctx) {
   Expected<ArrayRef<SectionHeader>> Sections = ObjRef->sections();
   if (!Sections)
     return Sections.takeError();
-
-  Expected<std::unique_ptr<WritableMemoryBuffer>> Copy = CopyBuffer(Buffer);
-  if (!Copy)
-    return Copy.takeError();
-
-  std::unique_ptr<ELFDebugObject> DebugObj(
-      new ELFDebugObject(std::move(*Copy), Ctx));
 
   bool HasDwarfSection = false;
   for (const SectionHeader &Header : *Sections) {
@@ -255,29 +305,33 @@ ELFDebugObject::CreateArchType(MemoryBufferRef Buffer, JITLinkContext &Ctx) {
 }
 
 Expected<std::unique_ptr<DebugObject>>
-ELFDebugObject::Create(MemoryBufferRef Buffer, JITLinkContext &Ctx) {
+ELFDebugObject::Create(MemoryBufferRef Buffer, JITLinkContext &Ctx,
+                       ExecutionSession &ES) {
   unsigned char Class, Endian;
   std::tie(Class, Endian) = getElfArchType(Buffer.getBuffer());
 
   if (Class == ELF::ELFCLASS32) {
     if (Endian == ELF::ELFDATA2LSB)
-      return CreateArchType<ELF32LE>(Buffer, Ctx);
+      return CreateArchType<ELF32LE>(Buffer, Ctx.getMemoryManager(),
+                                     Ctx.getJITLinkDylib(), ES);
     if (Endian == ELF::ELFDATA2MSB)
-      return CreateArchType<ELF32BE>(Buffer, Ctx);
+      return CreateArchType<ELF32BE>(Buffer, Ctx.getMemoryManager(),
+                                     Ctx.getJITLinkDylib(), ES);
     return nullptr;
   }
   if (Class == ELF::ELFCLASS64) {
     if (Endian == ELF::ELFDATA2LSB)
-      return CreateArchType<ELF64LE>(Buffer, Ctx);
+      return CreateArchType<ELF64LE>(Buffer, Ctx.getMemoryManager(),
+                                     Ctx.getJITLinkDylib(), ES);
     if (Endian == ELF::ELFDATA2MSB)
-      return CreateArchType<ELF64BE>(Buffer, Ctx);
+      return CreateArchType<ELF64BE>(Buffer, Ctx.getMemoryManager(),
+                                     Ctx.getJITLinkDylib(), ES);
     return nullptr;
   }
   return nullptr;
 }
 
-Expected<std::unique_ptr<DebugObject::Allocation>>
-ELFDebugObject::finalizeWorkingMemory(JITLinkContext &Ctx) {
+Expected<SimpleSegmentAlloc> ELFDebugObject::finalizeWorkingMemory() {
   LLVM_DEBUG({
     dbgs() << "Section load-addresses in debug object for \""
            << Buffer->getBufferIdentifier() << "\":\n";
@@ -286,28 +340,21 @@ ELFDebugObject::finalizeWorkingMemory(JITLinkContext &Ctx) {
   });
 
   // TODO: This works, but what actual alignment requirements do we have?
-  unsigned Alignment = sys::Process::getPageSizeEstimate();
-  JITLinkMemoryManager &MemMgr = Ctx.getMemoryManager();
-  const JITLinkDylib *JD = Ctx.getJITLinkDylib();
+  unsigned PageSize = sys::Process::getPageSizeEstimate();
   size_t Size = Buffer->getBufferSize();
 
   // Allocate working memory for debug object in read-only segment.
-  JITLinkMemoryManager::SegmentsRequestMap SingleReadOnlySegment;
-  SingleReadOnlySegment[ReadOnly] =
-      JITLinkMemoryManager::SegmentRequest(Alignment, Size, 0);
-
-  auto AllocOrErr = MemMgr.allocate(JD, SingleReadOnlySegment);
-  if (!AllocOrErr)
-    return AllocOrErr.takeError();
+  auto Alloc = SimpleSegmentAlloc::Create(
+      MemMgr, JD, {{MemProt::Read, {Size, Align(PageSize)}}});
+  if (!Alloc)
+    return Alloc;
 
   // Initialize working memory with a copy of our object buffer.
-  // TODO: Use our buffer as working memory directly.
-  std::unique_ptr<Allocation> Alloc = std::move(*AllocOrErr);
-  MutableArrayRef<char> WorkingMem = Alloc->getWorkingMemory(ReadOnly);
-  memcpy(WorkingMem.data(), Buffer->getBufferStart(), Size);
+  auto SegInfo = Alloc->getSegInfo(MemProt::Read);
+  memcpy(SegInfo.WorkingMem.data(), Buffer->getBufferStart(), Size);
   Buffer.reset();
 
-  return std::move(Alloc);
+  return Alloc;
 }
 
 void ELFDebugObject::reportSectionTargetMemoryRange(StringRef Name,
@@ -316,8 +363,11 @@ void ELFDebugObject::reportSectionTargetMemoryRange(StringRef Name,
     DebugObjSection->setTargetMemoryRange(TargetMem);
 }
 
+template <typename ELFT>
 Error ELFDebugObject::recordSection(
-    StringRef Name, std::unique_ptr<DebugObjectSection> Section) {
+    StringRef Name, std::unique_ptr<ELFDebugObjectSection<ELFT>> Section) {
+  if (Error Err = Section->validateInBounds(this->getBuffer(), Name.data()))
+    return Err;
   auto ItInserted = Sections.try_emplace(Name, std::move(Section));
   if (!ItInserted.second)
     return make_error<StringError>("Duplicate section",
@@ -330,25 +380,15 @@ DebugObjectSection *ELFDebugObject::getSection(StringRef Name) {
   return It == Sections.end() ? nullptr : It->second.get();
 }
 
-static ResourceKey getResourceKey(MaterializationResponsibility &MR) {
-  ResourceKey Key;
-  if (auto Err = MR.withResourceKeyDo([&](ResourceKey K) { Key = K; })) {
-    MR.getExecutionSession().reportError(std::move(Err));
-    return ResourceKey{};
-  }
-  assert(Key && "Invalid key");
-  return Key;
-}
-
 /// Creates a debug object based on the input object file from
 /// ObjectLinkingLayerJITLinkContext.
 ///
 static Expected<std::unique_ptr<DebugObject>>
-createDebugObjectFromBuffer(LinkGraph &G, JITLinkContext &Ctx,
-                            MemoryBufferRef ObjBuffer) {
+createDebugObjectFromBuffer(ExecutionSession &ES, LinkGraph &G,
+                            JITLinkContext &Ctx, MemoryBufferRef ObjBuffer) {
   switch (G.getTargetTriple().getObjectFormat()) {
   case Triple::ELF:
-    return ELFDebugObject::Create(ObjBuffer, Ctx);
+    return ELFDebugObject::Create(ObjBuffer, Ctx, ES);
 
   default:
     // TODO: Once we add support for other formats, we might want to split this
@@ -361,33 +401,31 @@ DebugObjectManagerPlugin::DebugObjectManagerPlugin(
     ExecutionSession &ES, std::unique_ptr<DebugObjectRegistrar> Target)
     : ES(ES), Target(std::move(Target)) {}
 
-DebugObjectManagerPlugin::~DebugObjectManagerPlugin() {}
+DebugObjectManagerPlugin::~DebugObjectManagerPlugin() = default;
 
 void DebugObjectManagerPlugin::notifyMaterializing(
     MaterializationResponsibility &MR, LinkGraph &G, JITLinkContext &Ctx,
     MemoryBufferRef ObjBuffer) {
-  assert(PendingObjs.count(getResourceKey(MR)) == 0 &&
+  std::lock_guard<std::mutex> Lock(PendingObjsLock);
+  assert(PendingObjs.count(&MR) == 0 &&
          "Cannot have more than one pending debug object per "
          "MaterializationResponsibility");
 
-  std::lock_guard<std::mutex> Lock(PendingObjsLock);
-  if (auto DebugObj = createDebugObjectFromBuffer(G, Ctx, ObjBuffer)) {
+  if (auto DebugObj = createDebugObjectFromBuffer(ES, G, Ctx, ObjBuffer)) {
     // Not all link artifacts allow debugging.
-    if (*DebugObj != nullptr) {
-      ResourceKey Key = getResourceKey(MR);
-      PendingObjs[Key] = std::move(*DebugObj);
-    }
+    if (*DebugObj != nullptr)
+      PendingObjs[&MR] = std::move(*DebugObj);
   } else {
     ES.reportError(DebugObj.takeError());
   }
 }
 
 void DebugObjectManagerPlugin::modifyPassConfig(
-    MaterializationResponsibility &MR, const Triple &TT,
+    MaterializationResponsibility &MR, LinkGraph &G,
     PassConfiguration &PassConfig) {
   // Not all link artifacts have associated debug objects.
   std::lock_guard<std::mutex> Lock(PendingObjsLock);
-  auto It = PendingObjs.find(getResourceKey(MR));
+  auto It = PendingObjs.find(&MR);
   if (It == PendingObjs.end())
     return;
 
@@ -405,80 +443,72 @@ void DebugObjectManagerPlugin::modifyPassConfig(
 
 Error DebugObjectManagerPlugin::notifyEmitted(
     MaterializationResponsibility &MR) {
-  ResourceKey Key = getResourceKey(MR);
-
   std::lock_guard<std::mutex> Lock(PendingObjsLock);
-  auto It = PendingObjs.find(Key);
+  auto It = PendingObjs.find(&MR);
   if (It == PendingObjs.end())
     return Error::success();
 
-  DebugObject *UnownedDebugObj = It->second.release();
-  PendingObjs.erase(It);
+  // During finalization the debug object is registered with the target.
+  // Materialization must wait for this process to finish. Otherwise we might
+  // start running code before the debugger processed the corresponding debug
+  // info.
+  std::promise<MSVCPError> FinalizePromise;
+  std::future<MSVCPError> FinalizeErr = FinalizePromise.get_future();
 
-  // FIXME: We released ownership of the DebugObject, so we can easily capture
-  // the raw pointer in the continuation function, which re-owns it immediately.
-  if (UnownedDebugObj)
-    UnownedDebugObj->finalizeAsync(
-        [this, Key, UnownedDebugObj](Expected<sys::MemoryBlock> TargetMem) {
-          std::unique_ptr<DebugObject> ReownedDebugObj(UnownedDebugObj);
-          if (!TargetMem) {
-            ES.reportError(TargetMem.takeError());
-            return;
-          }
-          if (Error Err = Target->registerDebugObject(*TargetMem)) {
-            ES.reportError(std::move(Err));
-            return;
-          }
+  It->second->finalizeAsync(
+      [this, &FinalizePromise, &MR](Expected<ExecutorAddrRange> TargetMem) {
+        // Any failure here will fail materialization.
+        if (!TargetMem) {
+          FinalizePromise.set_value(TargetMem.takeError());
+          return;
+        }
+        if (Error Err = Target->registerDebugObject(*TargetMem)) {
+          FinalizePromise.set_value(std::move(Err));
+          return;
+        }
 
+        // Once our tracking info is updated, notifyEmitted() can return and
+        // finish materialization.
+        FinalizePromise.set_value(MR.withResourceKeyDo([&](ResourceKey K) {
+          assert(PendingObjs.count(&MR) && "We still hold PendingObjsLock");
           std::lock_guard<std::mutex> Lock(RegisteredObjsLock);
-          RegisteredObjs[Key].push_back(std::move(ReownedDebugObj));
-        });
+          RegisteredObjs[K].push_back(std::move(PendingObjs[&MR]));
+          PendingObjs.erase(&MR);
+        }));
+      });
 
-  return Error::success();
+  return FinalizeErr.get();
 }
 
 Error DebugObjectManagerPlugin::notifyFailed(
     MaterializationResponsibility &MR) {
   std::lock_guard<std::mutex> Lock(PendingObjsLock);
-  PendingObjs.erase(getResourceKey(MR));
+  PendingObjs.erase(&MR);
   return Error::success();
 }
 
 void DebugObjectManagerPlugin::notifyTransferringResources(ResourceKey DstKey,
                                                            ResourceKey SrcKey) {
-  {
-    std::lock_guard<std::mutex> Lock(RegisteredObjsLock);
-    auto SrcIt = RegisteredObjs.find(SrcKey);
-    if (SrcIt != RegisteredObjs.end()) {
-      // Resources from distinct MaterializationResponsibilitys can get merged
-      // after emission, so we can have multiple debug objects per resource key.
-      for (std::unique_ptr<DebugObject> &DebugObj : SrcIt->second)
-        RegisteredObjs[DstKey].push_back(std::move(DebugObj));
-      RegisteredObjs.erase(SrcIt);
-    }
-  }
-  {
-    std::lock_guard<std::mutex> Lock(PendingObjsLock);
-    auto SrcIt = PendingObjs.find(SrcKey);
-    if (SrcIt != PendingObjs.end()) {
-      assert(PendingObjs.count(DstKey) == 0 &&
-             "Cannot have more than one pending debug object per "
-             "MaterializationResponsibility");
-      PendingObjs[DstKey] = std::move(SrcIt->second);
-      PendingObjs.erase(SrcIt);
-    }
+  // Debug objects are stored by ResourceKey only after registration.
+  // Thus, pending objects don't need to be updated here.
+  std::lock_guard<std::mutex> Lock(RegisteredObjsLock);
+  auto SrcIt = RegisteredObjs.find(SrcKey);
+  if (SrcIt != RegisteredObjs.end()) {
+    // Resources from distinct MaterializationResponsibilitys can get merged
+    // after emission, so we can have multiple debug objects per resource key.
+    for (std::unique_ptr<DebugObject> &DebugObj : SrcIt->second)
+      RegisteredObjs[DstKey].push_back(std::move(DebugObj));
+    RegisteredObjs.erase(SrcIt);
   }
 }
 
-Error DebugObjectManagerPlugin::notifyRemovingResources(ResourceKey K) {
-  {
-    std::lock_guard<std::mutex> Lock(RegisteredObjsLock);
-    RegisteredObjs.erase(K);
-    // TODO: Implement unregister notifications.
-  }
-  std::lock_guard<std::mutex> Lock(PendingObjsLock);
-  PendingObjs.erase(K);
+Error DebugObjectManagerPlugin::notifyRemovingResources(ResourceKey Key) {
+  // Removing the resource for a pending object fails materialization, so they
+  // get cleaned up in the notifyFailed() handler.
+  std::lock_guard<std::mutex> Lock(RegisteredObjsLock);
+  RegisteredObjs.erase(Key);
 
+  // TODO: Implement unregister notifications.
   return Error::success();
 }
 

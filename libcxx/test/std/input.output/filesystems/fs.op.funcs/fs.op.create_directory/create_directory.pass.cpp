@@ -9,7 +9,7 @@
 // UNSUPPORTED: c++03
 
 // This test requires the dylib support introduced in D92769.
-// XFAIL: with_system_cxx_lib=macosx10.15
+// XFAIL: use_system_cxx_lib && target={{.+}}-apple-macosx10.15
 
 // <filesystem>
 
@@ -32,7 +32,7 @@
 using namespace fs;
 
 fs::perms read_umask() {
-    mode_t old_mask = umask(0);
+    auto old_mask = umask(0); // int on Windows, mode_t on POSIX.
     umask(old_mask); // reset the mask to the old value.
     return static_cast<fs::perms>(old_mask);
 }

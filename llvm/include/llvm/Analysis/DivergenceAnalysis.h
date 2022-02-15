@@ -18,16 +18,17 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/Analysis/SyncDependenceAnalysis.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/PassManager.h"
 #include "llvm/Pass.h"
 #include <vector>
 
 namespace llvm {
-class Module;
-class Value;
+class Function;
 class Instruction;
 class Loop;
 class raw_ostream;
 class TargetTransformInfo;
+class Value;
 
 /// \brief Generic divergence analysis for reducible CFGs.
 ///
@@ -112,13 +113,6 @@ private:
   bool isTemporalDivergent(const BasicBlock &ObservingBlock,
                            const Value &Val) const;
 
-  /// \brief Whether \p Block is join divergent
-  ///
-  /// (see markBlockJoinDivergent).
-  bool isJoinDivergent(const BasicBlock &Block) const {
-    return DivergentJoinBlocks.contains(&Block);
-  }
-
 private:
   const Function &F;
   // If regionLoop != nullptr, analysis is only performed within \p RegionLoop.
@@ -140,9 +134,6 @@ private:
   // Set of known-uniform values.
   DenseSet<const Value *> UniformOverrides;
 
-  // Blocks with joining divergent control from different predecessors.
-  DenseSet<const BasicBlock *> DivergentJoinBlocks; // FIXME Deprecated
-
   // Detected/marked divergent values.
   DenseSet<const Value *> DivergentValues;
 
@@ -157,7 +148,7 @@ class DivergenceInfo {
   // analysis can run indefinitely. We set ContainsIrreducible and no
   // analysis is actually performed on the function. All values in
   // this function are conservatively reported as divergent instead.
-  bool ContainsIrreducible;
+  bool ContainsIrreducible = false;
   std::unique_ptr<SyncDependenceAnalysis> SDA;
   std::unique_ptr<DivergenceAnalysisImpl> DA;
 

@@ -520,9 +520,9 @@ public:
 
   QualType GetInnermostElementType(const QualType &Q) {
     if (Q->isArrayType()) {
-      if (const ConstantArrayType *BaseArrayTy = CGF.getContext().getAsConstantArrayType(Q)) {
+      if (CGF.getContext().getAsConstantArrayType(Q)) {
         return CGF.getContext().getBaseElementType(Q);
-      } else if (const VariableArrayType *BaseArrayTy = CGF.getContext().getAsVariableArrayType(Q)) {
+      } else if (CGF.getContext().getAsVariableArrayType(Q)) {
         return CGF.getContext().getBaseElementType(Q);
       } else {
         llvm_unreachable("Unhandled array type");
@@ -883,8 +883,9 @@ void CGOmpSsRuntime::EmitCopyCtorFunc(
   // Find the end of the array.
   llvm::Value *SrcBegin = SrcLV.getPointer(CGF);
   llvm::Value *DstBegin = DstLV.getPointer(CGF);
-  llvm::Value *DstEnd = CGF.Builder.CreateInBoundsGEP(DstBegin, NelemsValue,
-                                                      "arrayctor.dst.end");
+  llvm::Value *DstEnd = CGF.Builder.CreateInBoundsGEP(
+      DstBegin->getType()->getPointerElementType(), DstBegin, NelemsValue,
+      "arrayctor.dst.end");
 
   // Enter the loop, setting up a phi for the current location to initialize.
   llvm::BasicBlock *EntryBB = CGF.Builder.GetInsertBlock();
@@ -910,14 +911,16 @@ void CGOmpSsRuntime::EmitCopyCtorFunc(
   }
 
   // Go to the next element. Move SrcBegin too
-  llvm::Value *DstNext =
-    CGF.Builder.CreateInBoundsGEP(DstCur, llvm::ConstantInt::get(CGF.ConvertType(C.getSizeType()), 1),
-                              "arrayctor.dst.next");
+  llvm::Value *DstNext = CGF.Builder.CreateInBoundsGEP(
+      DstCur->getType()->getPointerElementType(), DstCur,
+      llvm::ConstantInt::get(CGF.ConvertType(C.getSizeType()), 1),
+      "arrayctor.dst.next");
   DstCur->addIncoming(DstNext, CGF.Builder.GetInsertBlock());
 
-  llvm::Value *SrcDest =
-    CGF.Builder.CreateInBoundsGEP(SrcCur, llvm::ConstantInt::get(CGF.ConvertType(C.getSizeType()), 1),
-                                  "arrayctor.src.next");
+  llvm::Value *SrcDest = CGF.Builder.CreateInBoundsGEP(
+      SrcCur->getType()->getPointerElementType(), SrcCur,
+      llvm::ConstantInt::get(CGF.ConvertType(C.getSizeType()), 1),
+      "arrayctor.src.next");
   SrcCur->addIncoming(SrcDest, CGF.Builder.GetInsertBlock());
 
   // Check whether that's the end of the loop.
@@ -984,8 +987,9 @@ void CGOmpSsRuntime::EmitCtorFunc(
 
   // Find the end of the array.
   llvm::Value *DstBegin = DstLV.getPointer(CGF);
-  llvm::Value *DstEnd = CGF.Builder.CreateInBoundsGEP(DstBegin, NelemsValue,
-                                                      "arrayctor.dst.end");
+  llvm::Value *DstEnd = CGF.Builder.CreateInBoundsGEP(
+      DstBegin->getType()->getPointerElementType(), DstBegin, NelemsValue,
+      "arrayctor.dst.end");
 
   // Enter the loop, setting up a phi for the current location to initialize.
   llvm::BasicBlock *EntryBB = CGF.Builder.GetInsertBlock();
@@ -1000,9 +1004,10 @@ void CGOmpSsRuntime::EmitCtorFunc(
                      /*capturedByInit=*/false);
 
   // Go to the next element
-  llvm::Value *DstNext =
-    CGF.Builder.CreateInBoundsGEP(DstCur, llvm::ConstantInt::get(CGF.ConvertType(C.getSizeType()), 1),
-                              "arrayctor.dst.next");
+  llvm::Value *DstNext = CGF.Builder.CreateInBoundsGEP(
+      DstCur->getType()->getPointerElementType(), DstCur,
+      llvm::ConstantInt::get(CGF.ConvertType(C.getSizeType()), 1),
+      "arrayctor.dst.next");
   DstCur->addIncoming(DstNext, CGF.Builder.GetInsertBlock());
 
   // Check whether that's the end of the loop.
@@ -1076,8 +1081,9 @@ void CGOmpSsRuntime::EmitDtorFunc(
 
   // Find the end of the array.
   llvm::Value *DstBegin = DstLV.getPointer(CGF);
-  llvm::Value *DstEnd = CGF.Builder.CreateInBoundsGEP(DstBegin, NelemsValue,
-                                                      "arraydtor.dst.end");
+  llvm::Value *DstEnd = CGF.Builder.CreateInBoundsGEP(
+      DstBegin->getType()->getPointerElementType(), DstBegin, NelemsValue,
+      "arraydtor.dst.end");
 
   // Enter the loop, setting up a phi for the current location to initialize.
   llvm::BasicBlock *EntryBB = CGF.Builder.GetInsertBlock();
@@ -1092,9 +1098,10 @@ void CGOmpSsRuntime::EmitDtorFunc(
                          Address(DstCur, DstLV.getAlignment()), Q);
 
   // Go to the next element
-  llvm::Value *DstNext =
-    CGF.Builder.CreateInBoundsGEP(DstCur, llvm::ConstantInt::get(CGF.ConvertType(C.getSizeType()), 1),
-                              "arraydtor.dst.next");
+  llvm::Value *DstNext = CGF.Builder.CreateInBoundsGEP(
+      DstCur->getType()->getPointerElementType(), DstCur,
+      llvm::ConstantInt::get(CGF.ConvertType(C.getSizeType()), 1),
+      "arraydtor.dst.next");
   DstCur->addIncoming(DstNext, CGF.Builder.GetInsertBlock());
 
   // Check whether that's the end of the loop.
@@ -1263,8 +1270,8 @@ llvm::Function *CGOmpSsRuntime::createCallWrapperFunc(
     const llvm::MapVector<const Expr *, llvm::Value *> &VLASizeInvolvedMap,
     const llvm::DenseMap<const VarDecl *, Address> &CaptureInvolvedMap,
     ArrayRef<QualType> RetTypes,
-    bool HasThis, std::string FuncName, std::string RetName,
-    llvm::function_ref<void(CodeGenFunction &)> Body) {
+    bool HasThis, bool HasSwitch, std::string FuncName, std::string RetName,
+    llvm::function_ref<void(CodeGenFunction &, Optional<llvm::Value *>)> Body) {
 
   InDirectiveEmission = false;
 
@@ -1301,6 +1308,13 @@ llvm::Function *CGOmpSsRuntime::createCallWrapperFunc(
     // NOTE: We have seen 'this' so it's fine to assume we are in a method function
     NewCGF.CurGD = GlobalDecl(cast<CXXMethodDecl>(CGF.CurGD.getDecl()->getNonClosureContext()));
     NewCGF.CGM.getCXXABI().buildThisParam(NewCGF, Args);
+  }
+  if (HasSwitch) {
+    QualType Q = C.getSizeType();
+    auto *Arg =
+      ImplicitParamDecl::Create(
+        C, Q, ImplicitParamDecl::Other);
+    Args.push_back(Arg);
   }
 
   QualType RetQ;
@@ -1392,7 +1406,10 @@ llvm::Function *CGOmpSsRuntime::createCallWrapperFunc(
     (void)InitScope.Privatize();
 
     // Function body generation
-    Body(NewCGF);
+    Optional<llvm::Value *> SwitchValue;
+    if (HasSwitch)
+      SwitchValue = &*(FuncVar->arg_end() - 1);
+    Body(NewCGF, SwitchValue);
   }
 
   NewCGF.EHStack.popTerminate();
@@ -1412,7 +1429,9 @@ static llvm::Value *emitDiscreteArray(
     llvm::Value *Idx[2];
     Idx[0] = llvm::Constant::getNullValue(CGF.ConvertType(CGF.getContext().IntTy));
     Idx[1] = CGF.EmitScalarExpr(IterExpr);
-    llvm::Value *GEP = CGF.Builder.CreateGEP(DiscreteArrLV.getPointer(CGF), Idx, "discreteidx");
+    llvm::Value *Ptr = DiscreteArrLV.getPointer(CGF);
+    llvm::Value *GEP = CGF.Builder.CreateGEP(
+        Ptr->getType()->getPointerElementType(), Ptr, Idx, "discreteidx");
     llvm::Value *LoadGEP = CGF.Builder.CreateLoad(Address(GEP, CGF.getPointerAlign()));
     return LoadGEP;
   }
@@ -1440,10 +1459,24 @@ void CGOmpSsRuntime::EmitMultiDependencyList(
   // For each iterator we have {init, remap, ub, step}
   SmallVector<QualType, 3 + 1> MultiDepRetTypes(
     MDExpr->getDepInits().size()*(3 + 1), CGF.getContext().IntTy);
+  auto Body = [&MDExpr](CodeGenFunction &NewCGF, Optional<llvm::Value *> Switch) {
+    uint64_t SwitchTyBits =
+      NewCGF.CGM.getDataLayout().getTypeSizeInBits(Switch.getValue()->getType());
 
-  auto Body = [&List, &MDExpr](CodeGenFunction &NewCGF) {
+    llvm::BasicBlock *ContBB = NewCGF.createBasicBlock("", NewCGF.CurFn);
+    llvm::BasicBlock *FallBack = NewCGF.createBasicBlock("", NewCGF.CurFn);
+    llvm::SwitchInst *SI = NewCGF.Builder.CreateSwitch(Switch.getValue(), FallBack);
+    NewCGF.Builder.SetInsertPoint(FallBack);
+    NewCGF.Builder.CreateBr(ContBB);
+
+    Address RetAddr = NewCGF.ReturnValue;
+
     // Emit init/ub/step expressions
     for (size_t i = 0; i < MDExpr->getDepInits().size(); ++i) {
+      llvm::BasicBlock *BB = NewCGF.createBasicBlock("", NewCGF.CurFn);
+      SI->addCase(NewCGF.Builder.getIntN(SwitchTyBits, i), BB);
+      NewCGF.Builder.SetInsertPoint(BB);
+
       const Expr *const IterExpr = MDExpr->getDepIterators()[i];
       const Expr *const InitExpr = MDExpr->getDepInits()[i];
       const Expr *const SizeExpr = MDExpr->getDepSizes()[i];
@@ -1490,17 +1523,14 @@ void CGOmpSsRuntime::EmitMultiDependencyList(
             NewCGF.ConvertType(NewCGF.getContext().IntTy), 1);
         }
       }
-      assert(InitValue && SizeValue && StepValue);
-      List.push_back(InitValue);
-      List.push_back(RemapValue);
-      List.push_back(SizeValue);
-      List.push_back(StepValue);
-
+      assert(InitValue && RemapValue && SizeValue && StepValue);
+      NewCGF.Builder.CreateStore(InitValue, NewCGF.Builder.CreateStructGEP(RetAddr, i*4 + 0));
+      NewCGF.Builder.CreateStore(RemapValue, NewCGF.Builder.CreateStructGEP(RetAddr, i*4 + 1));
+      NewCGF.Builder.CreateStore(SizeValue, NewCGF.Builder.CreateStructGEP(RetAddr, i*4 + 2));
+      NewCGF.Builder.CreateStore(StepValue, NewCGF.Builder.CreateStructGEP(RetAddr, i*4 + 3));
+      NewCGF.Builder.CreateBr(ContBB);
     }
-    Address RetAddr = NewCGF.ReturnValue;
-    for (size_t i = 0; i < List.size(); ++i) {
-      NewCGF.Builder.CreateStore(List[i], NewCGF.Builder.CreateStructGEP(RetAddr, i));
-    }
+    NewCGF.Builder.SetInsertPoint(ContBB);
   };
 
   llvm::Function *ComputeMultiDepFun = createCallWrapperFunc(
@@ -1510,6 +1540,7 @@ void CGOmpSsRuntime::EmitMultiDependencyList(
     MultiDepInfoGathering.getCaptureInvolvedMap(),
     MultiDepRetTypes,
     MultiDepInfoGathering.hasThis(),
+    /*HasSwitch=*/true,
     "compute_dep", "_depend_unpack_t",
     Body);
 
@@ -1539,11 +1570,11 @@ void CGOmpSsRuntime::EmitMultiDependencyList(
   }
 }
 
-void CGOmpSsRuntime::EmitWrapperCallBundle(
-    std::string Name, std::string FuncName,
+void CGOmpSsRuntime::BuildWrapperCallBundleList(
+    std::string FuncName,
     CodeGenFunction &CGF, const Expr *E, QualType Q,
-    llvm::function_ref<void(CodeGenFunction &)> Body,
-    SmallVectorImpl<llvm::OperandBundleDef> &TaskInfo) {
+    llvm::function_ref<void(CodeGenFunction &, Optional<llvm::Value *>)> Body,
+    SmallVectorImpl<llvm::Value *> &List) {
 
   OSSExprInfoGathering CallVisitor(CGF);
   CallVisitor.Visit(E);
@@ -1559,10 +1590,10 @@ void CGOmpSsRuntime::EmitWrapperCallBundle(
     CallVisitor.getCaptureInvolvedMap(),
     RetTypes,
     CallVisitor.hasThis(),
+    /*HasSwitch=*/false,
     FuncName, "",
     Body);
 
-  SmallVector<llvm::Value *, 4> List;
   List.push_back(Func);
   for (const auto &p : CallVisitor.getInvolvedVarList()) {
     LValue LV = p.second;
@@ -1580,7 +1611,16 @@ void CGOmpSsRuntime::EmitWrapperCallBundle(
   if (CallVisitor.hasThis()) {
     List.push_back(CGF.LoadCXXThisAddress().getPointer());
   }
+}
 
+void CGOmpSsRuntime::EmitWrapperCallBundle(
+    std::string Name, std::string FuncName,
+    CodeGenFunction &CGF, const Expr *E, QualType Q,
+    llvm::function_ref<void(CodeGenFunction &, Optional<llvm::Value *>)> Body,
+    SmallVectorImpl<llvm::OperandBundleDef> &TaskInfo) {
+
+  SmallVector<llvm::Value *, 4> List;
+  BuildWrapperCallBundleList(FuncName, CGF, E, Q, Body, List);
   TaskInfo.emplace_back(Name, List);
 }
 
@@ -1589,7 +1629,7 @@ void CGOmpSsRuntime::EmitScalarWrapperCallBundle(
     CodeGenFunction &CGF, const Expr *E,
     SmallVectorImpl<llvm::OperandBundleDef> &TaskInfo) {
 
-  auto Body = [&E](CodeGenFunction &NewCGF) {
+  auto Body = [&E](CodeGenFunction &NewCGF, Optional<llvm::Value *>) {
     llvm::Value *V = NewCGF.EmitScalarExpr(E);
 
     Address RetAddr = NewCGF.ReturnValue;
@@ -1597,7 +1637,6 @@ void CGOmpSsRuntime::EmitScalarWrapperCallBundle(
   };
   EmitWrapperCallBundle(
     Name, FuncName, CGF, E, E->getType(), Body, TaskInfo);
-
 }
 
 void CGOmpSsRuntime::EmitIgnoredWrapperCallBundle(
@@ -1605,7 +1644,7 @@ void CGOmpSsRuntime::EmitIgnoredWrapperCallBundle(
     CodeGenFunction &CGF, const Expr *E,
     SmallVectorImpl<llvm::OperandBundleDef> &TaskInfo) {
 
-  auto Body = [&E](CodeGenFunction &NewCGF) {
+  auto Body = [&E](CodeGenFunction &NewCGF, Optional<llvm::Value *>) {
     if (const auto *DRE = dyn_cast<DeclRefExpr>(E)) {
       if (DRE->isNonOdrUse() == NOUR_Unevaluated)
         return;
@@ -1632,7 +1671,7 @@ void CGOmpSsRuntime::EmitDependencyList(
 
   CodeGenFunction NewCGF(CGF.CGM);
 
-  auto Body = [&List, &Dep](CodeGenFunction &NewCGF) {
+  auto Body = [&List, &Dep](CodeGenFunction &NewCGF, Optional<llvm::Value *>) {
     // C long -> LLVM long
     llvm::Type *OSSArgTy = NewCGF.ConvertType(NewCGF.getContext().LongTy);
 
@@ -1731,6 +1770,7 @@ void CGOmpSsRuntime::EmitDependencyList(
     DependInfoGathering.getCaptureInvolvedMap(),
     DependInfoGathering.getRetTypes(),
     DependInfoGathering.hasThis(),
+    /*HasSwitch=*/false,
     "compute_dep", "_depend_unpack_t",
     Body);
 
@@ -1870,8 +1910,9 @@ static llvm::Value *emitReduceInitFunction(CodeGenModule &CGM,
   // Find the end of the array.
   llvm::Value *OrigBegin = OrigLV.getPointer(CGF);
   llvm::Value *PrivBegin = PrivLV.getPointer(CGF);
-  llvm::Value *PrivEnd = CGF.Builder.CreateInBoundsGEP(PrivBegin, NelemsValue,
-                                                      "arrayctor.dst.end");
+  llvm::Value *PrivEnd = CGF.Builder.CreateInBoundsGEP(
+      PrivBegin->getType()->getPointerElementType(), PrivBegin, NelemsValue,
+      "arrayctor.dst.end");
 
   // Enter the loop, setting up a phi for the current location to initialize.
   llvm::BasicBlock *EntryBB = CGF.Builder.GetInsertBlock();
@@ -1916,14 +1957,16 @@ static llvm::Value *emitReduceInitFunction(CodeGenModule &CGM,
   }
 
   // Go to the next element. Move OrigBegin too
-  llvm::Value *PrivNext =
-    CGF.Builder.CreateInBoundsGEP(PrivCur, llvm::ConstantInt::get(CGF.ConvertType(C.getSizeType()), 1),
-                              "arrayctor.dst.next");
+  llvm::Value *PrivNext = CGF.Builder.CreateInBoundsGEP(
+      PrivCur->getType()->getPointerElementType(), PrivCur,
+      llvm::ConstantInt::get(CGF.ConvertType(C.getSizeType()), 1),
+      "arrayctor.dst.next");
   PrivCur->addIncoming(PrivNext, CGF.Builder.GetInsertBlock());
 
-  llvm::Value *OrigDest =
-    CGF.Builder.CreateInBoundsGEP(OrigCur, llvm::ConstantInt::get(CGF.ConvertType(C.getSizeType()), 1),
-                                  "arrayctor.src.next");
+  llvm::Value *OrigDest = CGF.Builder.CreateInBoundsGEP(
+      OrigCur->getType()->getPointerElementType(), OrigCur,
+      llvm::ConstantInt::get(CGF.ConvertType(C.getSizeType()), 1),
+      "arrayctor.src.next");
   OrigCur->addIncoming(OrigDest, CGF.Builder.GetInsertBlock());
 
   // Check whether that's the end of the loop.
@@ -1990,8 +2033,9 @@ static llvm::Value *emitReduceCombFunction(CodeGenModule &CGM,
   // Find the end of the array.
   llvm::Value *InBegin = InLV.getPointer(CGF);
   llvm::Value *OutBegin = OutLV.getPointer(CGF);
-  llvm::Value *OutEnd = CGF.Builder.CreateInBoundsGEP(OutBegin, NelemsValue,
-                                                      "arrayctor.dst.end");
+  llvm::Value *OutEnd = CGF.Builder.CreateInBoundsGEP(
+      OutBegin->getType()->getPointerElementType(), OutBegin, NelemsValue,
+      "arrayctor.dst.end");
 
   // Enter the loop, setting up a phi for the current location to initialize.
   llvm::BasicBlock *EntryBB = CGF.Builder.GetInsertBlock();
@@ -2035,14 +2079,16 @@ static llvm::Value *emitReduceCombFunction(CodeGenModule &CGM,
   }
 
   // Go to the next element. Move InBegin too
-  llvm::Value *OutNext =
-    CGF.Builder.CreateInBoundsGEP(OutCur, llvm::ConstantInt::get(CGF.ConvertType(C.getSizeType()), 1),
-                              "arrayctor.dst.next");
+  llvm::Value *OutNext = CGF.Builder.CreateInBoundsGEP(
+      OutCur->getType()->getPointerElementType(), OutCur,
+      llvm::ConstantInt::get(CGF.ConvertType(C.getSizeType()), 1),
+      "arrayctor.dst.next");
   OutCur->addIncoming(OutNext, CGF.Builder.GetInsertBlock());
 
-  llvm::Value *InDest =
-    CGF.Builder.CreateInBoundsGEP(InCur, llvm::ConstantInt::get(CGF.ConvertType(C.getSizeType()), 1),
-                                  "arrayctor.src.next");
+  llvm::Value *InDest = CGF.Builder.CreateInBoundsGEP(
+      InCur->getType()->getPointerElementType(), InCur,
+      llvm::ConstantInt::get(CGF.ConvertType(C.getSizeType()), 1),
+      "arrayctor.src.next");
   InCur->addIncoming(InDest, CGF.Builder.GetInsertBlock());
 
   // Check whether that's the end of the loop.
@@ -2111,24 +2157,30 @@ static llvm::ConstantInt *reductionKindToNanos6Enum(CodeGenFunction &CGF, QualTy
   // See SubstTemplateTypeParmType
   Q = Q.getCanonicalType();
 
-  if (Q == CGF.getContext().CharTy)                   ReductionType = 1000;
-  else if (Q == CGF.getContext().SignedCharTy)        ReductionType = 2000;
-  else if (Q == CGF.getContext().UnsignedCharTy)      ReductionType = 3000;
-  else if (Q == CGF.getContext().ShortTy)             ReductionType = 4000;
-  else if (Q == CGF.getContext().UnsignedShortTy)     ReductionType = 5000;
-  else if (Q == CGF.getContext().IntTy)               ReductionType = 6000;
-  else if (Q == CGF.getContext().UnsignedIntTy)       ReductionType = 7000;
-  else if (Q == CGF.getContext().LongTy)              ReductionType = 8000;
-  else if (Q == CGF.getContext().UnsignedLongTy)      ReductionType = 9000;
-  else if (Q == CGF.getContext().LongLongTy)          ReductionType = 10000;
-  else if (Q == CGF.getContext().UnsignedLongLongTy)  ReductionType = 11000;
-  else if (Q == CGF.getContext().FloatTy)             ReductionType = 12000;
-  else if (Q == CGF.getContext().DoubleTy)            ReductionType = 13000;
-  else if (Q == CGF.getContext().LongDoubleTy)        ReductionType = 14000;
-  else if (Q == CGF.getContext().FloatComplexTy)      ReductionType = 15000;
-  else if (Q == CGF.getContext().DoubleComplexTy)     ReductionType = 16000;
-  else if (Q == CGF.getContext().LongDoubleComplexTy) ReductionType = 17000;
-  else if (Q == CGF.getContext().BoolTy)              ReductionType = 18000;
+  if (Q == CGF.getContext().CharTy)                  ReductionType = 1000;
+  else if (Q == CGF.getContext().SignedCharTy)       ReductionType = 2000;
+  else if (Q == CGF.getContext().UnsignedCharTy)     ReductionType = 3000;
+  else if (Q == CGF.getContext().ShortTy)            ReductionType = 4000;
+  else if (Q == CGF.getContext().UnsignedShortTy)    ReductionType = 5000;
+  else if (Q == CGF.getContext().IntTy)              ReductionType = 6000;
+  else if (Q == CGF.getContext().UnsignedIntTy)      ReductionType = 7000;
+  else if (Q == CGF.getContext().LongTy)             ReductionType = 8000;
+  else if (Q == CGF.getContext().UnsignedLongTy)     ReductionType = 9000;
+  else if (Q == CGF.getContext().LongLongTy)         ReductionType = 10000;
+  else if (Q == CGF.getContext().UnsignedLongLongTy) ReductionType = 11000;
+  else if (Q == CGF.getContext().FloatTy)            ReductionType = 12000;
+  else if (Q == CGF.getContext().DoubleTy)           ReductionType = 13000;
+  else if (Q == CGF.getContext().LongDoubleTy)       ReductionType = 14000;
+  else if (
+    Q == CGF.getContext().getComplexType(
+      CGF.getContext().FloatTy))                     ReductionType = 15000;
+  else if (
+    Q == CGF.getContext().getComplexType(
+      CGF.getContext().DoubleTy))                    ReductionType = 16000;
+  else if (
+    Q == CGF.getContext().getComplexType(
+      CGF.getContext().LongDoubleTy))                ReductionType = 17000;
+  else if (Q == CGF.getContext().BoolTy)             ReductionType = 18000;
   else llvm_unreachable("unhandled reduction type");
 
   if (BOK == BO_Add)           ReductionOperation = 0;
@@ -2351,15 +2403,17 @@ static void EmitLoopType(const OSSLoopDataTy &LoopData, CodeGenFunction &CGF,
   // LE → <=   → 1
   // GT → >    → 2
   // GE → >=   → 3
-  int IsLessOp = !*LoopData.TestIsLessOp * 2;
-  int IsStrictOp = !LoopData.TestIsStrictOp * 1;
-  int LoopCmp = IsLessOp + IsStrictOp;
-  List.push_back(llvm::ConstantInt::getSigned(CGF.Int64Ty, LoopCmp));
-  List.push_back(llvm::ConstantInt::getSigned(CGF.Int64Ty, LoopData.IndVar->getType()->isSignedIntegerOrEnumerationType()));
-  List.push_back(llvm::ConstantInt::getSigned(CGF.Int64Ty, LoopData.LB->getType()->isSignedIntegerOrEnumerationType()));
-  List.push_back(llvm::ConstantInt::getSigned(CGF.Int64Ty, LoopData.UB->getType()->isSignedIntegerOrEnumerationType()));
-  List.push_back(llvm::ConstantInt::getSigned(CGF.Int64Ty, LoopData.Step->getType()->isSignedIntegerOrEnumerationType()));
-  // TODO: missing step increment/decrement
+  for (unsigned i = 0; i < LoopData.NumCollapses; ++i) {
+    int IsLessOp = !*LoopData.TestIsLessOp [i]* 2;
+    int IsStrictOp = !LoopData.TestIsStrictOp [i]* 1;
+    int LoopCmp = IsLessOp + IsStrictOp;
+    List.push_back(llvm::ConstantInt::getSigned(CGF.Int64Ty, LoopCmp));
+    List.push_back(llvm::ConstantInt::getSigned(CGF.Int64Ty, LoopData.IndVar[i]->getType()->isSignedIntegerOrEnumerationType()));
+    List.push_back(llvm::ConstantInt::getSigned(CGF.Int64Ty, LoopData.LB[i]->getType()->isSignedIntegerOrEnumerationType()));
+    List.push_back(llvm::ConstantInt::getSigned(CGF.Int64Ty, LoopData.UB[i]->getType()->isSignedIntegerOrEnumerationType()));
+    List.push_back(llvm::ConstantInt::getSigned(CGF.Int64Ty, LoopData.Step[i]->getType()->isSignedIntegerOrEnumerationType()));
+    // TODO: missing step increment/decrement
+  }
   TaskInfo.emplace_back(getBundleStr(OSSB_loop_type), List);
 }
 
@@ -2509,16 +2563,49 @@ void CGOmpSsRuntime::EmitDirectiveData(
   }
 
   if (!LoopData.empty()) {
-    TaskInfo.emplace_back(getBundleStr(OSSB_loop_indvar), CGF.EmitLValue(LoopData.IndVar).getPointer(CGF));
-    llvm::Value *LB = CGF.EmitScalarExpr(LoopData.LB);
-    TaskInfo.emplace_back(getBundleStr(OSSB_loop_lowerbound), LB);
-    CapturedList.push_back(LB);
-    llvm::Value *UB = CGF.EmitScalarExpr(LoopData.UB);
-    TaskInfo.emplace_back(getBundleStr(OSSB_loop_upperbound), UB);
-    CapturedList.push_back(UB);
-    llvm::Value *Step = CGF.EmitScalarExpr(LoopData.Step);
-    TaskInfo.emplace_back(getBundleStr(OSSB_loop_step), Step);
-    CapturedList.push_back(Step);
+    SmallVector<llvm::Value *> IndVarList;
+    SmallVector<llvm::Value *> LBList;
+    SmallVector<llvm::Value *> UBList;
+    SmallVector<llvm::Value *> StepList;
+    SmallVector<llvm::Value *> LTypeList;
+    for (unsigned i = 0; i < LoopData.NumCollapses; ++i) {
+      IndVarList.push_back(CGF.EmitLValue(LoopData.IndVar[i]).getPointer(CGF));
+      {
+        auto Body = [&LoopData, i](CodeGenFunction &NewCGF, Optional<llvm::Value *>) {
+          llvm::Value *V = NewCGF.EmitScalarExpr(LoopData.LB[i]);
+
+          Address RetAddr = NewCGF.ReturnValue;
+          NewCGF.Builder.CreateStore(V, RetAddr);
+        };
+        BuildWrapperCallBundleList(
+          "compute_lb", CGF, LoopData.LB[i], LoopData.LB[i]->getType(), Body, LBList);
+      }
+      {
+        auto Body = [&LoopData, i](CodeGenFunction &NewCGF, Optional<llvm::Value *>) {
+          llvm::Value *V = NewCGF.EmitScalarExpr(LoopData.UB[i]);
+
+          Address RetAddr = NewCGF.ReturnValue;
+          NewCGF.Builder.CreateStore(V, RetAddr);
+        };
+        BuildWrapperCallBundleList(
+          "compute_ub", CGF, LoopData.UB[i], LoopData.UB[i]->getType(), Body, UBList);
+      }
+      {
+        auto Body = [&LoopData, i](CodeGenFunction &NewCGF, Optional<llvm::Value *>) {
+          llvm::Value *V = NewCGF.EmitScalarExpr(LoopData.Step[i]);
+
+          Address RetAddr = NewCGF.ReturnValue;
+          NewCGF.Builder.CreateStore(V, RetAddr);
+        };
+        BuildWrapperCallBundleList(
+          "compute_step", CGF, LoopData.Step[i], LoopData.Step[i]->getType(), Body, StepList);
+      }
+    }
+    TaskInfo.emplace_back(getBundleStr(OSSB_loop_indvar), IndVarList);
+    TaskInfo.emplace_back(getBundleStr(OSSB_loop_lowerbound), LBList);
+    TaskInfo.emplace_back(getBundleStr(OSSB_loop_upperbound), UBList);
+    TaskInfo.emplace_back(getBundleStr(OSSB_loop_step), StepList);
+
     if (LoopData.Chunksize) {
       llvm::Value *V = CGF.EmitScalarExpr(LoopData.Chunksize);
       CapturedList.push_back(V);
@@ -2627,7 +2714,7 @@ RValue CGOmpSsRuntime::emitTaskFunction(CodeGenFunction &CGF,
       ParmRef =
         ImplicitCastExpr::Create(Ctx, ParmRef->getType(), CK_LValueToRValue,
                                  ParmRef, /*BasePath=*/nullptr,
-                                 VK_RValue, FPOptionsOverride());
+                                 VK_PRValue, FPOptionsOverride());
       FirstprivateCopies.push_back(ParmRef);
     } else {
       // We want to pass references as shared so task can modify the original value
@@ -2873,7 +2960,7 @@ RValue CGOmpSsRuntime::emitTaskFunction(CodeGenFunction &CGF,
 
     CXXMemberCallExpr *NewCXXE = CXXMemberCallExpr::Create(
         Ctx, const_cast<MemberExpr *>(ME), ParmCopies, Ctx.VoidTy,
-        VK_RValue, SourceLocation(), FPOptionsOverride());
+        VK_PRValue, SourceLocation(), FPOptionsOverride());
 
     RV = CGF.EmitCXXMemberCallExpr(NewCXXE, ReturnValue);
   } else {
@@ -2882,7 +2969,7 @@ RValue CGOmpSsRuntime::emitTaskFunction(CodeGenFunction &CGF,
 
     CallExpr *NewCE = CallExpr::Create(
         Ctx, const_cast<Expr *>(CE->getCallee()), ParmCopies,
-        Ctx.VoidTy, VK_RValue, SourceLocation(), FPOptionsOverride());
+        Ctx.VoidTy, VK_PRValue, SourceLocation(), FPOptionsOverride());
 
     RV = CGF.EmitCall(CE->getCallee()->getType(), callee, NewCE, ReturnValue);
   }
@@ -2976,7 +3063,18 @@ void CGOmpSsRuntime::emitLoopCall(CodeGenFunction &CGF,
   CodeGenFunction::LexicalScope ForScope(CGF, cast<ForStmt>(D.getAssociatedStmt())->getSourceRange());
 
   // Emit for-init before task entry
-  CGF.EmitStmt(cast<ForStmt>(D.getAssociatedStmt())->getInit());
+  const Stmt *Body = D.getAssociatedStmt();
+  for (size_t i = 0; i < D.getNumCollapses(); ++i) {
+    const ForStmt *For = cast<ForStmt>(Body);
+    CGF.EmitStmt(For->getInit());
+    Body = For->getBody();
+    if (i + 1 < D.getNumCollapses()) {
+      for (const Stmt *Child : Body->children()) {
+        if ((Body = dyn_cast<ForStmt>(Child)))
+          break;
+      }
+    }
+  }
 
   // Push Task Stack
   TaskStack.push_back(TaskContext());
@@ -2996,7 +3094,7 @@ void CGOmpSsRuntime::emitLoopCall(CodeGenFunction &CGF,
   // The point of exit cannot be a branch out of the structured block.
   // longjmp() and throw() must not violate the entry/exit criteria.
   CGF.EHStack.pushTerminate();
-  CGF.EmitStmt(cast<ForStmt>(D.getAssociatedStmt())->getBody());
+  CGF.EmitStmt(Body);
   CGF.EHStack.popTerminate();
 
   // TODO: do we need this? we're pushing a terminate...

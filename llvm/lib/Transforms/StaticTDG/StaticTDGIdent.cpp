@@ -114,7 +114,7 @@ struct StaticTDGIdent {
         Value *SecondAdd = IRB.CreateAdd(SecondMultiply, IRB.getInt32(task.id));
 
         CallInst *TaskAllocCall = dyn_cast<CallInst>(TaskAlloc);
-        TaskAllocCall->setArgOperand(TaskAllocCall->getNumArgOperands() - 1,
+        TaskAllocCall->setArgOperand(TaskAllocCall->getNumOperands() - 1,
                                      SecondAdd);
 
         Changed = true;

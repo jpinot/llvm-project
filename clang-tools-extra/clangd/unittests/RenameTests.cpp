@@ -33,6 +33,19 @@ using testing::SizeIs;
 using testing::UnorderedElementsAre;
 using testing::UnorderedElementsAreArray;
 
+llvm::IntrusiveRefCntPtr<llvm::vfs::OverlayFileSystem>
+createOverlay(llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> Base,
+              llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> Overlay) {
+  auto OFS =
+      llvm::makeIntrusiveRefCnt<llvm::vfs::OverlayFileSystem>(std::move(Base));
+  OFS->pushOverlay(std::move(Overlay));
+  return OFS;
+}
+
+llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> getVFSFromAST(ParsedAST &AST) {
+  return &AST.getSourceManager().getFileManager().getVirtualFileSystem();
+}
+
 // Convert a Range to a Ref.
 Ref refWithRange(const clangd::Range &Range, const std::string &URI) {
   Ref Result;
@@ -815,7 +828,8 @@ TEST(RenameTest, WithinFileRename) {
     auto Index = TU.index();
     for (const auto &RenamePos : Code.points()) {
       auto RenameResult =
-          rename({RenamePos, NewName, AST, testPath(TU.Filename), Index.get()});
+          rename({RenamePos, NewName, AST, testPath(TU.Filename),
+                  getVFSFromAST(AST), Index.get()});
       ASSERT_TRUE(bool(RenameResult)) << RenameResult.takeError();
       ASSERT_EQ(1u, RenameResult->GlobalChanges.size());
       EXPECT_EQ(
@@ -830,7 +844,7 @@ TEST(RenameTest, Renameable) {
     const char *Code;
     const char* ErrorMessage; // null if no error
     bool IsHeaderFile;
-    llvm::StringRef NewName = "DummyName";
+    llvm::StringRef NewName = "MockName";
   };
   const bool HeaderFile = true;
   Case Cases[] = {
@@ -865,21 +879,6 @@ TEST(RenameTest, Renameable) {
         struct X { X operator++(int); };
         void f(X x) {x+^+;})cpp",
           "no symbol", HeaderFile},
-
-      {R"cpp(// disallow rename on excluded symbols (e.g. std symbols)
-         namespace std {
-         class str^ing {};
-         }
-       )cpp",
-       "not a supported kind", !HeaderFile},
-      {R"cpp(// disallow rename on excluded symbols (e.g. std symbols)
-         namespace std {
-         inline namespace __u {
-         class str^ing {};
-         }
-         }
-       )cpp",
-       "not a supported kind", !HeaderFile},
 
       {R"cpp(// disallow rename on non-normal identifiers.
          @interface Foo {}
@@ -1046,6 +1045,11 @@ TEST(RenameTest, Renameable) {
       )cpp",
        "conflict", !HeaderFile, "Conflict"},
 
+      {R"cpp(
+        int V^ar;
+      )cpp",
+       "\"const\" is a keyword", !HeaderFile, "const"},
+
       {R"cpp(// Trying to rename into the same name, SameName == SameName.
         void func() {
           int S^ameName;
@@ -1057,6 +1061,13 @@ TEST(RenameTest, Renameable) {
         struct B : priv^ate A {};
       )cpp",
        "Cannot rename symbol: there is no symbol at the given location", false},
+      {R"cpp(// Ensure it doesn't associate base specifier with base name.
+        /*error-ok*/
+        struct A {
+          A() : inva^lid(0) {}
+        };
+      )cpp",
+       "no symbol", false},
   };
 
   for (const auto& Case : Cases) {
@@ -1101,13 +1112,21 @@ TEST(RenameTest, IndexMergeMainFile) {
   auto AST = TU.build();
 
   auto Main = testPath("main.cc");
+  auto InMemFS = llvm::makeIntrusiveRefCnt<llvm::vfs::InMemoryFileSystem>();
+  InMemFS->addFile(testPath("main.cc"), 0,
+                   llvm::MemoryBuffer::getMemBuffer(Code.code()));
+  InMemFS->addFile(testPath("other.cc"), 0,
+                   llvm::MemoryBuffer::getMemBuffer(Code.code()));
 
   auto Rename = [&](const SymbolIndex *Idx) {
-    auto GetDirtyBuffer = [&](PathRef Path) -> llvm::Optional<std::string> {
-      return Code.code().str(); // Every file has the same content.
-    };
-    RenameInputs Inputs{Code.point(), "xPrime",        AST,           Main,
-                        Idx,          RenameOptions(), GetDirtyBuffer};
+    RenameInputs Inputs{Code.point(),
+                        "xPrime",
+                        AST,
+                        Main,
+                        Idx ? createOverlay(getVFSFromAST(AST), InMemFS)
+                            : nullptr,
+                        Idx,
+                        RenameOptions()};
     auto Results = rename(Inputs);
     EXPECT_TRUE(bool(Results)) << llvm::toString(Results.takeError());
     return std::move(*Results);
@@ -1164,6 +1183,40 @@ TEST(RenameTest, MainFileReferencesOnly) {
             expectedResult(Code, NewName));
 }
 
+TEST(RenameTest, NoRenameOnSymbolsFromSystemHeaders) {
+  llvm::StringRef Test =
+      R"cpp(
+        #include <cstdlib>
+        #include <system>
+
+        SystemSym^bol abc;
+
+        void foo() { at^oi("9000"); }
+        )cpp";
+
+  Annotations Code(Test);
+  auto TU = TestTU::withCode(Code.code());
+  TU.AdditionalFiles["system"] = R"cpp(
+    class SystemSymbol {};
+    )cpp";
+  TU.AdditionalFiles["cstdlib"] = R"cpp(
+    int atoi(const char *str);
+    )cpp";
+  TU.ExtraArgs = {"-isystem", testRoot()};
+  auto AST = TU.build();
+  llvm::StringRef NewName = "abcde";
+
+  // Clangd will not allow renaming symbols from the system headers for
+  // correctness.
+  for (auto &Point : Code.points()) {
+    auto Results = rename({Point, NewName, AST, testPath(TU.Filename)});
+    EXPECT_FALSE(Results) << "expected rename returned an error: "
+                          << Code.code();
+    auto ActualMessage = llvm::toString(Results.takeError());
+    EXPECT_THAT(ActualMessage, testing::HasSubstr("not a supported kind"));
+  }
+}
+
 TEST(RenameTest, ProtobufSymbolIsExcluded) {
   Annotations Code("Prot^obuf buf;");
   auto TU = TestTU::withCode(Code.code());
@@ -1218,6 +1271,21 @@ TEST(RenameTest, PrepareRename) {
               testing::HasSubstr("keyword"));
   EXPECT_THAT(Tracer.takeMetric("rename_name_invalid", "Keywords"),
               ElementsAre(1));
+
+  for (std::string BadIdent : {"foo!bar", "123foo", "😀@"}) {
+    Results = runPrepareRename(Server, FooCCPath, FooCC.point(),
+                               /*NewName=*/BadIdent, {});
+    EXPECT_FALSE(Results);
+    EXPECT_THAT(llvm::toString(Results.takeError()),
+                testing::HasSubstr("identifier"));
+    EXPECT_THAT(Tracer.takeMetric("rename_name_invalid", "BadIdentifier"),
+                ElementsAre(1));
+  }
+  for (std::string GoodIdent : {"fooBar", "__foo$", "😀"}) {
+    Results = runPrepareRename(Server, FooCCPath, FooCC.point(),
+                               /*NewName=*/GoodIdent, {});
+    EXPECT_TRUE(bool(Results));
+  }
 }
 
 TEST(CrossFileRenameTests, DirtyBuffer) {
@@ -1237,25 +1305,19 @@ TEST(CrossFileRenameTests, DirtyBuffer) {
 
   Annotations MainCode("class  [[Fo^o]] {};");
   auto MainFilePath = testPath("main.cc");
-  // Dirty buffer for foo.cc.
-  auto GetDirtyBuffer = [&](PathRef Path) -> llvm::Optional<std::string> {
-    if (Path == FooPath)
-      return FooDirtyBuffer.code().str();
-    return llvm::None;
-  };
+  llvm::IntrusiveRefCntPtr<llvm::vfs::InMemoryFileSystem> InMemFS =
+      new llvm::vfs::InMemoryFileSystem;
+  InMemFS->addFile(FooPath, 0,
+                   llvm::MemoryBuffer::getMemBuffer(FooDirtyBuffer.code()));
 
   // Run rename on Foo, there is a dirty buffer for foo.cc, rename should
   // respect the dirty buffer.
   TestTU TU = TestTU::withCode(MainCode.code());
   auto AST = TU.build();
   llvm::StringRef NewName = "newName";
-  auto Results = rename({MainCode.point(),
-                         NewName,
-                         AST,
-                         MainFilePath,
-                         Index.get(),
-                         {},
-                         GetDirtyBuffer});
+  auto Results =
+      rename({MainCode.point(), NewName, AST, MainFilePath,
+              createOverlay(getVFSFromAST(AST), InMemFS), Index.get()});
   ASSERT_TRUE(bool(Results)) << Results.takeError();
   EXPECT_THAT(
       applyEdits(std::move(Results->GlobalChanges)),
@@ -1270,13 +1332,8 @@ TEST(CrossFileRenameTests, DirtyBuffer) {
   // Set a file "bar.cc" on disk.
   TU.AdditionalFiles["bar.cc"] = std::string(BarCode.code());
   AST = TU.build();
-  Results = rename({MainCode.point(),
-                    NewName,
-                    AST,
-                    MainFilePath,
-                    Index.get(),
-                    {},
-                    GetDirtyBuffer});
+  Results = rename({MainCode.point(), NewName, AST, MainFilePath,
+                    createOverlay(getVFSFromAST(AST), InMemFS), Index.get()});
   ASSERT_TRUE(bool(Results)) << Results.takeError();
   EXPECT_THAT(
       applyEdits(std::move(Results->GlobalChanges)),
@@ -1312,13 +1369,8 @@ TEST(CrossFileRenameTests, DirtyBuffer) {
 
     size_t estimateMemoryUsage() const override { return 0; }
   } PIndex;
-  Results = rename({MainCode.point(),
-                    NewName,
-                    AST,
-                    MainFilePath,
-                    &PIndex,
-                    {},
-                    GetDirtyBuffer});
+  Results = rename({MainCode.point(), NewName, AST, MainFilePath,
+                    createOverlay(getVFSFromAST(AST), InMemFS), &PIndex});
   EXPECT_FALSE(Results);
   EXPECT_THAT(llvm::toString(Results.takeError()),
               testing::HasSubstr("too many occurrences"));
@@ -1368,8 +1420,8 @@ TEST(CrossFileRenameTests, DeduplicateRefsFromIndex) {
     Ref ReturnedRef;
   } DIndex(XRefInBarCC);
   llvm::StringRef NewName = "newName";
-  auto Results =
-      rename({MainCode.point(), NewName, AST, MainFilePath, &DIndex});
+  auto Results = rename({MainCode.point(), NewName, AST, MainFilePath,
+                         getVFSFromAST(AST), &DIndex});
   ASSERT_TRUE(bool(Results)) << Results.takeError();
   EXPECT_THAT(
       applyEdits(std::move(Results->GlobalChanges)),

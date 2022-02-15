@@ -15,6 +15,7 @@
 #define LLVM_LIB_TARGET_RISCV_RISCVISELLOWERING_H
 
 #include "RISCV.h"
+#include "llvm/CodeGen/CallingConvLower.h"
 #include "llvm/CodeGen/SelectionDAG.h"
 #include "llvm/CodeGen/TargetLowering.h"
 
@@ -36,9 +37,12 @@ enum NodeType : unsigned {
   /// The lhs and rhs are XLenVT integers. The true and false values can be
   /// integer or floating point.
   SELECT_CC,
+  BR_CC,
   BuildPairF64,
   SplitF64,
   TAIL,
+  // Multiply high for signedxunsigned.
+  MULHSU,
   // RV64I shifts, directly matching the semantics of the named RISC-V
   // instructions.
   SLLW,
@@ -54,12 +58,16 @@ enum NodeType : unsigned {
   // instructions.
   ROLW,
   RORW,
+  // RV64IZbb bit counting instructions directly matching the semantics of the
+  // named RISC-V instructions.
+  CLZW,
+  CTZW,
   // RV64IB/RV32IB funnel shifts, with the semantics of the named RISC-V
-  // instructions, but the same operand order as fshl/fshr intrinsics.
+  // instructions. Operand order is rs1, rs3, rs2/shamt.
   FSR,
   FSL,
-  // RV64IB funnel shifts, with the semantics of the named RISC-V instructions,
-  // but the same operand order as fshl/fshr intrinsics.
+  // RV64IB funnel shifts, with the semantics of the named RISC-V instructions.
+  // Operand order is rs1, rs3, rs2/shamt.
   FSRW,
   FSLW,
   // FPR<->GPR transfer operations when the FPR is smaller than XLEN, needed as
@@ -76,20 +84,49 @@ enum NodeType : unsigned {
   FMV_X_ANYEXTH,
   FMV_W_X_RV64,
   FMV_X_ANYEXTW_RV64,
+  // FP to XLen int conversions. Corresponds to fcvt.l(u).s/d/h on RV64 and
+  // fcvt.w(u).s/d/h on RV32. Unlike FP_TO_S/UINT these saturate out of
+  // range inputs. These are used for FP_TO_S/UINT_SAT lowering. Rounding mode
+  // is passed as a TargetConstant operand using the RISCVFPRndMode enum.
+  FCVT_X,
+  FCVT_XU,
+  // FP to 32 bit int conversions for RV64. These are used to keep track of the
+  // result being sign extended to 64 bit. These saturate out of range inputs.
+  // Used for FP_TO_S/UINT and FP_TO_S/UINT_SAT lowering. Rounding mode
+  // is passed as a TargetConstant operand using the RISCVFPRndMode enum.
+  FCVT_W_RV64,
+  FCVT_WU_RV64,
   // READ_CYCLE_WIDE - A read of the 64-bit cycle CSR on a 32-bit target
   // (returns (Lo, Hi)). It takes a chain operand.
   READ_CYCLE_WIDE,
   // Generalized Reverse and Generalized Or-Combine - directly matching the
   // semantics of the named RISC-V instructions. Lowered as custom nodes as
   // TableGen chokes when faced with commutative permutations in deeply-nested
-  // DAGs. Each node takes an input operand and a TargetConstant immediate
-  // shift amount, and outputs a bit-manipulated version of input. All operands
-  // are of type XLenVT.
-  GREVI,
-  GREVIW,
-  GORCI,
-  GORCIW,
-  SHFLI,
+  // DAGs. Each node takes an input operand and a control operand and outputs a
+  // bit-manipulated version of input. All operands are i32 or XLenVT.
+  GREV,
+  GREVW,
+  GORC,
+  GORCW,
+  SHFL,
+  SHFLW,
+  UNSHFL,
+  UNSHFLW,
+  // Bit Compress/Decompress implement the generic bit extract and bit deposit
+  // functions. This operation is also referred to as bit gather/scatter, bit
+  // pack/unpack, parallel extract/deposit, compress/expand, or right
+  // compress/right expand.
+  BCOMPRESS,
+  BCOMPRESSW,
+  BDECOMPRESS,
+  BDECOMPRESSW,
+  // The bit field place (bfp) instruction places up to XLEN/2 LSB bits from rs2
+  // into the value in rs1. The upper bits of rs2 control the length of the bit
+  // field and target position. The layout of rs2 is chosen in a way that makes
+  // it possible to construct rs2 easily using pack[h] instructions and/or
+  // andi/lui.
+  BFP,
+  BFPW,
   // Vector Extension
   // VMV_V_X_VL matches the semantics of vmv.v.x but includes an extra operand
   // for the VL value to be used for the operation.
@@ -100,23 +137,29 @@ enum NodeType : unsigned {
   // VMV_X_S matches the semantics of vmv.x.s. The result is always XLenVT sign
   // extended from the vector element size.
   VMV_X_S,
-  // Splats an i64 scalar to a vector type (with element type i64) where the
-  // scalar is a sign-extended i32.
-  SPLAT_VECTOR_I64,
+  // VMV_S_X_VL matches the semantics of vmv.s.x. It carries a VL operand.
+  VMV_S_X_VL,
+  // VFMV_S_F_VL matches the semantics of vfmv.s.f. It carries a VL operand.
+  VFMV_S_F_VL,
+  // Splats an 64-bit value that has been split into two i32 parts. This is
+  // expanded late to two scalar stores and a stride 0 vector load.
+  SPLAT_VECTOR_SPLIT_I64_VL,
   // Read VLENB CSR
   READ_VLENB,
   // Truncates a RVV integer vector by one power-of-two. Carries both an extra
   // mask and VL operand.
   TRUNCATE_VECTOR_VL,
-  // Unit-stride fault-only-first load
-  VLEFF,
-  VLEFF_MASK,
   // Matches the semantics of vslideup/vslidedown. The first operand is the
   // pass-thru operand, the second is the source vector, the third is the
   // XLenVT index (either constant or non-constant), the fourth is the mask
   // and the fifth the VL.
   VSLIDEUP_VL,
   VSLIDEDOWN_VL,
+  // Matches the semantics of vslide1up/slide1down. The first operand is the
+  // source vector, the second is the XLenVT scalar value. The third and fourth
+  // operands are the mask and VL operands.
+  VSLIDE1UP_VL,
+  VSLIDE1DOWN_VL,
   // Matches the semantics of the vid.v instruction, with a mask and VL
   // operand.
   VID_VL,
@@ -127,24 +170,28 @@ enum NodeType : unsigned {
   VFNCVT_ROD_VL,
   // These nodes match the semantics of the corresponding RVV vector reduction
   // instructions. They produce a vector result which is the reduction
-  // performed over the first vector operand plus the first element of the
-  // second vector operand. The first operand is an unconstrained vector type,
-  // and the result and second operand's types are expected to be the
-  // corresponding full-width LMUL=1 type for the first operand:
-  //   nxv8i8 = vecreduce_add nxv32i8, nxv8i8
-  //   nxv2i32 = vecreduce_add nxv8i32, nxv2i32
+  // performed over the second vector operand plus the first element of the
+  // third vector operand. The first operand is the pass-thru operand. The
+  // second operand is an unconstrained vector type, and the result, first, and
+  // third operand's types are expected to be the corresponding full-width
+  // LMUL=1 type for the second operand:
+  //   nxv8i8 = vecreduce_add nxv8i8, nxv32i8, nxv8i8
+  //   nxv2i32 = vecreduce_add nxv2i32, nxv8i32, nxv2i32
   // The different in types does introduce extra vsetvli instructions but
   // similarly it reduces the number of registers consumed per reduction.
-  VECREDUCE_ADD,
-  VECREDUCE_UMAX,
-  VECREDUCE_SMAX,
-  VECREDUCE_UMIN,
-  VECREDUCE_SMIN,
-  VECREDUCE_AND,
-  VECREDUCE_OR,
-  VECREDUCE_XOR,
-  VECREDUCE_FADD,
-  VECREDUCE_SEQ_FADD,
+  // Also has a mask and VL operand.
+  VECREDUCE_ADD_VL,
+  VECREDUCE_UMAX_VL,
+  VECREDUCE_SMAX_VL,
+  VECREDUCE_UMIN_VL,
+  VECREDUCE_SMIN_VL,
+  VECREDUCE_AND_VL,
+  VECREDUCE_OR_VL,
+  VECREDUCE_XOR_VL,
+  VECREDUCE_FADD_VL,
+  VECREDUCE_SEQ_FADD_VL,
+  VECREDUCE_FMIN_VL,
+  VECREDUCE_FMAX_VL,
 
   // Vector binary and unary ops with a mask as a third operand, and VL as a
   // fourth operand.
@@ -162,6 +209,12 @@ enum NodeType : unsigned {
   UDIV_VL,
   UREM_VL,
   XOR_VL,
+
+  SADDSAT_VL,
+  UADDSAT_VL,
+  SSUBSAT_VL,
+  USUBSAT_VL,
+
   FADD_VL,
   FSUB_VL,
   FMUL_VL,
@@ -170,10 +223,13 @@ enum NodeType : unsigned {
   FABS_VL,
   FSQRT_VL,
   FMA_VL,
+  FCOPYSIGN_VL,
   SMIN_VL,
   SMAX_VL,
   UMIN_VL,
   UMAX_VL,
+  FMINNUM_VL,
+  FMAXNUM_VL,
   MULHS_VL,
   MULHU_VL,
   FP_TO_SINT_VL,
@@ -183,12 +239,29 @@ enum NodeType : unsigned {
   FP_ROUND_VL,
   FP_EXTEND_VL,
 
+  // Widening instructions
+  VWMUL_VL,
+  VWMULU_VL,
+  VWMULSU_VL,
+  VWADD_VL,
+  VWADDU_VL,
+  VWSUB_VL,
+  VWSUBU_VL,
+  VWADD_W_VL,
+  VWADDU_W_VL,
+  VWSUB_W_VL,
+  VWSUBU_W_VL,
+
   // Vector compare producing a mask. Fourth operand is input mask. Fifth
   // operand is VL.
   SETCC_VL,
 
   // Vector select with an additional VL operand. This operation is unmasked.
   VSELECT_VL,
+  // Vector select with operand #2 (the value when the condition is false) tied
+  // to the destination and an additional VL operand. This operation is
+  // unmasked.
+  VP_MERGE_VL,
 
   // Mask binary operators.
   VMAND_VL,
@@ -199,12 +272,39 @@ enum NodeType : unsigned {
   VMCLR_VL,
   VMSET_VL,
 
-  // Matches the semantics of vrgather.vx with an extra operand for VL.
+  // Matches the semantics of vrgather.vx and vrgather.vv with an extra operand
+  // for VL.
   VRGATHER_VX_VL,
+  VRGATHER_VV_VL,
+  VRGATHEREI16_VV_VL,
 
   // Vector sign/zero extend with additional mask & VL operands.
   VSEXT_VL,
   VZEXT_VL,
+
+  //  vcpop.m with additional mask and VL operands.
+  VCPOP_VL,
+
+  // Reads value of CSR.
+  // The first operand is a chain pointer. The second specifies address of the
+  // required CSR. Two results are produced, the read value and the new chain
+  // pointer.
+  READ_CSR,
+  // Write value to CSR.
+  // The first operand is a chain pointer, the second specifies address of the
+  // required CSR and the third is the value to write. The result is the new
+  // chain pointer.
+  WRITE_CSR,
+  // Read and write value of CSR.
+  // The first operand is a chain pointer, the second specifies address of the
+  // required CSR and the third is the value to write. Two results are produced,
+  // the value read before the modification and the new chain pointer.
+  SWAP_CSR,
+
+  // FP to 32 bit int conversions for RV64. These are used to keep track of the
+  // result being sign extended to 64 bit. These saturate out of range inputs.
+  STRICT_FCVT_W_RV64 = ISD::FIRST_TARGET_STRICTFP_OPCODE,
+  STRICT_FCVT_WU_RV64,
 
   // Memory opcodes start here.
   VLE_VL = ISD::FIRST_TARGET_MEMORY_OPCODE,
@@ -239,8 +339,28 @@ public:
   bool isSExtCheaperThanZExt(EVT SrcVT, EVT DstVT) const override;
   bool isCheapToSpeculateCttz() const override;
   bool isCheapToSpeculateCtlz() const override;
+  bool hasAndNotCompare(SDValue Y) const override;
+  bool shouldSinkOperands(Instruction *I,
+                          SmallVectorImpl<Use *> &Ops) const override;
   bool isFPImmLegal(const APFloat &Imm, EVT VT,
                     bool ForCodeSize) const override;
+
+  bool softPromoteHalfType() const override { return true; }
+
+  /// Return the register type for a given MVT, ensuring vectors are treated
+  /// as a series of gpr sized integers.
+  MVT getRegisterTypeForCallingConv(LLVMContext &Context, CallingConv::ID CC,
+                                    EVT VT) const override;
+
+  /// Return the number of registers for a given MVT, ensuring vectors are
+  /// treated as a series of gpr sized integers.
+  unsigned getNumRegistersForCallingConv(LLVMContext &Context,
+                                         CallingConv::ID CC,
+                                         EVT VT) const override;
+
+  /// Return true if the given shuffle mask can be codegen'd directly, or if it
+  /// should be stack expanded.
+  bool isShuffleMaskLegal(ArrayRef<int> M, EVT VT) const override;
 
   bool hasBitPreservingFPLogic(EVT VT) const override;
   bool
@@ -287,6 +407,9 @@ public:
   EmitInstrWithCustomInserter(MachineInstr &MI,
                               MachineBasicBlock *BB) const override;
 
+  void AdjustInstrPostInstrSelection(MachineInstr &MI,
+                                     SDNode *Node) const override;
+
   EVT getSetCCResultType(const DataLayout &DL, LLVMContext &Context,
                          EVT VT) const override;
 
@@ -298,9 +421,9 @@ public:
   bool shouldInsertFencesForAtomic(const Instruction *I) const override {
     return isa<LoadInst>(I) || isa<StoreInst>(I);
   }
-  Instruction *emitLeadingFence(IRBuilder<> &Builder, Instruction *Inst,
+  Instruction *emitLeadingFence(IRBuilderBase &Builder, Instruction *Inst,
                                 AtomicOrdering Ord) const override;
-  Instruction *emitTrailingFence(IRBuilder<> &Builder, Instruction *Inst,
+  Instruction *emitTrailingFence(IRBuilderBase &Builder, Instruction *Inst,
                                  AtomicOrdering Ord) const override;
 
   bool isFMAFasterThanFMulAndFAdd(const MachineFunction &MF,
@@ -358,6 +481,8 @@ public:
                       SelectionDAG &DAG) const override;
   SDValue LowerCall(TargetLowering::CallLoweringInfo &CLI,
                     SmallVectorImpl<SDValue> &InVals) const override;
+  template <class NodeTy>
+  SDValue getAddr(NodeTy *N, SelectionDAG &DAG, bool IsLocal = true) const;
 
   bool shouldConvertConstantLoadToIntImm(const APInt &Imm,
                                          Type *Ty) const override {
@@ -369,15 +494,18 @@ public:
   bool decomposeMulByConstant(LLVMContext &Context, EVT VT,
                               SDValue C) const override;
 
+  bool isMulAddWithConstProfitable(const SDValue &AddNode,
+                                   const SDValue &ConstNode) const override;
+
   TargetLowering::AtomicExpansionKind
   shouldExpandAtomicRMWInIR(AtomicRMWInst *AI) const override;
-  Value *emitMaskedAtomicRMWIntrinsic(IRBuilder<> &Builder, AtomicRMWInst *AI,
+  Value *emitMaskedAtomicRMWIntrinsic(IRBuilderBase &Builder, AtomicRMWInst *AI,
                                       Value *AlignedAddr, Value *Incr,
                                       Value *Mask, Value *ShiftAmt,
                                       AtomicOrdering Ord) const override;
   TargetLowering::AtomicExpansionKind
   shouldExpandAtomicCmpXchgInIR(AtomicCmpXchgInst *CI) const override;
-  Value *emitMaskedAtomicCmpXchgIntrinsic(IRBuilder<> &Builder,
+  Value *emitMaskedAtomicCmpXchgIntrinsic(IRBuilderBase &Builder,
                                           AtomicCmpXchgInst *CI,
                                           Value *AlignedAddr, Value *CmpVal,
                                           Value *NewVal, Value *Mask,
@@ -390,27 +518,62 @@ public:
       MachineMemOperand::Flags Flags = MachineMemOperand::MONone,
       bool *Fast = nullptr) const override;
 
-  static RISCVVLMUL getLMUL(MVT VT);
-  static unsigned getRegClassIDForLMUL(RISCVVLMUL LMul);
+  bool splitValueIntoRegisterParts(SelectionDAG &DAG, const SDLoc &DL,
+                                   SDValue Val, SDValue *Parts,
+                                   unsigned NumParts, MVT PartVT,
+                                   Optional<CallingConv::ID> CC) const override;
+
+  SDValue
+  joinRegisterPartsIntoValue(SelectionDAG &DAG, const SDLoc &DL,
+                             const SDValue *Parts, unsigned NumParts,
+                             MVT PartVT, EVT ValueVT,
+                             Optional<CallingConv::ID> CC) const override;
+
+  static RISCVII::VLMUL getLMUL(MVT VT);
+  static unsigned getRegClassIDForLMUL(RISCVII::VLMUL LMul);
   static unsigned getSubregIndexByMVT(MVT VT, unsigned Index);
   static unsigned getRegClassIDForVecVT(MVT VT);
   static std::pair<unsigned, unsigned>
   decomposeSubvectorInsertExtractToSubRegs(MVT VecVT, MVT SubVecVT,
                                            unsigned InsertExtractIdx,
                                            const RISCVRegisterInfo *TRI);
-  static MVT getContainerForFixedLengthVector(SelectionDAG &DAG, MVT VT,
-                                              const RISCVSubtarget &Subtarget);
+  MVT getContainerForFixedLengthVector(MVT VT) const;
+
+  bool shouldRemoveExtendFromGSIndex(EVT VT) const override;
+
+  bool isLegalElementTypeForRVV(Type *ScalarTy) const;
+
+  bool shouldConvertFpToSat(unsigned Op, EVT FPVT, EVT VT) const override;
+
+  SDValue BuildSDIVPow2(SDNode *N, const APInt &Divisor, SelectionDAG &DAG,
+                        SmallVectorImpl<SDNode *> &Created) const override;
+
+  unsigned getJumpTableEncoding() const override;
+
+  const MCExpr *LowerCustomJumpTableEntry(const MachineJumpTableInfo *MJTI,
+                                          const MachineBasicBlock *MBB,
+                                          unsigned uid,
+                                          MCContext &Ctx) const override;
 
 private:
+  /// RISCVCCAssignFn - This target-specific function extends the default
+  /// CCValAssign with additional information used to lower RISC-V calling
+  /// conventions.
+  typedef bool RISCVCCAssignFn(const DataLayout &DL, RISCVABI::ABI,
+                               unsigned ValNo, MVT ValVT, MVT LocVT,
+                               CCValAssign::LocInfo LocInfo,
+                               ISD::ArgFlagsTy ArgFlags, CCState &State,
+                               bool IsFixed, bool IsRet, Type *OrigTy,
+                               const RISCVTargetLowering &TLI,
+                               Optional<unsigned> FirstMaskArgument);
+
   void analyzeInputArgs(MachineFunction &MF, CCState &CCInfo,
-                        const SmallVectorImpl<ISD::InputArg> &Ins,
-                        bool IsRet) const;
+                        const SmallVectorImpl<ISD::InputArg> &Ins, bool IsRet,
+                        RISCVCCAssignFn Fn) const;
   void analyzeOutputArgs(MachineFunction &MF, CCState &CCInfo,
                          const SmallVectorImpl<ISD::OutputArg> &Outs,
-                         bool IsRet, CallLoweringInfo *CLI) const;
-
-  template <class NodeTy>
-  SDValue getAddr(NodeTy *N, SelectionDAG &DAG, bool IsLocal = true) const;
+                         bool IsRet, CallLoweringInfo *CLI,
+                         RISCVCCAssignFn Fn) const;
 
   SDValue getStaticTLSAddr(GlobalAddressSDNode *N, SelectionDAG &DAG,
                            bool UseGOT) const;
@@ -422,12 +585,14 @@ private:
   SDValue lowerJumpTable(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerGlobalTLSAddress(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerSELECT(SDValue Op, SelectionDAG &DAG) const;
+  SDValue lowerBRCOND(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerVASTART(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerFRAMEADDR(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerRETURNADDR(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerShiftLeftParts(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerShiftRightParts(SDValue Op, SelectionDAG &DAG, bool IsSRA) const;
-  SDValue lowerSPLATVECTOR(SDValue Op, SelectionDAG &DAG) const;
+  SDValue lowerSPLAT_VECTOR_PARTS(SDValue Op, SelectionDAG &DAG) const;
+  SDValue lowerVectorMaskSplat(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerVectorMaskExt(SDValue Op, SelectionDAG &DAG,
                              int64_t ExtTrueVal) const;
   SDValue lowerVectorMaskTrunc(SDValue Op, SelectionDAG &DAG) const;
@@ -435,22 +600,44 @@ private:
   SDValue lowerEXTRACT_VECTOR_ELT(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerINTRINSIC_WO_CHAIN(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerINTRINSIC_W_CHAIN(SDValue Op, SelectionDAG &DAG) const;
+  SDValue LowerINTRINSIC_VOID(SDValue Op, SelectionDAG &DAG) const;
+  SDValue lowerVPREDUCE(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerVECREDUCE(SDValue Op, SelectionDAG &DAG) const;
+  SDValue lowerVectorMaskVecReduction(SDValue Op, SelectionDAG &DAG,
+                                      bool IsVP) const;
   SDValue lowerFPVECREDUCE(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerINSERT_SUBVECTOR(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerEXTRACT_SUBVECTOR(SDValue Op, SelectionDAG &DAG) const;
+  SDValue lowerSTEP_VECTOR(SDValue Op, SelectionDAG &DAG) const;
+  SDValue lowerVECTOR_REVERSE(SDValue Op, SelectionDAG &DAG) const;
+  SDValue lowerABS(SDValue Op, SelectionDAG &DAG) const;
+  SDValue lowerMaskedLoad(SDValue Op, SelectionDAG &DAG) const;
+  SDValue lowerMaskedStore(SDValue Op, SelectionDAG &DAG) const;
+  SDValue lowerFixedLengthVectorFCOPYSIGNToRVV(SDValue Op,
+                                               SelectionDAG &DAG) const;
+  SDValue lowerMaskedGather(SDValue Op, SelectionDAG &DAG) const;
+  SDValue lowerMaskedScatter(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerFixedLengthVectorLoadToRVV(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerFixedLengthVectorStoreToRVV(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerFixedLengthVectorSetccToRVV(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerFixedLengthVectorLogicOpToRVV(SDValue Op, SelectionDAG &DAG,
                                              unsigned MaskOpc,
                                              unsigned VecOpc) const;
+  SDValue lowerFixedLengthVectorShiftToRVV(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerFixedLengthVectorSelectToRVV(SDValue Op,
                                             SelectionDAG &DAG) const;
   SDValue lowerToScalableOp(SDValue Op, SelectionDAG &DAG, unsigned NewOpc,
                             bool HasMask = true) const;
+  SDValue lowerVPOp(SDValue Op, SelectionDAG &DAG, unsigned RISCVISDOpc) const;
+  SDValue lowerLogicVPOp(SDValue Op, SelectionDAG &DAG, unsigned MaskOpc,
+                         unsigned VecOpc) const;
   SDValue lowerFixedLengthVectorExtendToRVV(SDValue Op, SelectionDAG &DAG,
                                             unsigned ExtendOpc) const;
+  SDValue lowerGET_ROUNDING(SDValue Op, SelectionDAG &DAG) const;
+  SDValue lowerSET_ROUNDING(SDValue Op, SelectionDAG &DAG) const;
+
+  SDValue expandUnalignedRVVLoad(SDValue Op, SelectionDAG &DAG) const;
+  SDValue expandUnalignedRVVStore(SDValue Op, SelectionDAG &DAG) const;
 
   bool isEligibleForTailCallOptimization(
       CCState &CCInfo, CallLoweringInfo &CLI, MachineFunction &MF,
@@ -463,6 +650,24 @@ private:
       MachineFunction &MF) const;
 
   bool useRVVForFixedLengthVectorVT(MVT VT) const;
+
+  MVT getVPExplicitVectorLengthTy() const override;
+
+  /// RVV code generation for fixed length vectors does not lower all
+  /// BUILD_VECTORs. This makes BUILD_VECTOR legalisation a source of stores to
+  /// merge. However, merging them creates a BUILD_VECTOR that is just as
+  /// illegal as the original, thus leading to an infinite legalisation loop.
+  /// NOTE: Once BUILD_VECTOR can be custom lowered for all legal vector types,
+  /// this override can be removed.
+  bool mergeStoresAfterLegalization(EVT VT) const override;
+
+  /// Disable normalizing
+  /// select(N0&N1, X, Y) => select(N0, select(N1, X, Y), Y) and
+  /// select(N0|N1, X, Y) => select(N0, select(N1, X, Y, Y))
+  /// RISCV doesn't have flags so it's better to perform the and/or in a GPR.
+  bool shouldNormalizeToSelectSequence(LLVMContext &, EVT) const override {
+    return false;
+  };
 };
 
 namespace RISCV {
@@ -474,7 +679,16 @@ namespace RISCVVIntrinsicsTable {
 
 struct RISCVVIntrinsicInfo {
   unsigned IntrinsicID;
-  uint8_t ExtendedOperand;
+  uint8_t SplatOperand;
+  uint8_t VLOperand;
+  bool hasSplatOperand() const {
+    // 0xF is not valid. See NoSplatOperand in IntrinsicsRISCV.td.
+    return SplatOperand != 0xF;
+  }
+  bool hasVLOperand() const {
+    // 0x1F is not valid. See NoVLOperand in IntrinsicsRISCV.td.
+    return VLOperand != 0x1F;
+  }
 };
 
 using namespace RISCV;

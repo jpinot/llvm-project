@@ -12,11 +12,11 @@
 #include "InputElement.h"
 #include "OutputSegment.h"
 #include "SymbolTable.h"
-#include "lld/Common/ErrorHandler.h"
-#include "lld/Common/Memory.h"
+#include "lld/Common/CommonLinkerContext.h"
 #include "lld/Common/Reproduce.h"
 #include "llvm/Object/Binary.h"
 #include "llvm/Object/Wasm.h"
+#include "llvm/Support/Path.h"
 #include "llvm/Support/TarWriter.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -25,6 +25,7 @@
 using namespace llvm;
 using namespace llvm::object;
 using namespace llvm::wasm;
+using namespace llvm::sys;
 
 namespace lld {
 
@@ -71,7 +72,8 @@ Optional<MemoryBufferRef> readFile(StringRef path) {
   return mbref;
 }
 
-InputFile *createObjectFile(MemoryBufferRef mb, StringRef archiveName) {
+InputFile *createObjectFile(MemoryBufferRef mb, StringRef archiveName,
+                            uint64_t offsetInArchive) {
   file_magic magic = identify_magic(mb.getBuffer());
   if (magic == file_magic::wasm_object) {
     std::unique_ptr<Binary> bin =
@@ -83,18 +85,9 @@ InputFile *createObjectFile(MemoryBufferRef mb, StringRef archiveName) {
   }
 
   if (magic == file_magic::bitcode)
-    return make<BitcodeFile>(mb, archiveName);
+    return make<BitcodeFile>(mb, archiveName, offsetInArchive);
 
   fatal("unknown file type: " + mb.getBufferIdentifier());
-}
-
-void ObjFile::dumpInfo() const {
-  log("info for: " + toString(this) +
-      "\n              Symbols : " + Twine(symbols.size()) +
-      "\n     Function Imports : " + Twine(wasmObj->getNumImportedFunctions()) +
-      "\n       Global Imports : " + Twine(wasmObj->getNumImportedGlobals()) +
-      "\n        Event Imports : " + Twine(wasmObj->getNumImportedEvents()) +
-      "\n        Table Imports : " + Twine(wasmObj->getNumImportedTables()));
 }
 
 // Relocations contain either symbol or type indices.  This function takes a
@@ -124,8 +117,10 @@ uint64_t ObjFile::calcNewAddend(const WasmRelocation &reloc) const {
   case R_WASM_MEMORY_ADDR_I32:
   case R_WASM_MEMORY_ADDR_I64:
   case R_WASM_MEMORY_ADDR_TLS_SLEB:
+  case R_WASM_MEMORY_ADDR_TLS_SLEB64:
   case R_WASM_FUNCTION_OFFSET_I32:
   case R_WASM_FUNCTION_OFFSET_I64:
+  case R_WASM_MEMORY_ADDR_LOCREL_I32:
     return reloc.Addend;
   case R_WASM_SECTION_OFFSET_I32:
     return getSectionSymbol(reloc.Index)->section->getOffset(reloc.Addend);
@@ -134,72 +129,9 @@ uint64_t ObjFile::calcNewAddend(const WasmRelocation &reloc) const {
   }
 }
 
-// Calculate the value we expect to find at the relocation location.
-// This is used as a sanity check before applying a relocation to a given
-// location.  It is useful for catching bugs in the compiler and linker.
-uint64_t ObjFile::calcExpectedValue(const WasmRelocation &reloc) const {
-  switch (reloc.Type) {
-  case R_WASM_TABLE_INDEX_I32:
-  case R_WASM_TABLE_INDEX_I64:
-  case R_WASM_TABLE_INDEX_SLEB:
-  case R_WASM_TABLE_INDEX_SLEB64: {
-    const WasmSymbol &sym = wasmObj->syms()[reloc.Index];
-    return tableEntries[sym.Info.ElementIndex];
-  }
-  case R_WASM_TABLE_INDEX_REL_SLEB: {
-    const WasmSymbol &sym = wasmObj->syms()[reloc.Index];
-    return tableEntriesRel[sym.Info.ElementIndex];
-  }
-  case R_WASM_MEMORY_ADDR_LEB:
-  case R_WASM_MEMORY_ADDR_LEB64:
-  case R_WASM_MEMORY_ADDR_SLEB:
-  case R_WASM_MEMORY_ADDR_SLEB64:
-  case R_WASM_MEMORY_ADDR_REL_SLEB:
-  case R_WASM_MEMORY_ADDR_REL_SLEB64:
-  case R_WASM_MEMORY_ADDR_I32:
-  case R_WASM_MEMORY_ADDR_I64:
-  case R_WASM_MEMORY_ADDR_TLS_SLEB: {
-    const WasmSymbol &sym = wasmObj->syms()[reloc.Index];
-    if (sym.isUndefined())
-      return 0;
-    const WasmSegment &segment =
-        wasmObj->dataSegments()[sym.Info.DataRef.Segment];
-    if (segment.Data.Offset.Opcode == WASM_OPCODE_I32_CONST)
-      return segment.Data.Offset.Value.Int32 + sym.Info.DataRef.Offset +
-             reloc.Addend;
-    else if (segment.Data.Offset.Opcode == WASM_OPCODE_I64_CONST)
-      return segment.Data.Offset.Value.Int64 + sym.Info.DataRef.Offset +
-             reloc.Addend;
-    else
-      llvm_unreachable("unknown init expr opcode");
-  }
-  case R_WASM_FUNCTION_OFFSET_I32:
-  case R_WASM_FUNCTION_OFFSET_I64: {
-    const WasmSymbol &sym = wasmObj->syms()[reloc.Index];
-    InputFunction *f =
-        functions[sym.Info.ElementIndex - wasmObj->getNumImportedFunctions()];
-    return f->getFunctionInputOffset() + f->getFunctionCodeOffset() +
-           reloc.Addend;
-  }
-  case R_WASM_SECTION_OFFSET_I32:
-    return reloc.Addend;
-  case R_WASM_TYPE_INDEX_LEB:
-    return reloc.Index;
-  case R_WASM_FUNCTION_INDEX_LEB:
-  case R_WASM_GLOBAL_INDEX_LEB:
-  case R_WASM_GLOBAL_INDEX_I32:
-  case R_WASM_EVENT_INDEX_LEB:
-  case R_WASM_TABLE_NUMBER_LEB: {
-    const WasmSymbol &sym = wasmObj->syms()[reloc.Index];
-    return sym.Info.ElementIndex;
-  }
-  default:
-    llvm_unreachable("unknown relocation type");
-  }
-}
-
 // Translate from the relocation's index into the final linked output value.
-uint64_t ObjFile::calcNewValue(const WasmRelocation &reloc, uint64_t tombstone) const {
+uint64_t ObjFile::calcNewValue(const WasmRelocation &reloc, uint64_t tombstone,
+                               const InputChunk *chunk) const {
   const Symbol* sym = nullptr;
   if (reloc.Type != R_WASM_TYPE_INDEX_LEB) {
     sym = symbols[reloc.Index];
@@ -209,7 +141,7 @@ uint64_t ObjFile::calcNewValue(const WasmRelocation &reloc, uint64_t tombstone) 
     // so this will not produce a valid range conflicting with ranges of actual
     // code. In other sections we return reloc.Addend.
 
-    if ((isa<FunctionSymbol>(sym) || isa<DataSymbol>(sym)) && !sym->isLive())
+    if (!isa<SectionSymbol>(sym) && !sym->isLive())
       return tombstone ? tombstone : reloc.Addend;
   }
 
@@ -218,14 +150,15 @@ uint64_t ObjFile::calcNewValue(const WasmRelocation &reloc, uint64_t tombstone) 
   case R_WASM_TABLE_INDEX_I64:
   case R_WASM_TABLE_INDEX_SLEB:
   case R_WASM_TABLE_INDEX_SLEB64:
-  case R_WASM_TABLE_INDEX_REL_SLEB: {
+  case R_WASM_TABLE_INDEX_REL_SLEB:
+  case R_WASM_TABLE_INDEX_REL_SLEB64: {
     if (!getFunctionSymbol(reloc.Index)->hasTableIndex())
       return 0;
     uint32_t index = getFunctionSymbol(reloc.Index)->getTableIndex();
-    if (reloc.Type == R_WASM_TABLE_INDEX_REL_SLEB)
+    if (reloc.Type == R_WASM_TABLE_INDEX_REL_SLEB ||
+        reloc.Type == R_WASM_TABLE_INDEX_REL_SLEB64)
       index -= config->tableBase;
     return index;
-
   }
   case R_WASM_MEMORY_ADDR_LEB:
   case R_WASM_MEMORY_ADDR_LEB64:
@@ -234,24 +167,22 @@ uint64_t ObjFile::calcNewValue(const WasmRelocation &reloc, uint64_t tombstone) 
   case R_WASM_MEMORY_ADDR_REL_SLEB:
   case R_WASM_MEMORY_ADDR_REL_SLEB64:
   case R_WASM_MEMORY_ADDR_I32:
-  case R_WASM_MEMORY_ADDR_I64: {
+  case R_WASM_MEMORY_ADDR_I64:
+  case R_WASM_MEMORY_ADDR_TLS_SLEB:
+  case R_WASM_MEMORY_ADDR_TLS_SLEB64:
+  case R_WASM_MEMORY_ADDR_LOCREL_I32: {
     if (isa<UndefinedData>(sym) || sym->isUndefWeak())
       return 0;
     auto D = cast<DefinedData>(sym);
-    // Treat non-TLS relocation against symbols that live in the TLS segment
-    // like TLS relocations.  This beaviour exists to support older object
-    // files created before we introduced TLS relocations.
-    // TODO(sbc): Remove this legacy behaviour one day.  This will break
-    // backward compat with old object files built with `-fPIC`.
-    if (D->segment && D->segment->outputSeg->name == ".tdata")
-      return D->getOutputSegmentOffset() + reloc.Addend;
-    return D->getVA(reloc.Addend);
+    uint64_t value = D->getVA() + reloc.Addend;
+    if (reloc.Type == R_WASM_MEMORY_ADDR_LOCREL_I32) {
+      const auto *segment = cast<InputSegment>(chunk);
+      uint64_t p = segment->outputSeg->startVA + segment->outputSegmentOffset +
+                   reloc.Offset - segment->getInputSectionOffset();
+      value -= p;
+    }
+    return value;
   }
-  case R_WASM_MEMORY_ADDR_TLS_SLEB:
-    if (isa<UndefinedData>(sym) || sym->isUndefWeak())
-      return 0;
-    // TLS relocations are relative to the start of the TLS output segment
-    return cast<DefinedData>(sym)->getOutputSegmentOffset() + reloc.Addend;
   case R_WASM_TYPE_INDEX_LEB:
     return typeMap[reloc.Index];
   case R_WASM_FUNCTION_INDEX_LEB:
@@ -261,10 +192,13 @@ uint64_t ObjFile::calcNewValue(const WasmRelocation &reloc, uint64_t tombstone) 
     if (auto gs = dyn_cast<GlobalSymbol>(sym))
       return gs->getGlobalIndex();
     return sym->getGOTIndex();
-  case R_WASM_EVENT_INDEX_LEB:
-    return getEventSymbol(reloc.Index)->getEventIndex();
+  case R_WASM_TAG_INDEX_LEB:
+    return getTagSymbol(reloc.Index)->getTagIndex();
   case R_WASM_FUNCTION_OFFSET_I32:
   case R_WASM_FUNCTION_OFFSET_I64: {
+    if (isa<UndefinedFunction>(sym)) {
+      return tombstone ? tombstone : reloc.Addend;
+    }
     auto *f = cast<DefinedFunction>(sym);
     return f->function->getOffset(f->function->getFunctionCodeOffset() +
                                   reloc.Addend);
@@ -395,10 +329,9 @@ void ObjFile::addLegacyIndirectFunctionTableIfNeeded(
   LLVM_DEBUG(dbgs() << "Synthesizing symbol for table import: " << info->Name
                     << "\n");
   const WasmGlobalType *globalType = nullptr;
-  const WasmEventType *eventType = nullptr;
   const WasmSignature *signature = nullptr;
-  auto *wasmSym = make<WasmSymbol>(*info, globalType, &tableImport->Table,
-                                   eventType, signature);
+  auto *wasmSym =
+      make<WasmSymbol>(*info, globalType, &tableImport->Table, signature);
   Symbol *sym = createUndefined(*wasmSym, false);
   // We're only sure it's a TableSymbol if the createUndefined succeeded.
   if (errorCount())
@@ -411,6 +344,43 @@ void ObjFile::addLegacyIndirectFunctionTableIfNeeded(
   // We assume that this compilation unit has unrelocatable references to
   // this table.
   config->legacyFunctionTable = true;
+}
+
+static bool shouldMerge(const WasmSection &sec) {
+  if (config->optimize == 0)
+    return false;
+  // Sadly we don't have section attributes yet for custom sections, so we
+  // currently go by the name alone.
+  // TODO(sbc): Add ability for wasm sections to carry flags so we don't
+  // need to use names here.
+  // For now, keep in sync with uses of wasm::WASM_SEG_FLAG_STRINGS in
+  // MCObjectFileInfo::initWasmMCObjectFileInfo which creates these custom
+  // sections.
+  return sec.Name == ".debug_str" || sec.Name == ".debug_str.dwo" ||
+         sec.Name == ".debug_line_str";
+}
+
+static bool shouldMerge(const WasmSegment &seg) {
+  // As of now we only support merging strings, and only with single byte
+  // alignment (2^0).
+  if (!(seg.Data.LinkingFlags & WASM_SEG_FLAG_STRINGS) ||
+      (seg.Data.Alignment != 0))
+    return false;
+
+  // On a regular link we don't merge sections if -O0 (default is -O1). This
+  // sometimes makes the linker significantly faster, although the output will
+  // be bigger.
+  if (config->optimize == 0)
+    return false;
+
+  // A mergeable section with size 0 is useless because they don't have
+  // any data to merge. A mergeable string section with size 0 can be
+  // argued as invalid because it doesn't end with a null character.
+  // We'll avoid a mess by handling them as if they were non-mergeable.
+  if (seg.Data.Content.size() == 0)
+    return false;
+
+  return true;
 }
 
 void ObjFile::parse(bool ignoreComdats) {
@@ -475,7 +445,11 @@ void ObjFile::parse(bool ignoreComdats) {
       assert(!dataSection);
       dataSection = &section;
     } else if (section.Type == WASM_SEC_CUSTOM) {
-      auto *customSec = make<InputSection>(section, this);
+      InputChunk *customSec;
+      if (shouldMerge(section))
+        customSec = make<MergeInputChunk>(section, this);
+      else
+        customSec = make<InputSection>(section, this);
       customSec->discarded = isExcludedByComdat(customSec);
       customSections.emplace_back(customSec);
       customSections.back()->setRelocations(section.Relocations);
@@ -494,20 +468,29 @@ void ObjFile::parse(bool ignoreComdats) {
 
   // Populate `Segments`.
   for (const WasmSegment &s : wasmObj->dataSegments()) {
-    auto* seg = make<InputSegment>(s, this);
+    InputChunk *seg;
+    if (shouldMerge(s))
+      seg = make<MergeInputChunk>(s, this);
+    else
+      seg = make<InputSegment>(s, this);
     seg->discarded = isExcludedByComdat(seg);
+    // Older object files did not include WASM_SEG_FLAG_TLS and instead
+    // relied on the naming convention.  To maintain compat with such objects
+    // we still imply the TLS flag based on the name of the segment.
+    if (!seg->isTLS() &&
+        (seg->name.startswith(".tdata") || seg->name.startswith(".tbss")))
+      seg->flags |= WASM_SEG_FLAG_TLS;
     segments.emplace_back(seg);
   }
   setRelocs(segments, dataSection);
 
   // Populate `Functions`.
   ArrayRef<WasmFunction> funcs = wasmObj->functions();
-  ArrayRef<uint32_t> funcTypes = wasmObj->functionTypes();
   ArrayRef<WasmSignature> types = wasmObj->types();
   functions.reserve(funcs.size());
 
-  for (size_t i = 0, e = funcs.size(); i != e; ++i) {
-    auto* func = make<InputFunction>(types[funcTypes[i]], &funcs[i], this);
+  for (auto &f : funcs) {
+    auto *func = make<InputFunction>(types[f.SigIndex], &f, this);
     func->discarded = isExcludedByComdat(func);
     functions.emplace_back(func);
   }
@@ -521,9 +504,9 @@ void ObjFile::parse(bool ignoreComdats) {
   for (const WasmGlobal &g : wasmObj->globals())
     globals.emplace_back(make<InputGlobal>(g, this));
 
-  // Populate `Events`.
-  for (const WasmEvent &e : wasmObj->events())
-    events.emplace_back(make<InputEvent>(types[e.Type.SigIndex], e, this));
+  // Populate `Tags`.
+  for (const WasmTag &t : wasmObj->tags())
+    tags.emplace_back(make<InputTag>(types[t.SigIndex], t, this));
 
   // Populate `Symbols` based on the symbols in the object.
   symbols.reserve(wasmObj->getNumberOfSymbols());
@@ -547,7 +530,7 @@ void ObjFile::parse(bool ignoreComdats) {
   addLegacyIndirectFunctionTableIfNeeded(tableSymbolCount);
 }
 
-bool ObjFile::isExcludedByComdat(InputChunk *chunk) const {
+bool ObjFile::isExcludedByComdat(const InputChunk *chunk) const {
   uint32_t c = chunk->getComdat();
   if (c == UINT32_MAX)
     return false;
@@ -562,8 +545,8 @@ GlobalSymbol *ObjFile::getGlobalSymbol(uint32_t index) const {
   return cast<GlobalSymbol>(symbols[index]);
 }
 
-EventSymbol *ObjFile::getEventSymbol(uint32_t index) const {
-  return cast<EventSymbol>(symbols[index]);
+TagSymbol *ObjFile::getTagSymbol(uint32_t index) const {
+  return cast<TagSymbol>(symbols[index]);
 }
 
 TableSymbol *ObjFile::getTableSymbol(uint32_t index) const {
@@ -593,9 +576,14 @@ Symbol *ObjFile::createDefined(const WasmSymbol &sym) {
     return symtab->addDefinedFunction(name, flags, this, func);
   }
   case WASM_SYMBOL_TYPE_DATA: {
-    InputSegment *seg = segments[sym.Info.DataRef.Segment];
+    InputChunk *seg = segments[sym.Info.DataRef.Segment];
     auto offset = sym.Info.DataRef.Offset;
     auto size = sym.Info.DataRef.Size;
+    // Support older (e.g. llvm 13) object files that pre-date the per-symbol
+    // TLS flag, and symbols were assumed to be TLS by being defined in a TLS
+    // segment.
+    if (!(flags & WASM_SYMBOL_TLS) && seg->isTLS())
+      flags |= WASM_SYMBOL_TLS;
     if (sym.isBindingLocal())
       return make<DefinedData>(name, flags, this, seg, offset, size);
     if (seg->discarded)
@@ -610,7 +598,7 @@ Symbol *ObjFile::createDefined(const WasmSymbol &sym) {
     return symtab->addDefinedGlobal(name, flags, this, global);
   }
   case WASM_SYMBOL_TYPE_SECTION: {
-    InputSection *section = customSectionsByIndex[sym.Info.ElementIndex];
+    InputChunk *section = customSectionsByIndex[sym.Info.ElementIndex];
     assert(sym.isBindingLocal());
     // Need to return null if discarded here? data and func only do that when
     // binding is not local.
@@ -618,12 +606,11 @@ Symbol *ObjFile::createDefined(const WasmSymbol &sym) {
       return nullptr;
     return make<SectionSymbol>(flags, section, this);
   }
-  case WASM_SYMBOL_TYPE_EVENT: {
-    InputEvent *event =
-        events[sym.Info.ElementIndex - wasmObj->getNumImportedEvents()];
+  case WASM_SYMBOL_TYPE_TAG: {
+    InputTag *tag = tags[sym.Info.ElementIndex - wasmObj->getNumImportedTags()];
     if (sym.isBindingLocal())
-      return make<DefinedEvent>(name, flags, this, event);
-    return symtab->addDefinedEvent(name, flags, this, event);
+      return make<DefinedTag>(name, flags, this, tag);
+    return symtab->addDefinedTag(name, flags, this, tag);
   }
   case WASM_SYMBOL_TYPE_TABLE: {
     InputTable *table =
@@ -669,6 +656,14 @@ Symbol *ObjFile::createUndefined(const WasmSymbol &sym, bool isCalledDirectly) {
     return symtab->addUndefinedTable(name, sym.Info.ImportName,
                                      sym.Info.ImportModule, flags, this,
                                      sym.TableType);
+  case WASM_SYMBOL_TYPE_TAG:
+    if (sym.isBindingLocal())
+      return make<UndefinedTag>(name, sym.Info.ImportName,
+                                sym.Info.ImportModule, flags, this,
+                                sym.Signature);
+    return symtab->addUndefinedTag(name, sym.Info.ImportName,
+                                   sym.Info.ImportModule, flags, this,
+                                   sym.Signature);
   case WASM_SYMBOL_TYPE_SECTION:
     llvm_unreachable("section symbols cannot be undefined");
   }
@@ -707,7 +702,7 @@ void ArchiveFile::addMember(const Archive::Symbol *sym) {
             "could not get the buffer for the member defining symbol " +
                 sym->getName());
 
-  InputFile *obj = createObjectFile(mb, getName());
+  InputFile *obj = createObjectFile(mb, getName(), c.getChildOffset());
   symtab->addFile(obj);
 }
 
@@ -725,7 +720,7 @@ static uint8_t mapVisibility(GlobalValue::VisibilityTypes gvVisibility) {
 static Symbol *createBitcodeSymbol(const std::vector<bool> &keptComdats,
                                    const lto::InputFile::Symbol &objSym,
                                    BitcodeFile &f) {
-  StringRef name = saver.save(objSym.getName());
+  StringRef name = saver().save(objSym.getName());
 
   uint32_t flags = objSym.isWeak() ? WASM_SYMBOL_BINDING_WEAK : 0;
   flags |= mapVisibility(objSym.getVisibility());
@@ -746,6 +741,32 @@ static Symbol *createBitcodeSymbol(const std::vector<bool> &keptComdats,
   return symtab->addDefinedData(name, flags, &f, nullptr, 0, 0);
 }
 
+BitcodeFile::BitcodeFile(MemoryBufferRef m, StringRef archiveName,
+                         uint64_t offsetInArchive)
+    : InputFile(BitcodeKind, m) {
+  this->archiveName = std::string(archiveName);
+
+  std::string path = mb.getBufferIdentifier().str();
+
+  // ThinLTO assumes that all MemoryBufferRefs given to it have a unique
+  // name. If two archives define two members with the same name, this
+  // causes a collision which result in only one of the objects being taken
+  // into consideration at LTO time (which very likely causes undefined
+  // symbols later in the link stage). So we append file offset to make
+  // filename unique.
+  StringRef name = archiveName.empty()
+                       ? saver().save(path)
+                       : saver().save(archiveName + "(" + path::filename(path) +
+                                      " at " + utostr(offsetInArchive) + ")");
+  MemoryBufferRef mbref(mb.getBuffer(), name);
+
+  obj = check(lto::InputFile::create(mbref));
+
+  // If this isn't part of an archive, it's eagerly linked, so mark it live.
+  if (archiveName.empty())
+    markLive();
+}
+
 bool BitcodeFile::doneLTO = false;
 
 void BitcodeFile::parse() {
@@ -754,8 +775,6 @@ void BitcodeFile::parse() {
     return;
   }
 
-  obj = check(lto::InputFile::create(MemoryBufferRef(
-      mb.getBuffer(), saver.save(archiveName + mb.getBufferIdentifier()))));
   Triple t(obj->getTargetTriple());
   if (!t.isWasm()) {
     error(toString(this) + ": machine type must be wasm32 or wasm64");
@@ -763,8 +782,9 @@ void BitcodeFile::parse() {
   }
   checkArch(t.getArch());
   std::vector<bool> keptComdats;
-  for (StringRef s : obj->getComdatTable())
-    keptComdats.push_back(symtab->addComdat(s));
+  // TODO Support nodeduplicate https://bugs.llvm.org/show_bug.cgi?id=50531
+  for (std::pair<StringRef, Comdat::SelectionKind> s : obj->getComdatTable())
+    keptComdats.push_back(symtab->addComdat(s.first));
 
   for (const lto::InputFile::Symbol &objSym : obj->symbols())
     symbols.push_back(createBitcodeSymbol(keptComdats, objSym, *this));

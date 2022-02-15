@@ -18,6 +18,7 @@
 
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/IntrinsicsAMDGPU.h"
+#include "llvm/Support/raw_ostream.h"
 
 using namespace mlir;
 using namespace mlir::LLVM;
@@ -28,40 +29,90 @@ using mlir::LLVM::detail::createIntrinsicCall;
 // take a single int32 argument. It is likely that the interface of this
 // function will change to make it more generic.
 static llvm::Value *createDeviceFunctionCall(llvm::IRBuilderBase &builder,
-                                             StringRef fn_name, int parameter) {
+                                             StringRef fnName, int parameter) {
   llvm::Module *module = builder.GetInsertBlock()->getModule();
-  llvm::FunctionType *function_type = llvm::FunctionType::get(
+  llvm::FunctionType *functionType = llvm::FunctionType::get(
       llvm::Type::getInt64Ty(module->getContext()), // return type.
       llvm::Type::getInt32Ty(module->getContext()), // parameter type.
       false);                                       // no variadic arguments.
   llvm::Function *fn = dyn_cast<llvm::Function>(
-      module->getOrInsertFunction(fn_name, function_type).getCallee());
-  llvm::Value *fn_op0 = llvm::ConstantInt::get(
+      module->getOrInsertFunction(fnName, functionType).getCallee());
+  llvm::Value *fnOp0 = llvm::ConstantInt::get(
       llvm::Type::getInt32Ty(module->getContext()), parameter);
-  return builder.CreateCall(fn, ArrayRef<llvm::Value *>(fn_op0));
+  return builder.CreateCall(fn, ArrayRef<llvm::Value *>(fnOp0));
 }
 
-LogicalResult mlir::ROCDLDialectLLVMIRTranslationInterface::convertOperation(
-    Operation *op, llvm::IRBuilderBase &builder,
-    LLVM::ModuleTranslation &moduleTranslation) const {
-  Operation &opInst = *op;
+namespace {
+/// Implementation of the dialect interface that converts operations belonging
+/// to the ROCDL dialect to LLVM IR.
+class ROCDLDialectLLVMIRTranslationInterface
+    : public LLVMTranslationDialectInterface {
+public:
+  using LLVMTranslationDialectInterface::LLVMTranslationDialectInterface;
+
+  /// Translates the given operation to LLVM IR using the provided IR builder
+  /// and saving the state in `moduleTranslation`.
+  LogicalResult
+  convertOperation(Operation *op, llvm::IRBuilderBase &builder,
+                   LLVM::ModuleTranslation &moduleTranslation) const final {
+    Operation &opInst = *op;
 #include "mlir/Dialect/LLVMIR/ROCDLConversions.inc"
 
-  return failure();
+    return failure();
+  }
+
+  /// Attaches module-level metadata for functions marked as kernels.
+  LogicalResult
+  amendOperation(Operation *op, NamedAttribute attribute,
+                 LLVM::ModuleTranslation &moduleTranslation) const final {
+    if (attribute.getName() == ROCDL::ROCDLDialect::getKernelFuncAttrName()) {
+      auto func = dyn_cast<LLVM::LLVMFuncOp>(op);
+      if (!func)
+        return failure();
+
+      // For GPU kernels,
+      // 1. Insert AMDGPU_KERNEL calling convention.
+      // 2. Insert amdgpu-flat-work-group-size(1, 256) attribute unless the user
+      // has overriden this value - 256 is the default in clang
+      // 3. Insert amdgpu-implicitarg-num-bytes=56 (which must be set on OpenCL
+      // and HIP kernels per Clang)
+      llvm::Function *llvmFunc =
+          moduleTranslation.lookupFunction(func.getName());
+      llvmFunc->setCallingConv(llvm::CallingConv::AMDGPU_KERNEL);
+      if (!llvmFunc->hasFnAttribute("amdgpu-flat-work-group-size")) {
+        llvmFunc->addFnAttr("amdgpu-flat-work-group-size", "1, 256");
+      }
+      llvmFunc->addFnAttr("amdgpu-implicitarg-num-bytes", "56");
+    }
+    // Override flat-work-group-size
+    if ("rocdl.max_flat_work_group_size" == attribute.getName()) {
+      auto func = dyn_cast<LLVM::LLVMFuncOp>(op);
+      if (!func)
+        return failure();
+      auto value = attribute.getValue().dyn_cast<IntegerAttr>();
+      if (!value)
+        return failure();
+
+      llvm::Function *llvmFunc =
+          moduleTranslation.lookupFunction(func.getName());
+      llvm::SmallString<8> llvmAttrValue;
+      llvm::raw_svector_ostream attrValueStream(llvmAttrValue);
+      attrValueStream << "1, " << value.getInt();
+      llvmFunc->addFnAttr("amdgpu-flat-work-group-size", llvmAttrValue);
+    }
+    return success();
+  }
+};
+} // namespace
+
+void mlir::registerROCDLDialectTranslation(DialectRegistry &registry) {
+  registry.insert<ROCDL::ROCDLDialect>();
+  registry.addDialectInterface<ROCDL::ROCDLDialect,
+                               ROCDLDialectLLVMIRTranslationInterface>();
 }
 
-LogicalResult mlir::ROCDLDialectLLVMIRTranslationInterface::amendOperation(
-    Operation *op, NamedAttribute attribute,
-    LLVM::ModuleTranslation &moduleTranslation) const {
-  if (attribute.first == ROCDL::ROCDLDialect::getKernelFuncAttrName()) {
-    auto func = cast<LLVM::LLVMFuncOp>(op);
-
-    // For GPU kernels,
-    // 1. Insert AMDGPU_KERNEL calling convention.
-    // 2. Insert amdgpu-flat-workgroup-size(1, 1024) attribute.
-    llvm::Function *llvmFunc = moduleTranslation.lookupFunction(func.getName());
-    llvmFunc->setCallingConv(llvm::CallingConv::AMDGPU_KERNEL);
-    llvmFunc->addFnAttr("amdgpu-flat-work-group-size", "1, 1024");
-  }
-  return success();
+void mlir::registerROCDLDialectTranslation(MLIRContext &context) {
+  DialectRegistry registry;
+  registerROCDLDialectTranslation(registry);
+  context.appendDialectRegistry(registry);
 }

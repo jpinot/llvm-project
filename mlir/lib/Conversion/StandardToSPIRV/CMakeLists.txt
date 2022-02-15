@@ -1,5 +1,4 @@
 add_mlir_conversion_library(MLIRStandardToSPIRV
-  LegalizeStandardForSPIRV.cpp
   StandardToSPIRV.cpp
   StandardToSPIRVPass.cpp
 
@@ -11,12 +10,16 @@ add_mlir_conversion_library(MLIRStandardToSPIRV
   MLIRConversionPassIncGen
 
   LINK_LIBS PUBLIC
+  MLIRArithmeticToSPIRV
+  MLIRControlFlowToSPIRV
   MLIRIR
-  MLIRMath
+  MLIRMathToSPIRV
+  MLIRMemRef
   MLIRPass
   MLIRSPIRV
   MLIRSPIRVConversion
   MLIRSupport
   MLIRTransformUtils
   MLIRStandard
+  MLIRTensor
   )

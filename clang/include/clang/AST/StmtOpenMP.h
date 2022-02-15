@@ -28,6 +28,238 @@ namespace clang {
 // AST classes for directives.
 //===----------------------------------------------------------------------===//
 
+/// Representation of an OpenMP canonical loop.
+///
+/// OpenMP 1.0 C/C++, section 2.4.1 for Construct; canonical-shape
+/// OpenMP 2.0 C/C++, section 2.4.1 for Construct; canonical-shape
+/// OpenMP 2.5, section 2.5.1 Loop Construct; canonical form
+/// OpenMP 3.1, section 2.5.1 Loop Construct; canonical form
+/// OpenMP 4.0, section 2.6 Canonical Loop Form
+/// OpenMP 4.5, section 2.6 Canonical Loop Form
+/// OpenMP 5.0, section 2.9.1 Canonical Loop Form
+/// OpenMP 5.1, section 2.11.1 Canonical Loop Nest Form
+///
+/// An OpenMP canonical loop is a for-statement or range-based for-statement
+/// with additional requirements that ensure that the number of iterations is
+/// known before entering the loop and allow skipping to an arbitrary iteration.
+/// The OMPCanonicalLoop AST node wraps a ForStmt or CXXForRangeStmt that is
+/// known to fulfill OpenMP's canonical loop requirements because of being
+/// associated to an OMPLoopBasedDirective. That is, the general structure is:
+///
+///  OMPLoopBasedDirective
+/// [`- CapturedStmt   ]
+/// [   `- CapturedDecl]
+///        ` OMPCanonicalLoop
+///          `- ForStmt/CXXForRangeStmt
+///             `- Stmt
+///
+/// One or multiple CapturedStmt/CapturedDecl pairs may be inserted by some
+/// directives such as OMPParallelForDirective, but others do not need them
+/// (such as OMPTileDirective). In  The OMPCanonicalLoop and
+/// ForStmt/CXXForRangeStmt pair is repeated for loop associated with the
+/// directive. A OMPCanonicalLoop must not appear in the AST unless associated
+/// with a OMPLoopBasedDirective. In an imperfectly nested loop nest, the
+/// OMPCanonicalLoop may also be wrapped in a CompoundStmt:
+///
+/// [...]
+///  ` OMPCanonicalLoop
+///    `- ForStmt/CXXForRangeStmt
+///       `- CompoundStmt
+///          |- Leading in-between code (if any)
+///          |- OMPCanonicalLoop
+///          |  `- ForStmt/CXXForRangeStmt
+///          |     `- ...
+///          `- Trailing in-between code (if any)
+///
+/// The leading/trailing in-between code must not itself be a OMPCanonicalLoop
+/// to avoid confusion which loop belongs to the nesting.
+///
+/// There are three different kinds of iteration variables for different
+/// purposes:
+/// * Loop user variable: The user-accessible variable with different value for
+///   each iteration.
+/// * Loop iteration variable: The variable used to identify a loop iteration;
+///   for range-based for-statement, this is the hidden iterator '__begin'. For
+///   other loops, it is identical to the loop user variable. Must be a
+///   random-access iterator, pointer or integer type.
+/// * Logical iteration counter: Normalized loop counter starting at 0 and
+///   incrementing by one at each iteration. Allows abstracting over the type
+///   of the loop iteration variable and is always an unsigned integer type
+///   appropriate to represent the range of the loop iteration variable. Its
+///   value corresponds to the logical iteration number in the OpenMP
+///   specification.
+///
+/// This AST node provides two captured statements:
+/// * The distance function which computes the number of iterations.
+/// * The loop user variable function that computes the loop user variable when
+///   given a logical iteration number.
+///
+/// These captured statements provide the link between C/C++ semantics and the
+/// logical iteration counters used by the OpenMPIRBuilder which is
+/// language-agnostic and therefore does not know e.g. how to advance a
+/// random-access iterator. The OpenMPIRBuilder will use this information to
+/// apply simd, workshare-loop, distribute, taskloop and loop directives to the
+/// loop. For compatibility with the non-OpenMPIRBuilder codegen path, an
+/// OMPCanonicalLoop can itself also be wrapped into the CapturedStmts of an
+/// OMPLoopDirective and skipped when searching for the associated syntactical
+/// loop.
+///
+/// Example:
+/// <code>
+///   std::vector<std::string> Container{1,2,3};
+///   for (std::string Str : Container)
+///      Body(Str);
+/// </code>
+/// which is syntactic sugar for approximately:
+/// <code>
+///   auto &&__range = Container;
+///   auto __begin = std::begin(__range);
+///   auto __end = std::end(__range);
+///   for (; __begin != __end; ++__begin) {
+///     std::String Str = *__begin;
+///     Body(Str);
+///   }
+/// </code>
+/// In this example, the loop user variable is `Str`, the loop iteration
+/// variable is `__begin` of type `std::vector<std::string>::iterator` and the
+/// logical iteration number type is `size_t` (unsigned version of
+/// `std::vector<std::string>::iterator::difference_type` aka `ptrdiff_t`).
+/// Therefore, the distance function will be
+/// <code>
+///   [&](size_t &Result) { Result = __end - __begin; }
+/// </code>
+/// and the loop variable function is
+/// <code>
+///   [&,__begin](std::vector<std::string>::iterator &Result, size_t Logical) {
+///     Result = __begin + Logical;
+///   }
+/// </code>
+/// The variable `__begin`, aka the loop iteration variable, is captured by
+/// value because it is modified in the loop body, but both functions require
+/// the initial value. The OpenMP specification explicitly leaves unspecified
+/// when the loop expressions are evaluated such that a capture by reference is
+/// sufficient.
+class OMPCanonicalLoop : public Stmt {
+  friend class ASTStmtReader;
+  friend class ASTStmtWriter;
+
+  /// Children of this AST node.
+  enum {
+    LOOP_STMT,
+    DISTANCE_FUNC,
+    LOOPVAR_FUNC,
+    LOOPVAR_REF,
+    LastSubStmt = LOOPVAR_REF
+  };
+
+private:
+  /// This AST node's children.
+  Stmt *SubStmts[LastSubStmt + 1] = {};
+
+  OMPCanonicalLoop() : Stmt(StmtClass::OMPCanonicalLoopClass) {}
+
+public:
+  /// Create a new OMPCanonicalLoop.
+  static OMPCanonicalLoop *create(const ASTContext &Ctx, Stmt *LoopStmt,
+                                  CapturedStmt *DistanceFunc,
+                                  CapturedStmt *LoopVarFunc,
+                                  DeclRefExpr *LoopVarRef) {
+    OMPCanonicalLoop *S = new (Ctx) OMPCanonicalLoop();
+    S->setLoopStmt(LoopStmt);
+    S->setDistanceFunc(DistanceFunc);
+    S->setLoopVarFunc(LoopVarFunc);
+    S->setLoopVarRef(LoopVarRef);
+    return S;
+  }
+
+  /// Create an empty OMPCanonicalLoop for deserialization.
+  static OMPCanonicalLoop *createEmpty(const ASTContext &Ctx) {
+    return new (Ctx) OMPCanonicalLoop();
+  }
+
+  static bool classof(const Stmt *S) {
+    return S->getStmtClass() == StmtClass::OMPCanonicalLoopClass;
+  }
+
+  SourceLocation getBeginLoc() const { return getLoopStmt()->getBeginLoc(); }
+  SourceLocation getEndLoc() const { return getLoopStmt()->getEndLoc(); }
+
+  /// Return this AST node's children.
+  /// @{
+  child_range children() {
+    return child_range(&SubStmts[0], &SubStmts[0] + LastSubStmt + 1);
+  }
+  const_child_range children() const {
+    return const_child_range(&SubStmts[0], &SubStmts[0] + LastSubStmt + 1);
+  }
+  /// @}
+
+  /// The wrapped syntactic loop statement (ForStmt or CXXForRangeStmt).
+  /// @{
+  Stmt *getLoopStmt() { return SubStmts[LOOP_STMT]; }
+  const Stmt *getLoopStmt() const { return SubStmts[LOOP_STMT]; }
+  void setLoopStmt(Stmt *S) {
+    assert((isa<ForStmt>(S) || isa<CXXForRangeStmt>(S)) &&
+           "Canonical loop must be a for loop (range-based or otherwise)");
+    SubStmts[LOOP_STMT] = S;
+  }
+  /// @}
+
+  /// The function that computes the number of loop iterations. Can be evaluated
+  /// before entering the loop but after the syntactical loop's init
+  /// statement(s).
+  ///
+  /// Function signature: void(LogicalTy &Result)
+  /// Any values necessary to compute the distance are captures of the closure.
+  /// @{
+  CapturedStmt *getDistanceFunc() {
+    return cast<CapturedStmt>(SubStmts[DISTANCE_FUNC]);
+  }
+  const CapturedStmt *getDistanceFunc() const {
+    return cast<CapturedStmt>(SubStmts[DISTANCE_FUNC]);
+  }
+  void setDistanceFunc(CapturedStmt *S) {
+    assert(S && "Expected non-null captured statement");
+    SubStmts[DISTANCE_FUNC] = S;
+  }
+  /// @}
+
+  /// The function that computes the loop user variable from a logical iteration
+  /// counter. Can be evaluated as first statement in the loop.
+  ///
+  /// Function signature: void(LoopVarTy &Result, LogicalTy Number)
+  /// Any other values required to compute the loop user variable (such as start
+  /// value, step size) are captured by the closure. In particular, the initial
+  /// value of loop iteration variable is captured by value to be unaffected by
+  /// previous iterations.
+  /// @{
+  CapturedStmt *getLoopVarFunc() {
+    return cast<CapturedStmt>(SubStmts[LOOPVAR_FUNC]);
+  }
+  const CapturedStmt *getLoopVarFunc() const {
+    return cast<CapturedStmt>(SubStmts[LOOPVAR_FUNC]);
+  }
+  void setLoopVarFunc(CapturedStmt *S) {
+    assert(S && "Expected non-null captured statement");
+    SubStmts[LOOPVAR_FUNC] = S;
+  }
+  /// @}
+
+  /// Reference to the loop user variable as accessed in the loop body.
+  /// @{
+  DeclRefExpr *getLoopVarRef() {
+    return cast<DeclRefExpr>(SubStmts[LOOPVAR_REF]);
+  }
+  const DeclRefExpr *getLoopVarRef() const {
+    return cast<DeclRefExpr>(SubStmts[LOOPVAR_REF]);
+  }
+  void setLoopVarRef(DeclRefExpr *E) {
+    assert(E && "Expected non-null loop variable");
+    SubStmts[LOOPVAR_REF] = E;
+  }
+  /// @}
+};
+
 /// This is a basic class for representing single OpenMP executable
 /// directive.
 ///
@@ -228,15 +460,20 @@ public:
   /// directive). Returns nullptr if no clause of this kind is associated with
   /// the directive.
   template <typename SpecificClause>
-  const SpecificClause *getSingleClause() const {
-    auto Clauses = getClausesOfKind<SpecificClause>();
+  static const SpecificClause *getSingleClause(ArrayRef<OMPClause *> Clauses) {
+    auto ClausesOfKind = getClausesOfKind<SpecificClause>(Clauses);
 
-    if (Clauses.begin() != Clauses.end()) {
-      assert(std::next(Clauses.begin()) == Clauses.end() &&
+    if (ClausesOfKind.begin() != ClausesOfKind.end()) {
+      assert(std::next(ClausesOfKind.begin()) == ClausesOfKind.end() &&
              "There are at least 2 clauses of the specified kind");
-      return *Clauses.begin();
+      return *ClausesOfKind.begin();
     }
     return nullptr;
+  }
+
+  template <typename SpecificClause>
+  const SpecificClause *getSingleClause() const {
+    return getSingleClause<SpecificClause>(clauses());
   }
 
   /// Returns true if the current directive has one or more clauses of a
@@ -655,12 +892,41 @@ public:
   static bool
   doForAllLoops(Stmt *CurStmt, bool TryImperfectlyNestedLoops,
                 unsigned NumLoops,
-                llvm::function_ref<bool(unsigned, Stmt *)> Callback);
+                llvm::function_ref<bool(unsigned, Stmt *)> Callback,
+                llvm::function_ref<void(OMPLoopTransformationDirective *)>
+                    OnTransformationCallback);
+  static bool
+  doForAllLoops(const Stmt *CurStmt, bool TryImperfectlyNestedLoops,
+                unsigned NumLoops,
+                llvm::function_ref<bool(unsigned, const Stmt *)> Callback,
+                llvm::function_ref<void(const OMPLoopTransformationDirective *)>
+                    OnTransformationCallback) {
+    auto &&NewCallback = [Callback](unsigned Cnt, Stmt *CurStmt) {
+      return Callback(Cnt, CurStmt);
+    };
+    auto &&NewTransformCb =
+        [OnTransformationCallback](OMPLoopTransformationDirective *A) {
+          OnTransformationCallback(A);
+        };
+    return doForAllLoops(const_cast<Stmt *>(CurStmt), TryImperfectlyNestedLoops,
+                         NumLoops, NewCallback, NewTransformCb);
+  }
+
+  /// Calls the specified callback function for all the loops in \p CurStmt,
+  /// from the outermost to the innermost.
+  static bool
+  doForAllLoops(Stmt *CurStmt, bool TryImperfectlyNestedLoops,
+                unsigned NumLoops,
+                llvm::function_ref<bool(unsigned, Stmt *)> Callback) {
+    auto &&TransformCb = [](OMPLoopTransformationDirective *) {};
+    return doForAllLoops(CurStmt, TryImperfectlyNestedLoops, NumLoops, Callback,
+                         TransformCb);
+  }
   static bool
   doForAllLoops(const Stmt *CurStmt, bool TryImperfectlyNestedLoops,
                 unsigned NumLoops,
                 llvm::function_ref<bool(unsigned, const Stmt *)> Callback) {
-    auto &&NewCallback = [Callback](unsigned Cnt, Stmt *CurStmt) {
+    auto &&NewCallback = [Callback](unsigned Cnt, const Stmt *CurStmt) {
       return Callback(Cnt, CurStmt);
     };
     return doForAllLoops(const_cast<Stmt *>(CurStmt), TryImperfectlyNestedLoops,
@@ -686,6 +952,47 @@ public:
     if (auto *D = dyn_cast<OMPExecutableDirective>(T))
       return isOpenMPLoopDirective(D->getDirectiveKind());
     return false;
+  }
+};
+
+/// The base class for all loop transformation directives.
+class OMPLoopTransformationDirective : public OMPLoopBasedDirective {
+  friend class ASTStmtReader;
+
+  /// Number of loops generated by this loop transformation.
+  unsigned NumGeneratedLoops = 0;
+
+protected:
+  explicit OMPLoopTransformationDirective(StmtClass SC,
+                                          OpenMPDirectiveKind Kind,
+                                          SourceLocation StartLoc,
+                                          SourceLocation EndLoc,
+                                          unsigned NumAssociatedLoops)
+      : OMPLoopBasedDirective(SC, Kind, StartLoc, EndLoc, NumAssociatedLoops) {}
+
+  /// Set the number of loops generated by this loop transformation.
+  void setNumGeneratedLoops(unsigned Num) { NumGeneratedLoops = Num; }
+
+public:
+  /// Return the number of associated (consumed) loops.
+  unsigned getNumAssociatedLoops() const { return getLoopsNumber(); }
+
+  /// Return the number of loops generated by this loop transformation.
+  unsigned getNumGeneratedLoops() { return NumGeneratedLoops; }
+
+  /// Get the de-sugared statements after after the loop transformation.
+  ///
+  /// Might be nullptr if either the directive generates no loops and is handled
+  /// directly in CodeGen, or resolving a template-dependence context is
+  /// required.
+  Stmt *getTransformedStmt() const;
+
+  /// Return preinits statement.
+  Stmt *getPreInits() const;
+
+  static bool classof(const Stmt *T) {
+    return T->getStmtClass() == OMPTileDirectiveClass ||
+           T->getStmtClass() == OMPUnrollDirectiveClass;
   }
 };
 
@@ -837,7 +1144,7 @@ protected:
     if (isOpenMPLoopBoundSharingDirective(Kind))
       return CombinedDistributeEnd;
     if (isOpenMPWorksharingDirective(Kind) || isOpenMPTaskLoopDirective(Kind) ||
-        isOpenMPDistributeDirective(Kind))
+        isOpenMPGenericLoopDirective(Kind) || isOpenMPDistributeDirective(Kind))
       return WorksharingEnd;
     return DefaultEnd;
   }
@@ -869,6 +1176,7 @@ protected:
   }
   void setIsLastIterVariable(Expr *IL) {
     assert((isOpenMPWorksharingDirective(getDirectiveKind()) ||
+            isOpenMPGenericLoopDirective(getDirectiveKind()) ||
             isOpenMPTaskLoopDirective(getDirectiveKind()) ||
             isOpenMPDistributeDirective(getDirectiveKind())) &&
            "expected worksharing loop directive");
@@ -876,6 +1184,7 @@ protected:
   }
   void setLowerBoundVariable(Expr *LB) {
     assert((isOpenMPWorksharingDirective(getDirectiveKind()) ||
+            isOpenMPGenericLoopDirective(getDirectiveKind()) ||
             isOpenMPTaskLoopDirective(getDirectiveKind()) ||
             isOpenMPDistributeDirective(getDirectiveKind())) &&
            "expected worksharing loop directive");
@@ -883,6 +1192,7 @@ protected:
   }
   void setUpperBoundVariable(Expr *UB) {
     assert((isOpenMPWorksharingDirective(getDirectiveKind()) ||
+            isOpenMPGenericLoopDirective(getDirectiveKind()) ||
             isOpenMPTaskLoopDirective(getDirectiveKind()) ||
             isOpenMPDistributeDirective(getDirectiveKind())) &&
            "expected worksharing loop directive");
@@ -890,6 +1200,7 @@ protected:
   }
   void setStrideVariable(Expr *ST) {
     assert((isOpenMPWorksharingDirective(getDirectiveKind()) ||
+            isOpenMPGenericLoopDirective(getDirectiveKind()) ||
             isOpenMPTaskLoopDirective(getDirectiveKind()) ||
             isOpenMPDistributeDirective(getDirectiveKind())) &&
            "expected worksharing loop directive");
@@ -897,6 +1208,7 @@ protected:
   }
   void setEnsureUpperBound(Expr *EUB) {
     assert((isOpenMPWorksharingDirective(getDirectiveKind()) ||
+            isOpenMPGenericLoopDirective(getDirectiveKind()) ||
             isOpenMPTaskLoopDirective(getDirectiveKind()) ||
             isOpenMPDistributeDirective(getDirectiveKind())) &&
            "expected worksharing loop directive");
@@ -904,6 +1216,7 @@ protected:
   }
   void setNextLowerBound(Expr *NLB) {
     assert((isOpenMPWorksharingDirective(getDirectiveKind()) ||
+            isOpenMPGenericLoopDirective(getDirectiveKind()) ||
             isOpenMPTaskLoopDirective(getDirectiveKind()) ||
             isOpenMPDistributeDirective(getDirectiveKind())) &&
            "expected worksharing loop directive");
@@ -911,6 +1224,7 @@ protected:
   }
   void setNextUpperBound(Expr *NUB) {
     assert((isOpenMPWorksharingDirective(getDirectiveKind()) ||
+            isOpenMPGenericLoopDirective(getDirectiveKind()) ||
             isOpenMPTaskLoopDirective(getDirectiveKind()) ||
             isOpenMPDistributeDirective(getDirectiveKind())) &&
            "expected worksharing loop directive");
@@ -918,6 +1232,7 @@ protected:
   }
   void setNumIterations(Expr *NI) {
     assert((isOpenMPWorksharingDirective(getDirectiveKind()) ||
+            isOpenMPGenericLoopDirective(getDirectiveKind()) ||
             isOpenMPTaskLoopDirective(getDirectiveKind()) ||
             isOpenMPDistributeDirective(getDirectiveKind())) &&
            "expected worksharing loop directive");
@@ -1020,6 +1335,7 @@ public:
   Stmt *getPreInits() { return Data->getChildren()[PreInitsOffset]; }
   Expr *getIsLastIterVariable() const {
     assert((isOpenMPWorksharingDirective(getDirectiveKind()) ||
+            isOpenMPGenericLoopDirective(getDirectiveKind()) ||
             isOpenMPTaskLoopDirective(getDirectiveKind()) ||
             isOpenMPDistributeDirective(getDirectiveKind())) &&
            "expected worksharing loop directive");
@@ -1027,6 +1343,7 @@ public:
   }
   Expr *getLowerBoundVariable() const {
     assert((isOpenMPWorksharingDirective(getDirectiveKind()) ||
+            isOpenMPGenericLoopDirective(getDirectiveKind()) ||
             isOpenMPTaskLoopDirective(getDirectiveKind()) ||
             isOpenMPDistributeDirective(getDirectiveKind())) &&
            "expected worksharing loop directive");
@@ -1034,6 +1351,7 @@ public:
   }
   Expr *getUpperBoundVariable() const {
     assert((isOpenMPWorksharingDirective(getDirectiveKind()) ||
+            isOpenMPGenericLoopDirective(getDirectiveKind()) ||
             isOpenMPTaskLoopDirective(getDirectiveKind()) ||
             isOpenMPDistributeDirective(getDirectiveKind())) &&
            "expected worksharing loop directive");
@@ -1041,6 +1359,7 @@ public:
   }
   Expr *getStrideVariable() const {
     assert((isOpenMPWorksharingDirective(getDirectiveKind()) ||
+            isOpenMPGenericLoopDirective(getDirectiveKind()) ||
             isOpenMPTaskLoopDirective(getDirectiveKind()) ||
             isOpenMPDistributeDirective(getDirectiveKind())) &&
            "expected worksharing loop directive");
@@ -1048,6 +1367,7 @@ public:
   }
   Expr *getEnsureUpperBound() const {
     assert((isOpenMPWorksharingDirective(getDirectiveKind()) ||
+            isOpenMPGenericLoopDirective(getDirectiveKind()) ||
             isOpenMPTaskLoopDirective(getDirectiveKind()) ||
             isOpenMPDistributeDirective(getDirectiveKind())) &&
            "expected worksharing loop directive");
@@ -1055,6 +1375,7 @@ public:
   }
   Expr *getNextLowerBound() const {
     assert((isOpenMPWorksharingDirective(getDirectiveKind()) ||
+            isOpenMPGenericLoopDirective(getDirectiveKind()) ||
             isOpenMPTaskLoopDirective(getDirectiveKind()) ||
             isOpenMPDistributeDirective(getDirectiveKind())) &&
            "expected worksharing loop directive");
@@ -1062,6 +1383,7 @@ public:
   }
   Expr *getNextUpperBound() const {
     assert((isOpenMPWorksharingDirective(getDirectiveKind()) ||
+            isOpenMPGenericLoopDirective(getDirectiveKind()) ||
             isOpenMPTaskLoopDirective(getDirectiveKind()) ||
             isOpenMPDistributeDirective(getDirectiveKind())) &&
            "expected worksharing loop directive");
@@ -1069,6 +1391,7 @@ public:
   }
   Expr *getNumIterations() const {
     assert((isOpenMPWorksharingDirective(getDirectiveKind()) ||
+            isOpenMPGenericLoopDirective(getDirectiveKind()) ||
             isOpenMPTaskLoopDirective(getDirectiveKind()) ||
             isOpenMPDistributeDirective(getDirectiveKind())) &&
            "expected worksharing loop directive");
@@ -1202,6 +1525,7 @@ public:
            T->getStmtClass() == OMPTaskLoopSimdDirectiveClass ||
            T->getStmtClass() == OMPMasterTaskLoopDirectiveClass ||
            T->getStmtClass() == OMPMasterTaskLoopSimdDirectiveClass ||
+           T->getStmtClass() == OMPGenericLoopDirectiveClass ||
            T->getStmtClass() == OMPParallelMasterTaskLoopDirectiveClass ||
            T->getStmtClass() == OMPParallelMasterTaskLoopSimdDirectiveClass ||
            T->getStmtClass() == OMPDistributeDirectiveClass ||
@@ -2245,15 +2569,20 @@ public:
   /// \param C AST context.
   /// \param StartLoc Starting location of the directive kind.
   /// \param EndLoc Ending Location of the directive.
+  /// \param Clauses List of clauses.
   ///
-  static OMPTaskwaitDirective *
-  Create(const ASTContext &C, SourceLocation StartLoc, SourceLocation EndLoc);
+  static OMPTaskwaitDirective *Create(const ASTContext &C,
+                                      SourceLocation StartLoc,
+                                      SourceLocation EndLoc,
+                                      ArrayRef<OMPClause *> Clauses);
 
   /// Creates an empty directive.
   ///
   /// \param C AST context.
+  /// \param NumClauses Number of clauses.
   ///
-  static OMPTaskwaitDirective *CreateEmpty(const ASTContext &C, EmptyShell);
+  static OMPTaskwaitDirective *CreateEmpty(const ASTContext &C,
+                                           unsigned NumClauses, EmptyShell);
 
   static bool classof(const Stmt *T) {
     return T->getStmtClass() == OMPTaskwaitDirectiveClass;
@@ -2577,16 +2906,25 @@ class OMPAtomicDirective : public OMPExecutableDirective {
       : OMPExecutableDirective(OMPAtomicDirectiveClass, llvm::omp::OMPD_atomic,
                                SourceLocation(), SourceLocation()) {}
 
+  enum DataPositionTy : size_t {
+    POS_X = 0,
+    POS_V,
+    POS_E,
+    POS_UpdateExpr,
+  };
+
   /// Set 'x' part of the associated expression/statement.
-  void setX(Expr *X) { Data->getChildren()[0] = X; }
+  void setX(Expr *X) { Data->getChildren()[DataPositionTy::POS_X] = X; }
   /// Set helper expression of the form
   /// 'OpaqueValueExpr(x) binop OpaqueValueExpr(expr)' or
   /// 'OpaqueValueExpr(expr) binop OpaqueValueExpr(x)'.
-  void setUpdateExpr(Expr *UE) { Data->getChildren()[1] = UE; }
+  void setUpdateExpr(Expr *UE) {
+    Data->getChildren()[DataPositionTy::POS_UpdateExpr] = UE;
+  }
   /// Set 'v' part of the associated expression/statement.
-  void setV(Expr *V) { Data->getChildren()[2] = V; }
+  void setV(Expr *V) { Data->getChildren()[DataPositionTy::POS_V] = V; }
   /// Set 'expr' part of the associated expression/statement.
-  void setExpr(Expr *E) { Data->getChildren()[3] = E; }
+  void setExpr(Expr *E) { Data->getChildren()[DataPositionTy::POS_E] = E; }
 
 public:
   /// Creates directive with a list of \a Clauses and 'x', 'v' and 'expr'
@@ -2623,16 +2961,22 @@ public:
                                          unsigned NumClauses, EmptyShell);
 
   /// Get 'x' part of the associated expression/statement.
-  Expr *getX() { return cast_or_null<Expr>(Data->getChildren()[0]); }
+  Expr *getX() {
+    return cast_or_null<Expr>(Data->getChildren()[DataPositionTy::POS_X]);
+  }
   const Expr *getX() const {
-    return cast_or_null<Expr>(Data->getChildren()[0]);
+    return cast_or_null<Expr>(Data->getChildren()[DataPositionTy::POS_X]);
   }
   /// Get helper expression of the form
   /// 'OpaqueValueExpr(x) binop OpaqueValueExpr(expr)' or
   /// 'OpaqueValueExpr(expr) binop OpaqueValueExpr(x)'.
-  Expr *getUpdateExpr() { return cast_or_null<Expr>(Data->getChildren()[1]); }
+  Expr *getUpdateExpr() {
+    return cast_or_null<Expr>(
+        Data->getChildren()[DataPositionTy::POS_UpdateExpr]);
+  }
   const Expr *getUpdateExpr() const {
-    return cast_or_null<Expr>(Data->getChildren()[1]);
+    return cast_or_null<Expr>(
+        Data->getChildren()[DataPositionTy::POS_UpdateExpr]);
   }
   /// Return true if helper update expression has form
   /// 'OpaqueValueExpr(x) binop OpaqueValueExpr(expr)' and false if it has form
@@ -2642,14 +2986,18 @@ public:
   /// 'x', false if 'v' must be updated to the new value of 'x'.
   bool isPostfixUpdate() const { return IsPostfixUpdate; }
   /// Get 'v' part of the associated expression/statement.
-  Expr *getV() { return cast_or_null<Expr>(Data->getChildren()[2]); }
+  Expr *getV() {
+    return cast_or_null<Expr>(Data->getChildren()[DataPositionTy::POS_V]);
+  }
   const Expr *getV() const {
-    return cast_or_null<Expr>(Data->getChildren()[2]);
+    return cast_or_null<Expr>(Data->getChildren()[DataPositionTy::POS_V]);
   }
   /// Get 'expr' part of the associated expression/statement.
-  Expr *getExpr() { return cast_or_null<Expr>(Data->getChildren()[3]); }
+  Expr *getExpr() {
+    return cast_or_null<Expr>(Data->getChildren()[DataPositionTy::POS_E]);
+  }
   const Expr *getExpr() const {
-    return cast_or_null<Expr>(Data->getChildren()[3]);
+    return cast_or_null<Expr>(Data->getChildren()[DataPositionTy::POS_E]);
   }
 
   static bool classof(const Stmt *T) {
@@ -4775,7 +5123,7 @@ public:
 };
 
 /// This represents the '#pragma omp tile' loop transformation directive.
-class OMPTileDirective final : public OMPLoopBasedDirective {
+class OMPTileDirective final : public OMPLoopTransformationDirective {
   friend class ASTStmtReader;
   friend class OMPExecutableDirective;
 
@@ -4787,8 +5135,11 @@ class OMPTileDirective final : public OMPLoopBasedDirective {
 
   explicit OMPTileDirective(SourceLocation StartLoc, SourceLocation EndLoc,
                             unsigned NumLoops)
-      : OMPLoopBasedDirective(OMPTileDirectiveClass, llvm::omp::OMPD_tile,
-                              StartLoc, EndLoc, NumLoops) {}
+      : OMPLoopTransformationDirective(OMPTileDirectiveClass,
+                                       llvm::omp::OMPD_tile, StartLoc, EndLoc,
+                                       NumLoops) {
+    setNumGeneratedLoops(3 * NumLoops);
+  }
 
   void setPreInits(Stmt *PreInits) {
     Data->getChildren()[PreInitsOffset] = PreInits;
@@ -4825,8 +5176,6 @@ public:
   static OMPTileDirective *CreateEmpty(const ASTContext &C, unsigned NumClauses,
                                        unsigned NumLoops);
 
-  unsigned getNumAssociatedLoops() const { return getLoopsNumber(); }
-
   /// Gets/sets the associated loops after tiling.
   ///
   /// This is in de-sugared format stored as a CompoundStmt.
@@ -4847,6 +5196,79 @@ public:
 
   static bool classof(const Stmt *T) {
     return T->getStmtClass() == OMPTileDirectiveClass;
+  }
+};
+
+/// This represents the '#pragma omp unroll' loop transformation directive.
+///
+/// \code
+/// #pragma omp unroll
+/// for (int i = 0; i < 64; ++i)
+/// \endcode
+class OMPUnrollDirective final : public OMPLoopTransformationDirective {
+  friend class ASTStmtReader;
+  friend class OMPExecutableDirective;
+
+  /// Default list of offsets.
+  enum {
+    PreInitsOffset = 0,
+    TransformedStmtOffset,
+  };
+
+  explicit OMPUnrollDirective(SourceLocation StartLoc, SourceLocation EndLoc)
+      : OMPLoopTransformationDirective(OMPUnrollDirectiveClass,
+                                       llvm::omp::OMPD_unroll, StartLoc, EndLoc,
+                                       1) {}
+
+  /// Set the pre-init statements.
+  void setPreInits(Stmt *PreInits) {
+    Data->getChildren()[PreInitsOffset] = PreInits;
+  }
+
+  /// Set the de-sugared statement.
+  void setTransformedStmt(Stmt *S) {
+    Data->getChildren()[TransformedStmtOffset] = S;
+  }
+
+public:
+  /// Create a new AST node representation for '#pragma omp unroll'.
+  ///
+  /// \param C         Context of the AST.
+  /// \param StartLoc  Location of the introducer (e.g. the 'omp' token).
+  /// \param EndLoc    Location of the directive's end (e.g. the tok::eod).
+  /// \param Clauses   The directive's clauses.
+  /// \param AssociatedStmt The outermost associated loop.
+  /// \param TransformedStmt The loop nest after tiling, or nullptr in
+  ///                        dependent contexts.
+  /// \param PreInits   Helper preinits statements for the loop nest.
+  static OMPUnrollDirective *
+  Create(const ASTContext &C, SourceLocation StartLoc, SourceLocation EndLoc,
+         ArrayRef<OMPClause *> Clauses, Stmt *AssociatedStmt,
+         unsigned NumGeneratedLoops, Stmt *TransformedStmt, Stmt *PreInits);
+
+  /// Build an empty '#pragma omp unroll' AST node for deserialization.
+  ///
+  /// \param C          Context of the AST.
+  /// \param NumClauses Number of clauses to allocate.
+  static OMPUnrollDirective *CreateEmpty(const ASTContext &C,
+                                         unsigned NumClauses);
+
+  /// Get the de-sugared associated loops after unrolling.
+  ///
+  /// This is only used if the unrolled loop becomes an associated loop of
+  /// another directive, otherwise the loop is emitted directly using loop
+  /// transformation metadata. When the unrolled loop cannot be used by another
+  /// directive (e.g. because of the full clause), the transformed stmt can also
+  /// be nullptr.
+  Stmt *getTransformedStmt() const {
+    return Data->getChildren()[TransformedStmtOffset];
+  }
+
+  /// Return the pre-init statements.
+  Stmt *getPreInits() const { return Data->getChildren()[PreInitsOffset]; }
+
+  static bool classof(const Stmt *T) {
+    return T->getStmtClass() == OMPUnrollDirectiveClass;
   }
 };
 
@@ -4899,6 +5321,276 @@ public:
 
   static bool classof(const Stmt *T) {
     return T->getStmtClass() == OMPScanDirectiveClass;
+  }
+};
+
+/// This represents '#pragma omp interop' directive.
+///
+/// \code
+/// #pragma omp interop init(target:obj) device(x) depend(inout:y) nowait
+/// \endcode
+/// In this example directive '#pragma omp interop' has
+/// clauses 'init', 'device', 'depend' and 'nowait'.
+///
+class OMPInteropDirective final : public OMPExecutableDirective {
+  friend class ASTStmtReader;
+  friend class OMPExecutableDirective;
+
+  /// Build directive with the given start and end location.
+  ///
+  /// \param StartLoc Starting location of the directive.
+  /// \param EndLoc Ending location of the directive.
+  ///
+  OMPInteropDirective(SourceLocation StartLoc, SourceLocation EndLoc)
+      : OMPExecutableDirective(OMPInteropDirectiveClass,
+                               llvm::omp::OMPD_interop, StartLoc, EndLoc) {}
+
+  /// Build an empty directive.
+  ///
+  explicit OMPInteropDirective()
+      : OMPExecutableDirective(OMPInteropDirectiveClass,
+                               llvm::omp::OMPD_interop, SourceLocation(),
+                               SourceLocation()) {}
+
+public:
+  /// Creates directive.
+  ///
+  /// \param C AST context.
+  /// \param StartLoc Starting location of the directive.
+  /// \param EndLoc Ending Location of the directive.
+  /// \param Clauses The directive's clauses.
+  ///
+  static OMPInteropDirective *Create(const ASTContext &C,
+                                     SourceLocation StartLoc,
+                                     SourceLocation EndLoc,
+                                     ArrayRef<OMPClause *> Clauses);
+
+  /// Creates an empty directive.
+  ///
+  /// \param C AST context.
+  ///
+  static OMPInteropDirective *CreateEmpty(const ASTContext &C,
+                                          unsigned NumClauses, EmptyShell);
+
+  static bool classof(const Stmt *T) {
+    return T->getStmtClass() == OMPInteropDirectiveClass;
+  }
+};
+
+/// This represents '#pragma omp dispatch' directive.
+///
+/// \code
+/// #pragma omp dispatch device(dnum)
+/// \endcode
+/// This example shows a directive '#pragma omp dispatch' with a
+/// device clause with variable 'dnum'.
+///
+class OMPDispatchDirective final : public OMPExecutableDirective {
+  friend class ASTStmtReader;
+  friend class OMPExecutableDirective;
+
+  /// The location of the target-call.
+  SourceLocation TargetCallLoc;
+
+  /// Set the location of the target-call.
+  void setTargetCallLoc(SourceLocation Loc) { TargetCallLoc = Loc; }
+
+  /// Build directive with the given start and end location.
+  ///
+  /// \param StartLoc Starting location of the directive kind.
+  /// \param EndLoc Ending location of the directive.
+  ///
+  OMPDispatchDirective(SourceLocation StartLoc, SourceLocation EndLoc)
+      : OMPExecutableDirective(OMPDispatchDirectiveClass,
+                               llvm::omp::OMPD_dispatch, StartLoc, EndLoc) {}
+
+  /// Build an empty directive.
+  ///
+  explicit OMPDispatchDirective()
+      : OMPExecutableDirective(OMPDispatchDirectiveClass,
+                               llvm::omp::OMPD_dispatch, SourceLocation(),
+                               SourceLocation()) {}
+
+public:
+  /// Creates directive with a list of \a Clauses.
+  ///
+  /// \param C AST context.
+  /// \param StartLoc Starting location of the directive kind.
+  /// \param EndLoc Ending Location of the directive.
+  /// \param Clauses List of clauses.
+  /// \param AssociatedStmt Statement, associated with the directive.
+  /// \param TargetCallLoc Location of the target-call.
+  ///
+  static OMPDispatchDirective *
+  Create(const ASTContext &C, SourceLocation StartLoc, SourceLocation EndLoc,
+         ArrayRef<OMPClause *> Clauses, Stmt *AssociatedStmt,
+         SourceLocation TargetCallLoc);
+
+  /// Creates an empty directive with the place for \a NumClauses
+  /// clauses.
+  ///
+  /// \param C AST context.
+  /// \param NumClauses Number of clauses.
+  ///
+  static OMPDispatchDirective *CreateEmpty(const ASTContext &C,
+                                           unsigned NumClauses, EmptyShell);
+
+  /// Return location of target-call.
+  SourceLocation getTargetCallLoc() const { return TargetCallLoc; }
+
+  static bool classof(const Stmt *T) {
+    return T->getStmtClass() == OMPDispatchDirectiveClass;
+  }
+};
+
+/// This represents '#pragma omp masked' directive.
+/// \code
+/// #pragma omp masked filter(tid)
+/// \endcode
+/// This example shows a directive '#pragma omp masked' with a filter clause
+/// with variable 'tid'.
+///
+class OMPMaskedDirective final : public OMPExecutableDirective {
+  friend class ASTStmtReader;
+  friend class OMPExecutableDirective;
+
+  /// Build directive with the given start and end location.
+  ///
+  /// \param StartLoc Starting location of the directive kind.
+  /// \param EndLoc Ending location of the directive.
+  ///
+  OMPMaskedDirective(SourceLocation StartLoc, SourceLocation EndLoc)
+      : OMPExecutableDirective(OMPMaskedDirectiveClass, llvm::omp::OMPD_masked,
+                               StartLoc, EndLoc) {}
+
+  /// Build an empty directive.
+  ///
+  explicit OMPMaskedDirective()
+      : OMPExecutableDirective(OMPMaskedDirectiveClass, llvm::omp::OMPD_masked,
+                               SourceLocation(), SourceLocation()) {}
+
+public:
+  /// Creates directive.
+  ///
+  /// \param C AST context.
+  /// \param StartLoc Starting location of the directive kind.
+  /// \param EndLoc Ending Location of the directive.
+  /// \param AssociatedStmt Statement, associated with the directive.
+  ///
+  static OMPMaskedDirective *
+  Create(const ASTContext &C, SourceLocation StartLoc, SourceLocation EndLoc,
+         ArrayRef<OMPClause *> Clauses, Stmt *AssociatedStmt);
+
+  /// Creates an empty directive.
+  ///
+  /// \param C AST context.
+  ///
+  static OMPMaskedDirective *CreateEmpty(const ASTContext &C,
+                                         unsigned NumClauses, EmptyShell);
+
+  static bool classof(const Stmt *T) {
+    return T->getStmtClass() == OMPMaskedDirectiveClass;
+  }
+};
+
+/// This represents '#pragma omp metadirective' directive.
+///
+/// \code
+/// #pragma omp metadirective when(user={condition(N>10)}: parallel for)
+/// \endcode
+/// In this example directive '#pragma omp metadirective' has clauses 'when'
+/// with a dynamic user condition to check if a variable 'N > 10'
+///
+class OMPMetaDirective final : public OMPExecutableDirective {
+  friend class ASTStmtReader;
+  friend class OMPExecutableDirective;
+  Stmt *IfStmt;
+
+  OMPMetaDirective(SourceLocation StartLoc, SourceLocation EndLoc)
+      : OMPExecutableDirective(OMPMetaDirectiveClass,
+                               llvm::omp::OMPD_metadirective, StartLoc,
+                               EndLoc) {}
+  explicit OMPMetaDirective()
+      : OMPExecutableDirective(OMPMetaDirectiveClass,
+                               llvm::omp::OMPD_metadirective, SourceLocation(),
+                               SourceLocation()) {}
+
+  void setIfStmt(Stmt *S) { IfStmt = S; }
+
+public:
+  static OMPMetaDirective *Create(const ASTContext &C, SourceLocation StartLoc,
+                                  SourceLocation EndLoc,
+                                  ArrayRef<OMPClause *> Clauses,
+                                  Stmt *AssociatedStmt, Stmt *IfStmt);
+  static OMPMetaDirective *CreateEmpty(const ASTContext &C, unsigned NumClauses,
+                                       EmptyShell);
+  Stmt *getIfStmt() const { return IfStmt; }
+
+  static bool classof(const Stmt *T) {
+    return T->getStmtClass() == OMPMetaDirectiveClass;
+  }
+};
+
+/// This represents '#pragma omp loop' directive.
+///
+/// \code
+/// #pragma omp loop private(a,b) binding(parallel) order(concurrent)
+/// \endcode
+/// In this example directive '#pragma omp loop' has
+/// clauses 'private' with the variables 'a' and 'b', 'binding' with
+/// modifier 'parallel' and 'order(concurrent).
+///
+class OMPGenericLoopDirective final : public OMPLoopDirective {
+  friend class ASTStmtReader;
+  friend class OMPExecutableDirective;
+  /// Build directive with the given start and end location.
+  ///
+  /// \param StartLoc Starting location of the directive kind.
+  /// \param EndLoc Ending location of the directive.
+  /// \param CollapsedNum Number of collapsed nested loops.
+  ///
+  OMPGenericLoopDirective(SourceLocation StartLoc, SourceLocation EndLoc,
+                          unsigned CollapsedNum)
+      : OMPLoopDirective(OMPGenericLoopDirectiveClass, llvm::omp::OMPD_loop,
+                         StartLoc, EndLoc, CollapsedNum) {}
+
+  /// Build an empty directive.
+  ///
+  /// \param CollapsedNum Number of collapsed nested loops.
+  ///
+  explicit OMPGenericLoopDirective(unsigned CollapsedNum)
+      : OMPLoopDirective(OMPGenericLoopDirectiveClass, llvm::omp::OMPD_loop,
+                         SourceLocation(), SourceLocation(), CollapsedNum) {}
+
+public:
+  /// Creates directive with a list of \p Clauses.
+  ///
+  /// \param C AST context.
+  /// \param StartLoc Starting location of the directive kind.
+  /// \param EndLoc Ending Location of the directive.
+  /// \param CollapsedNum Number of collapsed loops.
+  /// \param Clauses List of clauses.
+  /// \param AssociatedStmt Statement, associated with the directive.
+  /// \param Exprs Helper expressions for CodeGen.
+  ///
+  static OMPGenericLoopDirective *
+  Create(const ASTContext &C, SourceLocation StartLoc, SourceLocation EndLoc,
+         unsigned CollapsedNum, ArrayRef<OMPClause *> Clauses,
+         Stmt *AssociatedStmt, const HelperExprs &Exprs);
+
+  /// Creates an empty directive with a place for \a NumClauses clauses.
+  ///
+  /// \param C AST context.
+  /// \param NumClauses Number of clauses.
+  /// \param CollapsedNum Number of collapsed nested loops.
+  ///
+  static OMPGenericLoopDirective *CreateEmpty(const ASTContext &C,
+                                              unsigned NumClauses,
+                                              unsigned CollapsedNum,
+                                              EmptyShell);
+
+  static bool classof(const Stmt *T) {
+    return T->getStmtClass() == OMPGenericLoopDirectiveClass;
   }
 };
 

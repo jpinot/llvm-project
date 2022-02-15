@@ -11,8 +11,8 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Format.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
-#include <float.h>
 
 using namespace llvm;
 
@@ -167,7 +167,7 @@ void llvm::write_double(raw_ostream &S, double N, FloatStyle Style,
     S << "nan";
     return;
   } else if (std::isinf(N)) {
-    S << "INF";
+    S << (std::signbit(N) ? "-INF" : "INF");
     return;
   }
 
@@ -258,5 +258,5 @@ size_t llvm::getDefaultPrecision(FloatStyle Style) {
   case FloatStyle::Percent:
     return 2; // Number of decimal places.
   }
-  LLVM_BUILTIN_UNREACHABLE;
+  llvm_unreachable("Unknown FloatStyle enum");
 }

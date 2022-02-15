@@ -82,7 +82,7 @@ llvm::SmallString<128> getAbsolutePath(const tooling::CompileCommand &Cmd) {
 bool shardIsStale(const LoadedShard &LS, llvm::vfs::FileSystem *FS) {
   auto Buf = FS->getBufferForFile(LS.AbsolutePath);
   if (!Buf) {
-    elog("Background-index: Couldn't read {0} to validate stored index: {1}",
+    vlog("Background-index: Couldn't read {0} to validate stored index: {1}",
          LS.AbsolutePath, Buf.getError().message());
     // There is no point in indexing an unreadable file.
     return false;
@@ -243,7 +243,7 @@ void BackgroundIndex::update(
       // this thread sees the older version but finishes later. This should be
       // rare in practice.
       IndexedSymbols.update(
-          Path, std::make_unique<SymbolSlab>(std::move(*IF->Symbols)),
+          Uri, std::make_unique<SymbolSlab>(std::move(*IF->Symbols)),
           std::make_unique<RefSlab>(std::move(*IF->Refs)),
           std::make_unique<RelationSlab>(std::move(*IF->Relations)),
           Path == MainFile);
@@ -390,8 +390,9 @@ BackgroundIndex::loadProject(std::vector<std::string> MainFiles) {
       SV.HadErrors = LS.HadErrors;
       ++LoadedShards;
 
-      IndexedSymbols.update(LS.AbsolutePath, std::move(SS), std::move(RS),
-                            std::move(RelS), LS.CountReferences);
+      IndexedSymbols.update(URI::create(LS.AbsolutePath).toString(),
+                            std::move(SS), std::move(RS), std::move(RelS),
+                            LS.CountReferences);
     }
   }
   Rebuilder.loadedShard(LoadedShards);

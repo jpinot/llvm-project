@@ -6,11 +6,12 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include <stdio.h>
+#include <cstdio>
 
 #include "lldb/Core/Module.h"
 #include "lldb/Utility/DataBufferHeap.h"
 #include "lldb/Utility/DataExtractor.h"
+#include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
 #include "lldb/Utility/Scalar.h"
 #include "lldb/Utility/StreamString.h"
@@ -161,10 +162,8 @@ Type::Type(lldb::user_id_t uid, SymbolFile *symbol_file, ConstString name,
 }
 
 Type::Type()
-    : std::enable_shared_from_this<Type>(), UserID(0), m_name("<INVALID TYPE>"),
-      m_symbol_file(nullptr), m_context(nullptr), m_encoding_type(nullptr),
-      m_encoding_uid(LLDB_INVALID_UID), m_encoding_uid_type(eEncodingInvalid),
-      m_compiler_type_resolve_state(ResolveState::Unresolved) {
+    : std::enable_shared_from_this<Type>(), UserID(0),
+      m_name("<INVALID TYPE>") {
   m_byte_size = 0;
   m_byte_size_has_value = false;
 }
@@ -537,10 +536,8 @@ bool Type::ResolveCompilerType(ResolveState compiler_type_resolve_state) {
       auto type_system_or_err =
           m_symbol_file->GetTypeSystemForLanguage(eLanguageTypeC);
       if (auto err = type_system_or_err.takeError()) {
-        LLDB_LOG_ERROR(
-            lldb_private::GetLogIfAnyCategoriesSet(LIBLLDB_LOG_SYMBOLS),
-            std::move(err),
-            "Unable to construct void type from TypeSystemClang");
+        LLDB_LOG_ERROR(GetLog(LLDBLog::Symbols), std::move(err),
+                       "Unable to construct void type from TypeSystemClang");
       } else {
         CompilerType void_compiler_type =
             type_system_or_err->GetBasicTypeFromAST(eBasicTypeVoid);
@@ -664,7 +661,7 @@ ConstString Type::GetQualifiedName() {
   return GetForwardCompilerType().GetTypeName();
 }
 
-bool Type::GetTypeScopeAndBasename(const llvm::StringRef& name,
+bool Type::GetTypeScopeAndBasename(llvm::StringRef name,
                                    llvm::StringRef &scope,
                                    llvm::StringRef &basename,
                                    TypeClass &type_class) {
@@ -730,7 +727,8 @@ ModuleSP Type::GetModule() {
 ModuleSP Type::GetExeModule() {
   if (m_compiler_type) {
     SymbolFile *symbol_file = m_compiler_type.GetTypeSystem()->GetSymbolFile();
-    return symbol_file->GetObjectFile()->GetModule();
+    if (symbol_file)
+      return symbol_file->GetObjectFile()->GetModule();
   }
   return ModuleSP();
 }

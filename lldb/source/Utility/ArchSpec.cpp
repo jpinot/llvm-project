@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "lldb/Utility/ArchSpec.h"
+#include "lldb/Utility/LLDBLog.h"
 
 #include "lldb/Utility/Log.h"
 #include "lldb/Utility/StringList.h"
@@ -464,7 +465,7 @@ static const ArchDefinition *FindArchDefinition(ArchitectureType arch_type) {
 // Get an architecture definition by name.
 static const CoreDefinition *FindCoreDefinition(llvm::StringRef name) {
   for (unsigned int i = 0; i < llvm::array_lengthof(g_core_definitions); ++i) {
-    if (name.equals_lower(g_core_definitions[i].name))
+    if (name.equals_insensitive(g_core_definitions[i].name))
       return &g_core_definitions[i];
   }
   return nullptr;
@@ -507,7 +508,7 @@ FindArchDefinitionEntry(const ArchDefinition *def, ArchSpec::Core core) {
 //===----------------------------------------------------------------------===//
 // Constructors and destructors.
 
-ArchSpec::ArchSpec() {}
+ArchSpec::ArchSpec() = default;
 
 ArchSpec::ArchSpec(const char *triple_cstr) {
   if (triple_cstr)
@@ -902,7 +903,7 @@ bool ArchSpec::SetArchitecture(ArchitectureType arch_type, uint32_t cpu,
           m_triple.setArch(core_def->machine);
       }
     } else {
-      Log *log(lldb_private::GetLogIfAnyCategoriesSet(LIBLLDB_LOG_TARGET | LIBLLDB_LOG_PROCESS | LIBLLDB_LOG_PLATFORM));
+      Log *log(GetLog(LLDBLog::Target | LLDBLog::Process | LLDBLog::Platform));
       LLDB_LOGF(log,
                 "Unable to find a core definition for cpu 0x%" PRIx32
                 " sub %" PRId32,
@@ -1118,18 +1119,6 @@ static bool cores_match(const ArchSpec::Core core1, const ArchSpec::Core core2,
       return true;
     break;
 
-  case ArchSpec::eCore_arm_armv6m:
-    if (!enforce_exact_match) {
-      if (core2 == ArchSpec::eCore_arm_generic)
-        return true;
-      try_inverse = false;
-      if (core2 == ArchSpec::eCore_arm_armv7)
-        return true;
-      if (core2 == ArchSpec::eCore_arm_armv6m)
-        return true;
-    }
-    break;
-
   case ArchSpec::kCore_hexagon_any:
     if ((core2 >= ArchSpec::kCore_hexagon_first &&
          core2 <= ArchSpec::kCore_hexagon_last) ||
@@ -1138,8 +1127,9 @@ static bool cores_match(const ArchSpec::Core core1, const ArchSpec::Core core2,
     break;
 
   // v. https://en.wikipedia.org/wiki/ARM_Cortex-M#Silicon_customization
-  // Cortex-M0 - ARMv6-M - armv6m Cortex-M3 - ARMv7-M - armv7m Cortex-M4 -
-  // ARMv7E-M - armv7em
+  // Cortex-M0 - ARMv6-M - armv6m 
+  // Cortex-M3 - ARMv7-M - armv7m 
+  // Cortex-M4 - ARMv7E-M - armv7em
   case ArchSpec::eCore_arm_armv7em:
     if (!enforce_exact_match) {
       if (core2 == ArchSpec::eCore_arm_generic)
@@ -1155,8 +1145,9 @@ static bool cores_match(const ArchSpec::Core core1, const ArchSpec::Core core2,
     break;
 
   // v. https://en.wikipedia.org/wiki/ARM_Cortex-M#Silicon_customization
-  // Cortex-M0 - ARMv6-M - armv6m Cortex-M3 - ARMv7-M - armv7m Cortex-M4 -
-  // ARMv7E-M - armv7em
+  // Cortex-M0 - ARMv6-M - armv6m 
+  // Cortex-M3 - ARMv7-M - armv7m 
+  // Cortex-M4 - ARMv7E-M - armv7em
   case ArchSpec::eCore_arm_armv7m:
     if (!enforce_exact_match) {
       if (core2 == ArchSpec::eCore_arm_generic)
@@ -1168,6 +1159,24 @@ static bool cores_match(const ArchSpec::Core core1, const ArchSpec::Core core2,
       if (core2 == ArchSpec::eCore_arm_armv7em)
         return true;
       try_inverse = true;
+    }
+    break;
+
+  // v. https://en.wikipedia.org/wiki/ARM_Cortex-M#Silicon_customization
+  // Cortex-M0 - ARMv6-M - armv6m 
+  // Cortex-M3 - ARMv7-M - armv7m 
+  // Cortex-M4 - ARMv7E-M - armv7em
+  case ArchSpec::eCore_arm_armv6m:
+    if (!enforce_exact_match) {
+      if (core2 == ArchSpec::eCore_arm_generic)
+        return true;
+      if (core2 == ArchSpec::eCore_arm_armv7em)
+        return true;
+      if (core2 == ArchSpec::eCore_arm_armv7)
+        return true;
+      if (core2 == ArchSpec::eCore_arm_armv6m)
+        return true;
+      try_inverse = false;
     }
     break;
 

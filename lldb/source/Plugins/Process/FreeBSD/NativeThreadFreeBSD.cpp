@@ -75,7 +75,7 @@ Status NativeThreadFreeBSD::Suspend() {
 
 void NativeThreadFreeBSD::SetStoppedBySignal(uint32_t signo,
                                              const siginfo_t *info) {
-  Log *log(ProcessPOSIXLog::GetLogIfAllCategoriesSet(POSIX_LOG_THREAD));
+  Log *log = GetLog(POSIXLog::Thread);
   LLDB_LOG(log, "tid = {0} in called with signal {1}", GetID(), signo);
 
   SetStopped();
@@ -130,6 +130,30 @@ void NativeThreadFreeBSD::SetStoppedByWatchpoint(uint32_t wp_index) {
   m_stop_info.details.signal.signo = SIGTRAP;
 }
 
+void NativeThreadFreeBSD::SetStoppedByFork(lldb::pid_t child_pid,
+                                           lldb::tid_t child_tid) {
+  SetStopped();
+
+  m_stop_info.reason = StopReason::eStopReasonFork;
+  m_stop_info.details.fork.child_pid = child_pid;
+  m_stop_info.details.fork.child_tid = child_tid;
+}
+
+void NativeThreadFreeBSD::SetStoppedByVFork(lldb::pid_t child_pid,
+                                            lldb::tid_t child_tid) {
+  SetStopped();
+
+  m_stop_info.reason = StopReason::eStopReasonVFork;
+  m_stop_info.details.fork.child_pid = child_pid;
+  m_stop_info.details.fork.child_tid = child_tid;
+}
+
+void NativeThreadFreeBSD::SetStoppedByVForkDone() {
+  SetStopped();
+
+  m_stop_info.reason = StopReason::eStopReasonVForkDone;
+}
+
 void NativeThreadFreeBSD::SetStoppedWithNoReason() {
   SetStopped();
 
@@ -154,7 +178,7 @@ void NativeThreadFreeBSD::SetStepping() {
 }
 
 std::string NativeThreadFreeBSD::GetName() {
-  Log *log(ProcessPOSIXLog::GetLogIfAllCategoriesSet(POSIX_LOG_THREAD));
+  Log *log = GetLog(POSIXLog::Thread);
 
   std::vector<struct kinfo_proc> kp;
   int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID | KERN_PROC_INC_THREAD,
@@ -189,7 +213,7 @@ lldb::StateType NativeThreadFreeBSD::GetState() { return m_state; }
 
 bool NativeThreadFreeBSD::GetStopReason(ThreadStopInfo &stop_info,
                                         std::string &description) {
-  Log *log(ProcessPOSIXLog::GetLogIfAllCategoriesSet(POSIX_LOG_THREAD));
+  Log *log = GetLog(POSIXLog::Thread);
   description.clear();
 
   switch (m_state) {
@@ -288,4 +312,28 @@ NativeThreadFreeBSD::CopyWatchpointsFrom(NativeThreadFreeBSD &source) {
     m_hw_break_index_map = source.m_hw_break_index_map;
   }
   return s;
+}
+
+llvm::Expected<std::unique_ptr<llvm::MemoryBuffer>>
+NativeThreadFreeBSD::GetSiginfo() const {
+  Log *log = GetLog(POSIXLog::Process);
+
+  struct ptrace_lwpinfo info;
+  const auto siginfo_err = NativeProcessFreeBSD::PtraceWrapper(
+      PT_LWPINFO, GetID(), &info, sizeof(info));
+  if (siginfo_err.Fail()) {
+    LLDB_LOG(log, "PT_LWPINFO failed {0}", siginfo_err);
+    return siginfo_err.ToError();
+  }
+
+  if (info.pl_event != PL_EVENT_SIGNAL)
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "Thread not signaled");
+  if (!(info.pl_flags & PL_FLAG_SI))
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "No siginfo for thread");
+
+  return llvm::MemoryBuffer::getMemBufferCopy(
+      llvm::StringRef(reinterpret_cast<const char *>(&info.pl_siginfo),
+                      sizeof(info.pl_siginfo)));
 }

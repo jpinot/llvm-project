@@ -1,4 +1,4 @@
-; RUN: opt < %s -loop-vectorize -pass-remarks=loop-vectorize -pass-remarks-analysis=loop-vectorize -pass-remarks-missed=loop-vectorize -mtriple aarch64-unknown-linux-gnu -mattr=+sve -S 2>%t | FileCheck %s -check-prefix=CHECK
+; RUN: opt < %s -loop-vectorize -pass-remarks=loop-vectorize -pass-remarks-analysis=loop-vectorize -pass-remarks-missed=loop-vectorize -mtriple aarch64-unknown-linux-gnu -mattr=+sve,+bf16 -S 2>%t | FileCheck %s -check-prefix=CHECK
 ; RUN: cat %t | FileCheck %s -check-prefix=CHECK-REMARK
 
 ; Reduction can be vectorized
@@ -221,7 +221,7 @@ for.end:
   ret float %add
 }
 
-; CHECK-REMARK: Scalable vectorization not supported for the reduction operations found in this loop. Using fixed-width vectorization instead.
+; CHECK-REMARK: Scalable vectorization not supported for the reduction operations found in this loop.
 ; CHECK-REMARK: vectorized loop (vectorization width: 8, interleaved count: 2)
 define bfloat @fadd_fast_bfloat(bfloat* noalias nocapture readonly %a, i64 %n) {
 ; CHECK-LABEL: @fadd_fast_bfloat
@@ -318,22 +318,47 @@ for.end:
   ret float %.sroa.speculated
 }
 
+; ADD (with reduction stored in invariant address)
+
+; CHECK-REMARK: loop not vectorized: value that could not be identified as reduction is used outside the loop
+define void @invariant_store(i32* %dst, i32* readonly %src) {
+; CHECK-LABEL: @invariant_store
+; CHECK-NOT: vector.body
+entry:
+  %gep.dst = getelementptr inbounds i32, i32* %dst, i64 42
+  store i32 0, i32* %gep.dst, align 4
+  br label %for.body
+for.body:
+  %sum = phi i32 [ 0, %entry ], [ %add, %for.body ]
+  %indvars.iv = phi i64 [ 0, %entry ], [ %indvars.iv.next, %for.body ]
+  %gep.src = getelementptr inbounds i32, i32* %src, i64 %indvars.iv
+  %0 = load i32, i32* %gep.src, align 4
+  %add = add nsw i32 %sum, %0
+  store i32 %add, i32* %gep.dst, align 4
+  %indvars.iv.next = add nuw nsw i64 %indvars.iv, 1
+  %exitcond = icmp eq i64 %indvars.iv.next, 1000
+  br i1 %exitcond, label %for.cond.cleanup, label %for.body
+
+for.cond.cleanup:
+  ret void
+}
+
 ; Reduction cannot be vectorized
 
 ; MUL
 
-; CHECK-REMARK: Scalable vectorization not supported for the reduction operations found in this loop. Using fixed-width vectorization instead.
-; CHECK-REMARK: vectorized loop (vectorization width: 8, interleaved count: 2)
+; CHECK-REMARK: Scalable vectorization not supported for the reduction operations found in this loop.
+; CHECK-REMARK: vectorized loop (vectorization width: 4, interleaved count: 2)
 define i32 @mul(i32* nocapture %a, i32* nocapture readonly %b, i64 %n) {
 ; CHECK-LABEL: @mul
 ; CHECK: vector.body:
-; CHECK: %[[LOAD1:.*]] = load <8 x i32>
-; CHECK: %[[LOAD2:.*]] = load <8 x i32>
-; CHECK: %[[MUL1:.*]] = mul <8 x i32> %[[LOAD1]]
-; CHECK: %[[MUL2:.*]] = mul <8 x i32> %[[LOAD2]]
+; CHECK: %[[LOAD1:.*]] = load <4 x i32>
+; CHECK: %[[LOAD2:.*]] = load <4 x i32>
+; CHECK: %[[MUL1:.*]] = mul <4 x i32> %[[LOAD1]]
+; CHECK: %[[MUL2:.*]] = mul <4 x i32> %[[LOAD2]]
 ; CHECK: middle.block:
-; CHECK: %[[RDX:.*]] = mul <8 x i32> %[[MUL2]], %[[MUL1]]
-; CHECK: call i32 @llvm.vector.reduce.mul.v8i32(<8 x i32> %[[RDX]])
+; CHECK: %[[RDX:.*]] = mul <4 x i32> %[[MUL2]], %[[MUL1]]
+; CHECK: call i32 @llvm.vector.reduce.mul.v4i32(<4 x i32> %[[RDX]])
 entry:
   br label %for.body
 
@@ -352,22 +377,22 @@ for.end:                                 ; preds = %for.body, %entry
 }
 
 ; Note: This test was added to ensure we always check the legality of reductions (end emit a warning if necessary) before checking for memory dependencies
-; CHECK-REMARK: Scalable vectorization not supported for the reduction operations found in this loop. Using fixed-width vectorization instead.
-; CHECK-REMARK: vectorized loop (vectorization width: 8, interleaved count: 2)
+; CHECK-REMARK: Scalable vectorization not supported for the reduction operations found in this loop.
+; CHECK-REMARK: vectorized loop (vectorization width: 4, interleaved count: 2)
 define i32 @memory_dependence(i32* noalias nocapture %a, i32* noalias nocapture readonly %b, i64 %n) {
 ; CHECK-LABEL: @memory_dependence
 ; CHECK: vector.body:
-; CHECK: %[[LOAD1:.*]] = load <8 x i32>
-; CHECK: %[[LOAD2:.*]] = load <8 x i32>
-; CHECK: %[[LOAD3:.*]] = load <8 x i32>
-; CHECK: %[[LOAD4:.*]] = load <8 x i32>
-; CHECK: %[[ADD1:.*]] = add nsw <8 x i32> %[[LOAD3]], %[[LOAD1]]
-; CHECK: %[[ADD2:.*]] = add nsw <8 x i32> %[[LOAD4]], %[[LOAD2]]
-; CHECK: %[[MUL1:.*]] = mul <8 x i32> %[[LOAD3]]
-; CHECK: %[[MUL2:.*]] = mul <8 x i32> %[[LOAD4]]
+; CHECK: %[[LOAD1:.*]] = load <4 x i32>
+; CHECK: %[[LOAD2:.*]] = load <4 x i32>
+; CHECK: %[[LOAD3:.*]] = load <4 x i32>
+; CHECK: %[[LOAD4:.*]] = load <4 x i32>
+; CHECK: %[[ADD1:.*]] = add nsw <4 x i32> %[[LOAD3]], %[[LOAD1]]
+; CHECK: %[[ADD2:.*]] = add nsw <4 x i32> %[[LOAD4]], %[[LOAD2]]
+; CHECK: %[[MUL1:.*]] = mul <4 x i32> %[[LOAD3]]
+; CHECK: %[[MUL2:.*]] = mul <4 x i32> %[[LOAD4]]
 ; CHECK: middle.block:
-; CHECK: %[[RDX:.*]] = mul <8 x i32> %[[MUL2]], %[[MUL1]]
-; CHECK: call i32 @llvm.vector.reduce.mul.v8i32(<8 x i32> %[[RDX]])
+; CHECK: %[[RDX:.*]] = mul <4 x i32> %[[MUL2]], %[[MUL1]]
+; CHECK: call i32 @llvm.vector.reduce.mul.v4i32(<4 x i32> %[[RDX]])
 entry:
   br label %for.body
 

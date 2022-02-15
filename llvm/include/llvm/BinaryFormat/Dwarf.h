@@ -19,7 +19,6 @@
 #ifndef LLVM_BINARYFORMAT_DWARF_H
 #define LLVM_BINARYFORMAT_DWARF_H
 
-#include "llvm/ADT/Optional.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/DataTypes.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -31,8 +30,10 @@
 
 namespace llvm {
 class StringRef;
+template<typename T> class Optional;
 
 namespace dwarf {
+
 
 //===----------------------------------------------------------------------===//
 // DWARF constants as gleaned from the DWARF Debugging Information Format V.5
@@ -144,6 +145,7 @@ enum LocationAtom {
   DW_OP_LLVM_tag_offset = 0x1002,       ///< Only used in LLVM metadata.
   DW_OP_LLVM_entry_value = 0x1003,      ///< Only used in LLVM metadata.
   DW_OP_LLVM_implicit_pointer = 0x1004, ///< Only used in LLVM metadata.
+  DW_OP_LLVM_arg = 0x1005,              ///< Only used in LLVM metadata.
 };
 
 enum TypeKind : uint8_t {
@@ -648,6 +650,9 @@ struct FormParams {
   uint16_t Version;
   uint8_t AddrSize;
   DwarfFormat Format;
+  /// True if DWARF v2 output generally uses relocations for references
+  /// to other .debug_* sections.
+  bool DwarfUsesRelocationsAcrossSections = false;
 
   /// The definition of the size of form DW_FORM_ref_addr depends on the
   /// version. In DWARF v2 it's the size of an address; after that, it's the

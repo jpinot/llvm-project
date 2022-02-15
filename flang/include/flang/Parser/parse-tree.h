@@ -27,7 +27,6 @@
 #include "flang/Common/indirection.h"
 #include "llvm/Frontend/OpenACC/ACC.h.inc"
 #include "llvm/Frontend/OpenMP/OMPConstants.h"
-#include "llvm/Frontend/OmpSs/OSS.h.inc"
 #include <cinttypes>
 #include <list>
 #include <memory>
@@ -264,9 +263,6 @@ struct OpenACCDeclarativeConstruct;
 struct OpenMPConstruct;
 struct OpenMPDeclarativeConstruct;
 struct OmpEndLoopDirective;
-
-struct OmpSsConstruct;
-struct OSSEndLoopDirective;
 
 // Cooked character stream locations
 using Location = const char *;
@@ -525,9 +521,7 @@ struct ExecutableConstruct {
       common::Indirection<OpenACCConstruct>,
       common::Indirection<AccEndCombinedDirective>,
       common::Indirection<OpenMPConstruct>,
-      common::Indirection<OmpEndLoopDirective>,
-      common::Indirection<OmpSsConstruct>,
-      common::Indirection<OSSEndLoopDirective>>
+      common::Indirection<OmpEndLoopDirective>>
       u;
 };
 
@@ -1004,13 +998,26 @@ struct ComponentDecl {
       t;
 };
 
+// A %FILL component for a DEC STRUCTURE.  The name will be replaced
+// with a distinct compiler-generated name.
+struct FillDecl {
+  TUPLE_CLASS_BOILERPLATE(FillDecl);
+  std::tuple<Name, std::optional<ComponentArraySpec>, std::optional<CharLength>>
+      t;
+};
+
+struct ComponentOrFill {
+  UNION_CLASS_BOILERPLATE(ComponentOrFill);
+  std::variant<ComponentDecl, FillDecl> u;
+};
+
 // R737 data-component-def-stmt ->
 //        declaration-type-spec [[, component-attr-spec-list] ::]
 //        component-decl-list
 struct DataComponentDefStmt {
   TUPLE_CLASS_BOILERPLATE(DataComponentDefStmt);
   std::tuple<DeclarationTypeSpec, std::list<ComponentAttrSpec>,
-      std::list<ComponentDecl>>
+      std::list<ComponentOrFill>>
       t;
 };
 
@@ -1785,7 +1792,7 @@ struct Designator {
 struct Variable {
   UNION_CLASS_BOILERPLATE(Variable);
   mutable TypedExpr typedExpr;
-  parser::CharBlock GetSource() const;
+  CharBlock GetSource() const;
   std::variant<common::Indirection<Designator>,
       common::Indirection<FunctionReference>>
       u;
@@ -1842,6 +1849,7 @@ struct ArrayElement {
 // R933 allocate-object -> variable-name | structure-component
 struct AllocateObject {
   UNION_CLASS_BOILERPLATE(AllocateObject);
+  mutable TypedExpr typedExpr;
   std::variant<Name, StructureComponent> u;
 };
 
@@ -1913,6 +1921,7 @@ struct AllocateStmt {
 //        variable-name | structure-component | proc-pointer-name
 struct PointerObject {
   UNION_CLASS_BOILERPLATE(PointerObject);
+  mutable TypedExpr typedExpr;
   std::variant<Name, StructureComponent> u;
 };
 
@@ -3262,7 +3271,7 @@ struct Union {
 
 struct StructureStmt {
   TUPLE_CLASS_BOILERPLATE(StructureStmt);
-  std::tuple<Name, bool /*slashes*/, std::list<EntityDecl>> t;
+  std::tuple<std::optional<Name>, std::list<EntityDecl>> t;
 };
 
 struct StructureDef {
@@ -3598,7 +3607,7 @@ struct OpenMPDeclarativeConstruct {
 struct OmpCriticalDirective {
   TUPLE_CLASS_BOILERPLATE(OmpCriticalDirective);
   CharBlock source;
-  std::tuple<Verbatim, std::optional<Name>, std::optional<OmpClause>> t;
+  std::tuple<Verbatim, std::optional<Name>, OmpClauseList> t;
 };
 struct OmpEndCriticalDirective {
   TUPLE_CLASS_BOILERPLATE(OmpEndCriticalDirective);
@@ -3809,7 +3818,7 @@ struct OpenMPConstruct {
   UNION_CLASS_BOILERPLATE(OpenMPConstruct);
   std::variant<OpenMPStandaloneConstruct, OpenMPSectionsConstruct,
       OpenMPLoopConstruct, OpenMPBlockConstruct, OpenMPAtomicConstruct,
-      OpenMPExecutableAllocate, OpenMPDeclarativeAllocate,
+      OpenMPDeclarativeAllocate, OpenMPExecutableAllocate,
       OpenMPCriticalConstruct>
       u;
 };
@@ -4076,143 +4085,6 @@ struct OpenACCConstruct {
       OpenACCLoopConstruct, OpenACCStandaloneConstruct, OpenACCCacheConstruct,
       OpenACCWaitConstruct, OpenACCAtomicConstruct>
       u;
-};
-
-// ----------------------------------------------------------------------------
-// OmpSs-2
-// ----------------------------------------------------------------------------
-
-struct OSSObject {
-  UNION_CLASS_BOILERPLATE(OSSObject);
-  std::variant<Designator, /*common block*/ Name> u;
-};
-
-WRAPPER_CLASS(OSSObjectList, std::list<OSSObject>);
-
-struct OSSDefaultClause {
-  ENUM_CLASS(Type, Shared, None)
-  WRAPPER_CLASS_BOILERPLATE(OSSDefaultClause, Type);
-};
-
-struct OSSDependenceType {
-  ENUM_CLASS(Type,
-             In, Out, Inout, Inoutset, Mutexinoutset,
-             Weakin, Weakout, Weakinout, Weakinoutset, Weakmutexinoutset)
-  WRAPPER_CLASS_BOILERPLATE(OSSDependenceType, Type);
-};
-
-struct OSSDependClause {
-  UNION_CLASS_BOILERPLATE(OSSDependClause);
-  struct InOut {
-    TUPLE_CLASS_BOILERPLATE(InOut);
-    std::tuple<OSSDependenceType, std::list<Designator>> t;
-  };
-  std::variant<InOut> u;
-};
-
-struct OSSReductionOperator {
-  UNION_CLASS_BOILERPLATE(OSSReductionOperator);
-  std::variant<DefinedOperator, ProcedureDesignator> u;
-};
-
-struct OSSReductionClause {
-  TUPLE_CLASS_BOILERPLATE(OSSReductionClause);
-  std::tuple<OSSReductionOperator, std::list<Designator>> t;
-};
-
-// OmpSs-2 Clauses
-struct OSSClause {
-  UNION_CLASS_BOILERPLATE(OSSClause);
-
-#define GEN_FLANG_CLAUSE_PARSER_CLASSES
-#include "llvm/Frontend/OmpSs/OSS.cpp.inc"
-
-  CharBlock source;
-
-  std::variant<
-#define GEN_FLANG_CLAUSE_PARSER_CLASSES_LIST
-#include "llvm/Frontend/OmpSs/OSS.cpp.inc"
-      >
-      u;
-};
-
-struct OSSClauseList {
-  WRAPPER_CLASS_BOILERPLATE(OSSClauseList, std::list<OSSClause>);
-  CharBlock source;
-};
-
-struct OSSSimpleStandaloneDirective {
-  WRAPPER_CLASS_BOILERPLATE(OSSSimpleStandaloneDirective, llvm::oss::Directive);
-  CharBlock source;
-};
-
-struct OmpSsSimpleStandaloneConstruct {
-  TUPLE_CLASS_BOILERPLATE(OmpSsSimpleStandaloneConstruct);
-  CharBlock source;
-  std::tuple<OSSSimpleStandaloneDirective, OSSClauseList> t;
-};
-
-struct OmpSsStandaloneConstruct {
-  UNION_CLASS_BOILERPLATE(OmpSsStandaloneConstruct);
-  CharBlock source;
-  std::variant<OmpSsSimpleStandaloneConstruct> u;
-};
-
-struct OSSBlockDirective {
-  WRAPPER_CLASS_BOILERPLATE(OSSBlockDirective, llvm::oss::Directive);
-  CharBlock source;
-};
-
-struct OSSBeginBlockDirective {
-  TUPLE_CLASS_BOILERPLATE(OSSBeginBlockDirective);
-  std::tuple<OSSBlockDirective, OSSClauseList> t;
-  CharBlock source;
-};
-
-struct OSSEndBlockDirective {
-  TUPLE_CLASS_BOILERPLATE(OSSEndBlockDirective);
-  std::tuple<OSSBlockDirective, OSSClauseList> t;
-  CharBlock source;
-};
-
-struct OmpSsBlockConstruct {
-  TUPLE_CLASS_BOILERPLATE(OmpSsBlockConstruct);
-  std::tuple<OSSBeginBlockDirective, Block, OSSEndBlockDirective> t;
-};
-
-// OmpSs-2 directives that associate with loop(s)
-struct OSSLoopDirective {
-  WRAPPER_CLASS_BOILERPLATE(OSSLoopDirective, llvm::oss::Directive);
-  CharBlock source;
-};
-
-struct OSSBeginLoopDirective {
-  TUPLE_CLASS_BOILERPLATE(OSSBeginLoopDirective);
-  std::tuple<OSSLoopDirective, OSSClauseList> t;
-  CharBlock source;
-};
-
-struct OSSEndLoopDirective {
-  TUPLE_CLASS_BOILERPLATE(OSSEndLoopDirective);
-  std::tuple<OSSLoopDirective, OSSClauseList> t;
-  CharBlock source;
-};
-
-// OmpSs-2 directives enclosing do loop
-struct OmpSsLoopConstruct {
-  TUPLE_CLASS_BOILERPLATE(OmpSsLoopConstruct);
-  OmpSsLoopConstruct(OSSBeginLoopDirective &&a)
-      : t({std::move(a), std::nullopt, std::nullopt}) {}
-  std::tuple<OSSBeginLoopDirective, std::optional<DoConstruct>,
-      std::optional<OSSEndLoopDirective>>
-      t;
-};
-
-struct OmpSsConstruct {
-  UNION_CLASS_BOILERPLATE(OmpSsConstruct);
-  std::variant<
-      OmpSsStandaloneConstruct, OmpSsBlockConstruct, OmpSsLoopConstruct
-      > u;
 };
 
 } // namespace Fortran::parser

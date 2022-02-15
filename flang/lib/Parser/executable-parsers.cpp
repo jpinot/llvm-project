@@ -53,8 +53,6 @@ constexpr auto executableConstruct{
         construct<ExecutableConstruct>(indirect(openmpConstruct)),
         construct<ExecutableConstruct>(indirect(accEndCombinedDirective)),
         construct<ExecutableConstruct>(indirect(openaccConstruct)),
-        construct<ExecutableConstruct>(indirect(ossEndLoopDirective)),
-        construct<ExecutableConstruct>(indirect(ompssConstruct)),
         construct<ExecutableConstruct>(indirect(compilerDirective)))};
 
 // R510 execution-part-construct ->
@@ -312,7 +310,7 @@ TYPE_CONTEXT_PARSER("IF construct"_en_US,
         many(construct<IfConstruct::ElseIfBlock>(
             unambiguousStatement(construct<ElseIfStmt>(
                 "ELSE IF" >> parenthesized(scalarLogicalExpr),
-                "THEN" >> maybe(name))),
+                recovery("THEN"_tok, ok) >> maybe(name))),
             block)),
         maybe(construct<IfConstruct::ElseBlock>(
             statement(construct<ElseStmt>("ELSE" >> maybe(name))), block)),

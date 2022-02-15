@@ -16,6 +16,7 @@
 #include "flang/Parser/characters.h"
 #include "flang/Parser/parse-tree-visitor.h"
 #include "flang/Parser/parse-tree.h"
+#include "flang/Parser/tools.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cinttypes>
@@ -48,6 +49,14 @@ public:
       Unparse(x);
       Post(x);
       return false; // Walk() does not visit descendents
+    } else if constexpr (HasTypedExpr<T>::value) {
+      // Format the expression representation from semantics
+      if (asFortran_ && x.typedExpr) {
+        asFortran_->expr(out_, *x.typedExpr);
+        return false;
+      } else {
+        return true;
+      }
     } else {
       Before(x);
       return true; // there's no Unparse() defined here, Walk() the descendents
@@ -256,18 +265,25 @@ public:
   void Unparse(const DataComponentDefStmt &x) { // R737
     const auto &dts{std::get<DeclarationTypeSpec>(x.t)};
     const auto &attrs{std::get<std::list<ComponentAttrSpec>>(x.t)};
-    const auto &decls{std::get<std::list<ComponentDecl>>(x.t)};
+    const auto &decls{std::get<std::list<ComponentOrFill>>(x.t)};
     Walk(dts), Walk(", ", attrs, ", ");
     if (!attrs.empty() ||
         (!std::holds_alternative<DeclarationTypeSpec::Record>(dts.u) &&
             std::none_of(
-                decls.begin(), decls.end(), [](const ComponentDecl &d) {
-                  const auto &init{
-                      std::get<std::optional<Initialization>>(d.t)};
-                  return init &&
-                      std::holds_alternative<
-                          std::list<common::Indirection<DataStmtValue>>>(
-                          init->u);
+                decls.begin(), decls.end(), [](const ComponentOrFill &c) {
+                  return std::visit(
+                      common::visitors{
+                          [](const ComponentDecl &d) {
+                            const auto &init{
+                                std::get<std::optional<Initialization>>(d.t)};
+                            return init &&
+                                std::holds_alternative<std::list<
+                                    common::Indirection<DataStmtValue>>>(
+                                    init->u);
+                          },
+                          [](const FillDecl &) { return false; },
+                      },
+                      c.u);
                 }))) {
       Put(" ::");
     }
@@ -300,6 +316,11 @@ public:
     Walk("[", std::get<std::optional<CoarraySpec>>(x.t), "]");
     Walk("*", std::get<std::optional<CharLength>>(x.t));
     Walk(std::get<std::optional<Initialization>>(x.t));
+  }
+  void Unparse(const FillDecl &x) { // DEC extension
+    Put("%FILL");
+    Walk("(", std::get<std::optional<ComponentArraySpec>>(x.t), ")");
+    Walk("*", std::get<std::optional<CharLength>>(x.t));
   }
   void Unparse(const ComponentArraySpec &x) { // R740
     std::visit(common::visitors{
@@ -816,15 +837,6 @@ public:
   }
 
   // R1001 - R1022
-  bool Pre(const Expr &x) {
-    if (asFortran_ && x.typedExpr) {
-      // Format the expression representation from semantics
-      asFortran_->expr(out_, *x.typedExpr);
-      return false;
-    } else {
-      return true;
-    }
-  }
   void Unparse(const Expr::Parentheses &x) { Put('('), Walk(x.v), Put(')'); }
   void Before(const Expr::UnaryPlus &) { Put("+"); }
   void Before(const Expr::Negate &) { Put("-"); }
@@ -2287,7 +2299,7 @@ public:
     BeginOpenMP();
     Word("!$OMP CRITICAL");
     Walk(" (", std::get<std::optional<Name>>(x.t), ")");
-    Walk(std::get<std::optional<OmpClause>>(x.t));
+    Walk(std::get<OmpClauseList>(x.t));
     Put("\n");
     EndOpenMP();
   }
@@ -2486,21 +2498,19 @@ public:
   void Unparse(const BasedPointerStmt &x) { Walk("POINTER ", x.v, ","); }
   void Post(const StructureField &x) {
     if (const auto *def{std::get_if<Statement<DataComponentDefStmt>>(&x.u)}) {
-      for (const auto &decl :
-          std::get<std::list<ComponentDecl>>(def->statement.t)) {
-        structureComponents_.insert(std::get<Name>(decl.t).source);
+      for (const auto &item :
+          std::get<std::list<ComponentOrFill>>(def->statement.t)) {
+        if (const auto *comp{std::get_if<ComponentDecl>(&item.u)}) {
+          structureComponents_.insert(std::get<Name>(comp->t).source);
+        }
       }
     }
   }
   void Unparse(const StructureStmt &x) {
     Word("STRUCTURE ");
-    if (std::get<bool>(x.t)) { // slashes around name
-      Put('/'), Walk(std::get<Name>(x.t)), Put('/');
-      Walk(" ", std::get<std::list<EntityDecl>>(x.t), ", ");
-    } else {
-      CHECK(std::get<std::list<EntityDecl>>(x.t).empty());
-      Walk(std::get<Name>(x.t));
-    }
+    // The name, if present, includes the /slashes/
+    Walk(std::get<std::optional<Name>>(x.t));
+    Walk(" ", std::get<std::list<EntityDecl>>(x.t), ", ");
     Indent();
   }
   void Post(const Union::UnionStmt &) { Word("UNION"), Indent(); }
@@ -2553,173 +2563,7 @@ public:
   WALK_NESTED_ENUM(OmpScheduleClause, ScheduleType) // OMP schedule-type
   WALK_NESTED_ENUM(OmpIfClause, DirectiveNameModifier) // OMP directive-modifier
   WALK_NESTED_ENUM(OmpCancelType, Type) // OMP cancel-type
-  WALK_NESTED_ENUM(OSSDefaultClause, Type) // OSS DEFAULT
-  // WALK_NESTED_ENUM(OSSDependenceType, Type) // OSS dependence-type
 #undef WALK_NESTED_ENUM
-
-  // OmpSs-2 Clauses & Directives
-  void Unparse(const OSSObject &x) {
-    std::visit(common::visitors{
-                   [&](const Designator &y) { Walk(y); },
-                   [&](const Name &y) { Put("/"), Walk(y), Put("/"); },
-               },
-        x.u);
-  }
-
-  void Unparse(const OSSObjectList &x) { Walk(x.v, ","); }
-
-  void Unparse(const OSSClauseList &x) { Walk(" ", x.v, " "); }
-
-  void Unparse(const OSSDependenceType &x) {
-    switch (x.v) {
-    case OSSDependenceType::Type::In:
-      Word("IN");
-      break;
-    case OSSDependenceType::Type::Out:
-      Word("OUT");
-      break;
-    case OSSDependenceType::Type::Inout:
-      Word("INOUT");
-      break;
-    case OSSDependenceType::Type::Inoutset:
-      Word("INOUTSET");
-      break;
-    case OSSDependenceType::Type::Mutexinoutset:
-      Word("MUTEXINOUTSET");
-      break;
-    case OSSDependenceType::Type::Weakin:
-      Word("WEAK, IN");
-      break;
-    case OSSDependenceType::Type::Weakout:
-      Word("WEAK, OUT");
-      break;
-    case OSSDependenceType::Type::Weakinout:
-      Word("WEAK, INOUT");
-      break;
-    case OSSDependenceType::Type::Weakinoutset:
-      Word("WEAK, INOUTSET");
-      break;
-    case OSSDependenceType::Type::Weakmutexinoutset:
-      Word("WEAK, MUTEXINOUTSET");
-      break;
-    }
-  }
-
-  void Unparse(const OSSDependClause::InOut &x) {
-    Walk(std::get<OSSDependenceType>(x.t));
-    Put(":");
-    Walk(std::get<std::list<Designator>>(x.t), ",");
-  }
-  bool Pre(const OSSDependClause &x) {
-    return std::visit(common::visitors{
-                          [&](const OSSDependClause::InOut &) {
-                            return true;
-                          },
-                      },
-        x.u);
-  }
-
-  void Unparse(const OSSReductionClause &x) {
-    Walk(std::get<OSSReductionOperator>(x.t));
-    Put(":");
-    Walk(std::get<std::list<Designator>>(x.t), ",");
-  }
-
-#define GEN_FLANG_CLAUSE_UNPARSE
-#include "llvm/Frontend/OmpSs/OSS.cpp.inc"
-  void Unparse(const OSSBlockDirective &x) {
-    switch (x.v) {
-    case llvm::oss::Directive::OSSD_task:
-      Word("TASK ");
-      break;
-    case llvm::oss::Directive::OSSD_task_for:
-      Word("TASK FOR ");
-      break;
-    case llvm::oss::Directive::OSSD_taskloop:
-      Word("TASKLOOP ");
-      break;
-    case llvm::oss::Directive::OSSD_taskloop_for:
-      Word("TASKLOOP FOR ");
-      break;
-    default:
-      // Nothing to be done
-      break;
-    }
-  }
-
-  void Unparse(const OSSLoopDirective &x) {
-    switch (x.v) {
-    case llvm::oss::Directive::OSSD_task_for:
-      Word("TASK FOR ");
-      break;
-    case llvm::oss::Directive::OSSD_taskloop:
-      Word("TASKLOOP ");
-      break;
-    case llvm::oss::Directive::OSSD_taskloop_for:
-      Word("TASKLOOP FOR ");
-      break;
-    default:
-      // Nothing to be done
-      break;
-    }
-  }
-
-  void Unparse(const OSSEndLoopDirective &x) {
-    BeginOmpSs();
-    Word("!$OSS END ");
-    Walk(std::get<OSSLoopDirective>(x.t));
-    Walk(std::get<OSSClauseList>(x.t));
-    Put("\n");
-    EndOmpSs();
-  }
-
-  void Unparse(const OmpSsLoopConstruct &x) {
-    BeginOmpSs();
-    Word("!$OSS ");
-    Walk(std::get<OSSBeginLoopDirective>(x.t));
-    Put("\n");
-    EndOmpSs();
-    Walk(std::get<std::optional<DoConstruct>>(x.t));
-    Walk(std::get<std::optional<OSSEndLoopDirective>>(x.t));
-  }
-
-
-  void Unparse(const OSSSimpleStandaloneDirective &x) {
-    switch (x.v) {
-    case llvm::oss::Directive::OSSD_taskwait:
-      Word("TASKWAIT ");
-      break;
-    case llvm::oss::Directive::OSSD_release:
-      Word("RELEASE ");
-      break;
-    default:
-      // Nothing to be done
-      break;
-    }
-  }
-
-  void Unparse(const OmpSsSimpleStandaloneConstruct &x) {
-    BeginOmpSs();
-    Word("!$OSS ");
-    Walk(std::get<OSSSimpleStandaloneDirective>(x.t));
-    Walk(std::get<OSSClauseList>(x.t));
-    Put("\n");
-    EndOmpSs();
-  }
-
-  void Unparse(const OmpSsBlockConstruct &x) {
-    BeginOmpSs();
-    Word("!$OSS ");
-    Walk(std::get<OSSBeginBlockDirective>(x.t));
-    Put("\n");
-    EndOmpSs();
-    Walk(std::get<Block>(x.t), "");
-    BeginOmpSs();
-    Word("!$OSS END ");
-    Walk(std::get<OSSEndBlockDirective>(x.t));
-    Put("\n");
-    EndOmpSs();
-  }
 
   void Done() const { CHECK(indent_ == 0); }
 
@@ -2740,9 +2584,6 @@ private:
   void EndOpenMP() { openmpDirective_ = false; }
   void BeginOpenACC() { openaccDirective_ = true; }
   void EndOpenACC() { openaccDirective_ = false; }
-
-  void BeginOmpSs() { ompssDirective_ = true; }
-  void EndOmpSs() { ompssDirective_ = false; }
 
   // Call back to the traversal framework.
   template <typename T> void Walk(const T &x) {
@@ -2814,7 +2655,6 @@ private:
   bool capitalizeKeywords_{true};
   bool openaccDirective_{false};
   bool openmpDirective_{false};
-  bool ompssDirective_{false};
   bool backslashEscapes_{false};
   preStatementType *preStatement_{nullptr};
   AnalyzedObjectsAsFortran *asFortran_{nullptr};
@@ -2822,7 +2662,7 @@ private:
 
 void UnparseVisitor::Put(char ch) {
   int sav = indent_;
-  if (openmpDirective_ || openaccDirective_ || ompssDirective_) {
+  if (openmpDirective_ || openaccDirective_) {
     indent_ = 0;
   }
   if (column_ <= 1) {
@@ -2845,8 +2685,6 @@ void UnparseVisitor::Put(char ch) {
       column_ = 8;
     } else if (openaccDirective_) {
       out_ << "!$ACC&";
-    } else if (ompssDirective_) {
-      out_ << "!$OSS&";
       column_ = 8;
     } else {
       out_ << '&';
@@ -2854,7 +2692,7 @@ void UnparseVisitor::Put(char ch) {
     }
   }
   out_ << ch;
-  if (openmpDirective_ || openaccDirective_ || ompssDirective_) {
+  if (openmpDirective_ || openaccDirective_) {
     indent_ = sav;
   }
 }

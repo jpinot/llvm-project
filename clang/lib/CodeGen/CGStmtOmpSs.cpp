@@ -162,11 +162,7 @@ static void AddLabelData(const OSSExecutableDirective &S, const Expr * &LabelExp
 
 static void AddWaitData(const OSSExecutableDirective &S, bool &Wait) {
   assert(!Wait);
-  Wait = false;
-  for (const auto *C : S.getClausesOfKind<OSSWaitClause>()) {
-    assert(!Wait);
-    Wait = true;
-  }
+  Wait = !llvm::empty(S.getClausesOfKind<OSSWaitClause>());
 }
 
 static void AddOnreadyData(const OSSExecutableDirective &S, const Expr * &OnreadyExpr) {
@@ -238,6 +234,7 @@ static void AddLoopData(const OSSLoopDirective &S, OSSLoopDataTy &LoopData) {
   LoopData.Step = S.getStep();
   LoopData.TestIsLessOp = S.getIsLessOp();
   LoopData.TestIsStrictOp = S.getIsStrictOp();
+  LoopData.NumCollapses = S.getNumCollapses();
   AddChunksizeLoopData(S, LoopData.Chunksize);
   AddGrainsizeLoopData(S, LoopData.Grainsize);
 }

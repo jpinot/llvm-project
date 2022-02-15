@@ -1,6 +1,6 @@
-========================================
-Clang 13.0.0 (In-Progress) Release Notes
-========================================
+===========================================
+Clang |release| |ReleaseNotesTitle|
+===========================================
 
 .. contents::
    :local:
@@ -8,17 +8,18 @@ Clang 13.0.0 (In-Progress) Release Notes
 
 Written by the `LLVM Team <https://llvm.org/>`_
 
-.. warning::
+.. only:: PreRelease
 
-   These are in-progress notes for the upcoming Clang 13 release.
-   Release notes for previous releases can be found on
-   `the Download Page <https://releases.llvm.org/download.html>`_.
+  .. warning::
+     These are in-progress notes for the upcoming Clang |version| release.
+     Release notes for previous releases can be found on
+     `the Download Page <https://releases.llvm.org/download.html>`_.
 
 Introduction
 ============
 
 This document contains the release notes for the Clang C/C++/Objective-C
-frontend, part of the LLVM Compiler Infrastructure, release 13.0.0. Here we
+frontend, part of the LLVM Compiler Infrastructure, release |release|. Here we
 describe the status of Clang in some detail, including major
 improvements from the previous release and new feature work. For the
 general LLVM release notes, see `the LLVM
@@ -35,8 +36,8 @@ main Clang web page, this document applies to the *next* release, not
 the current one. To see the release notes for a specific release, please
 see the `releases page <https://llvm.org/releases/>`_.
 
-What's New in Clang 13.0.0?
-===========================
+What's New in Clang |release|?
+==============================
 
 Some of the major new features and improvements to Clang are listed
 here. Generic improvements to Clang as a whole or to its underlying
@@ -46,42 +47,28 @@ sections with improvements to Clang's support for those languages.
 Major New Features
 ------------------
 
-- ...
+-  ...
 
 Improvements to Clang's diagnostics
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-- ...
-
 Non-comprehensive list of changes in this release
 -------------------------------------------------
-
-- ...
 
 New Compiler Flags
 ------------------
 
-- ...
-
 Deprecated Compiler Flags
 -------------------------
-
-- ...
 
 Modified Compiler Flags
 -----------------------
 
-- -Wshadow now also checks for shadowed structured bindings
-
 Removed Compiler Flags
 -------------------------
 
-- The clang-cl ``/fallback`` flag, which made clang-cl invoke Microsoft Visual
-  C++ on files it couldn't compile itself, has been removed.
-
-- ``-Wreturn-std-move-in-c++11``, which checked whether an entity is affected by
-  `CWG1579 <https://wg21.link/CWG1579>`_ to become implicitly movable, has been
-  removed.
+- -Wweak-template-vtables, which was deprecated in the previous release and no
+  longer had any effect, has been removed.
 
 New Pragmas in Clang
 --------------------
@@ -91,24 +78,25 @@ New Pragmas in Clang
 Attribute Changes in Clang
 --------------------------
 
-- ...
-
 Windows Support
 ---------------
 
 C Language Changes in Clang
 ---------------------------
 
-- ...
-
 C++ Language Changes in Clang
 -----------------------------
 
 - ...
 
-C++1z Feature Support
+C++20 Feature Support
 ^^^^^^^^^^^^^^^^^^^^^
-...
+
+C++2b Feature Support
+^^^^^^^^^^^^^^^^^^^^^
+
+CUDA Language Changes in Clang
+------------------------------
 
 Objective-C Language Changes in Clang
 -------------------------------------
@@ -124,7 +112,18 @@ ABI Changes in Clang
 OpenMP Support in Clang
 -----------------------
 
-- ...
+- ``clang-nvlink-wrapper`` tool introduced to support linking of cubin files
+  archived in an archive. See :doc:`ClangNvlinkWrapper`.
+- ``clang-linker-wrapper`` tool introduced to support linking using a new OpenMP
+  target offloading method. See :doc:`ClangLinkerWrapper`.
+- Support for a new driver for OpenMP target offloading has been added as an
+  opt-in feature. The new driver can be selected using ``-fopenmp-new-driver``
+  with clang. Device-side LTO can also be enabled using the new driver by
+  passing ``-foffload-lto=`` as well. The new driver supports the following
+  features:
+  - Linking AMDGPU and NVPTX offloading targets.
+  - Static linking using archive files.
+  - Device-side LTO.
 
 CUDA Support in Clang
 ---------------------
@@ -134,77 +133,26 @@ CUDA Support in Clang
 X86 Support in Clang
 --------------------
 
-- ...
+DWARF Support in Clang
+----------------------
+
+Arm and AArch64 Support in Clang
+--------------------------------
+
+Floating Point Support in Clang
+-------------------------------
 
 Internal API Changes
 --------------------
 
-These are major API changes that have happened since the 12.0.0 release of
-Clang. If upgrading an external codebase that uses Clang as a library,
-this section should help get you past the largest hurdles of upgrading.
-
-- ...
-
 Build System Changes
 --------------------
-
-These are major changes to the build system that have happened since the 12.0.0
-release of Clang. Users of the build system should adjust accordingly.
-
-- The option ``LIBCLANG_INCLUDE_CLANG_TOOLS_EXTRA`` no longer exists. There were
-  two releases with that flag forced off, and no uses were added that forced it
-  on. The recommended replacement is clangd.
-
-- ...
 
 AST Matchers
 ------------
 
-- ...
-
 clang-format
 ------------
-
-- Option ``SpacesInLineCommentPrefix`` has been added to control the
-  number of spaces in a line comments prefix.
-
-- Option ``SortIncludes`` has been updated from a ``bool`` to an
-  ``enum`` with backwards compatibility. In addition to the previous
-  ``true``/``false`` states (now ``CaseInsensitive``/``Never``), a third
-  state has been added (``CaseSensitive``) which causes an alphabetical sort
-  with case used as a tie-breaker.
-
-  .. code-block:: c++
-
-    // Never (previously false)
-    #include "B/A.h"
-    #include "A/B.h"
-    #include "a/b.h"
-    #include "A/b.h"
-    #include "B/a.h"
-
-    // CaseInsensitive (previously true)
-    #include "A/B.h"
-    #include "A/b.h"
-    #include "B/A.h"
-    #include "B/a.h"
-    #include "a/b.h"
-
-    // CaseSensitive
-    #include "A/B.h"
-    #include "A/b.h"
-    #include "a/b.h"
-    #include "B/A.h"
-    #include "B/a.h"
-
-- ``BasedOnStyle: InheritParentConfig`` allows to use the ``.clang-format`` of
-  the parent directories to overwrite only parts of it.
-
-- Option ``IndentAccessModifiers`` has been added to be able to give access
-  modifiers their own indentation level inside records.
-
-- Option ``ShortNamespaceLines`` has been added to give better control
-  over ``FixNamespaceComments`` when determining a namespace length.
 
 libclang
 --------

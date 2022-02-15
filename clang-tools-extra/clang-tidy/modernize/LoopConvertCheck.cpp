@@ -83,6 +83,17 @@ static const StatementMatcher incrementVarMatcher() {
   return declRefExpr(to(varDecl(equalsBoundNode(InitVarName))));
 }
 
+static StatementMatcher
+arrayConditionMatcher(internal::Matcher<Expr> LimitExpr) {
+  return binaryOperator(
+      anyOf(allOf(hasOperatorName("<"), hasLHS(integerComparisonMatcher()),
+                  hasRHS(LimitExpr)),
+            allOf(hasOperatorName(">"), hasLHS(LimitExpr),
+                  hasRHS(integerComparisonMatcher())),
+            allOf(hasOperatorName("!="),
+                  hasOperands(integerComparisonMatcher(), LimitExpr))));
+}
+
 /// The matcher for loops over arrays.
 /// \code
 ///   for (int i = 0; i < 3 + 2; ++i) { ... }
@@ -99,18 +110,12 @@ StatementMatcher makeArrayLoopMatcher() {
   StatementMatcher ArrayBoundMatcher =
       expr(hasType(isInteger())).bind(ConditionBoundName);
 
-  return forStmt(
-             unless(isInTemplateInstantiation()),
-             hasLoopInit(declStmt(hasSingleDecl(initToZeroMatcher()))),
-             hasCondition(anyOf(
-                 binaryOperator(hasOperatorName("<"),
-                                hasLHS(integerComparisonMatcher()),
-                                hasRHS(ArrayBoundMatcher)),
-                 binaryOperator(hasOperatorName(">"), hasLHS(ArrayBoundMatcher),
-                                hasRHS(integerComparisonMatcher())))),
-             hasIncrement(
-                 unaryOperator(hasOperatorName("++"),
-                               hasUnaryOperand(incrementVarMatcher()))))
+  return forStmt(unless(isInTemplateInstantiation()),
+                 hasLoopInit(declStmt(hasSingleDecl(initToZeroMatcher()))),
+                 hasCondition(arrayConditionMatcher(ArrayBoundMatcher)),
+                 hasIncrement(
+                     unaryOperator(hasOperatorName("++"),
+                                   hasUnaryOperand(incrementVarMatcher()))))
       .bind(LoopNameArray);
 }
 
@@ -278,22 +283,16 @@ StatementMatcher makePseudoArrayLoopMatcher() {
                      declRefExpr(to(varDecl(equalsBoundNode(EndVarName))))),
                  EndInitMatcher));
 
-  return forStmt(
-             unless(isInTemplateInstantiation()),
-             hasLoopInit(
-                 anyOf(declStmt(declCountIs(2),
-                                containsDeclaration(0, initToZeroMatcher()),
-                                containsDeclaration(1, EndDeclMatcher)),
-                       declStmt(hasSingleDecl(initToZeroMatcher())))),
-             hasCondition(anyOf(
-                 binaryOperator(hasOperatorName("<"),
-                                hasLHS(integerComparisonMatcher()),
-                                hasRHS(IndexBoundMatcher)),
-                 binaryOperator(hasOperatorName(">"), hasLHS(IndexBoundMatcher),
-                                hasRHS(integerComparisonMatcher())))),
-             hasIncrement(
-                 unaryOperator(hasOperatorName("++"),
-                               hasUnaryOperand(incrementVarMatcher()))))
+  return forStmt(unless(isInTemplateInstantiation()),
+                 hasLoopInit(
+                     anyOf(declStmt(declCountIs(2),
+                                    containsDeclaration(0, initToZeroMatcher()),
+                                    containsDeclaration(1, EndDeclMatcher)),
+                           declStmt(hasSingleDecl(initToZeroMatcher())))),
+                 hasCondition(arrayConditionMatcher(IndexBoundMatcher)),
+                 hasIncrement(
+                     unaryOperator(hasOperatorName("++"),
+                                   hasUnaryOperand(incrementVarMatcher()))))
       .bind(LoopNamePseudoArray);
 }
 
@@ -305,8 +304,8 @@ StatementMatcher makePseudoArrayLoopMatcher() {
 static const Expr *getContainerFromBeginEndCall(const Expr *Init, bool IsBegin,
                                                 bool *IsArrow, bool IsReverse) {
   // FIXME: Maybe allow declaration/initialization outside of the for loop.
-  const auto *TheCall =
-      dyn_cast_or_null<CXXMemberCallExpr>(digThroughConstructors(Init));
+  const auto *TheCall = dyn_cast_or_null<CXXMemberCallExpr>(
+      digThroughConstructorsConversions(Init));
   if (!TheCall || TheCall->getNumArgs() != 0)
     return nullptr;
 
@@ -430,7 +429,7 @@ static bool usagesAreConst(ASTContext *Context, const UsageResult &Usages) {
 /// by reference.
 static bool usagesReturnRValues(const UsageResult &Usages) {
   for (const auto &U : Usages) {
-    if (U.Expression && !U.Expression->isRValue())
+    if (U.Expression && !U.Expression->isPRValue())
       return false;
   }
   return true;
@@ -830,7 +829,7 @@ bool LoopConvertCheck::isConvertible(ASTContext *Context,
   } else if (FixerKind == LFK_PseudoArray) {
     // This call is required to obtain the container.
     const auto *EndCall = Nodes.getNodeAs<CXXMemberCallExpr>(EndCallName);
-    if (!EndCall || !dyn_cast<MemberExpr>(EndCall->getCallee()))
+    if (!EndCall || !isa<MemberExpr>(EndCall->getCallee()))
       return false;
   }
   return true;

@@ -23,10 +23,10 @@
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/IR/DiagnosticPrinter.h"
-#include "llvm/LTO/Caching.h"
 #include "llvm/LTO/Config.h"
 #include "llvm/LTO/LTO.h"
 #include "llvm/Object/SymbolicFile.h"
+#include "llvm/Support/Caching.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
@@ -112,7 +112,6 @@ static lto::Config createConfig() {
     }
   }
 
-  c.Options.PseudoProbeForProfiling = config->ltoPseudoProbeForProfiling;
   c.Options.UniqueBasicBlockSectionNames =
       config->ltoUniqueBasicBlockSectionNames;
 
@@ -163,6 +162,7 @@ static lto::Config createConfig() {
 
   c.CSIRProfile = std::string(config->ltoCSProfileFile);
   c.RunCSIRInstr = config->ltoCSProfileGenerate;
+  c.PGOWarnMismatch = config->ltoPGOWarnMismatch;
 
   if (config->emitLLVM) {
     c.PostInternalizeModuleHook = [](size_t task, const Module &m) {
@@ -204,7 +204,11 @@ BitcodeCompiler::BitcodeCompiler() {
                                        config->ltoPartitions);
 
   // Initialize usedStartStop.
+  if (bitcodeFiles.empty())
+    return;
   for (Symbol *sym : symtab->symbols()) {
+    if (sym->isPlaceholder())
+      continue;
     StringRef s = sym->getName();
     for (StringRef prefix : {"__start_", "__stop_"})
       if (s.startswith(prefix))
@@ -249,8 +253,9 @@ void BitcodeCompiler::add(BitcodeFile &f) {
                             usedStartStop.count(objSym.getSectionName());
     // Identify symbols exported dynamically, and that therefore could be
     // referenced by a shared library not visible to the linker.
-    r.ExportDynamic = sym->isExportDynamic(sym->kind(), sym->visibility) ||
-                      sym->exportDynamic || sym->inDynamicList;
+    r.ExportDynamic = sym->computeBinding() != STB_LOCAL &&
+                      (config->shared || config->exportDynamic ||
+                       sym->exportDynamic || sym->inDynamicList);
     const auto *dr = dyn_cast<Defined>(sym);
     r.FinalDefinitionInLinkageUnit =
         (isExec || sym->visibility != STV_DEFAULT) && dr &&
@@ -262,13 +267,13 @@ void BitcodeCompiler::add(BitcodeFile &f) {
         !(dr->section == nullptr && (!sym->file || sym->file->isElf()));
 
     if (r.Prevailing)
-      sym->replace(Undefined{nullptr, sym->getName(), STB_GLOBAL, STV_DEFAULT,
-                             sym->type});
+      sym->replace(
+          Undefined{nullptr, StringRef(), STB_GLOBAL, STV_DEFAULT, sym->type});
 
     // We tell LTO to not apply interprocedural optimization for wrapped
     // (with --wrap) symbols because otherwise LTO would inline them while
     // their values are still not final.
-    r.LinkerRedefined = !sym->canInline;
+    r.LinkerRedefined = sym->scriptDefined;
   }
   checkError(ltoObj->add(std::move(f.obj), resols));
 }
@@ -277,8 +282,8 @@ void BitcodeCompiler::add(BitcodeFile &f) {
 // This is needed because this is what GNU gold plugin does and we have a
 // distributed build system that depends on that behavior.
 static void thinLTOCreateEmptyIndexFiles() {
-  for (LazyObjFile *f : lazyObjFiles) {
-    if (f->fetched || !isBitcode(f->mb))
+  for (BitcodeFile *f : lazyBitcodeFiles) {
+    if (!f->lazy)
       continue;
     std::string path = replaceThinLTOSuffix(getThinLTOOutputFile(f->getName()));
     std::unique_ptr<raw_fd_ostream> os = openFile(path + ".thinlto.bc");
@@ -287,7 +292,7 @@ static void thinLTOCreateEmptyIndexFiles() {
 
     ModuleSummaryIndex m(/*HaveGVs*/ false);
     m.setSkipModuleByDistributedBackend();
-    WriteIndexToFile(m, *os);
+    writeIndexToFile(m, *os);
     if (config->thinLTOEmitImportsFiles)
       openFile(path + ".imports");
   }
@@ -303,18 +308,18 @@ std::vector<InputFile *> BitcodeCompiler::compile() {
   // The --thinlto-cache-dir option specifies the path to a directory in which
   // to cache native object files for ThinLTO incremental builds. If a path was
   // specified, configure LTO to use it as the cache directory.
-  lto::NativeObjectCache cache;
+  FileCache cache;
   if (!config->thinLTOCacheDir.empty())
-    cache = check(
-        lto::localCache(config->thinLTOCacheDir,
-                        [&](size_t task, std::unique_ptr<MemoryBuffer> mb) {
-                          files[task] = std::move(mb);
-                        }));
+    cache =
+        check(localCache("ThinLTO", "Thin", config->thinLTOCacheDir,
+                         [&](size_t task, std::unique_ptr<MemoryBuffer> mb) {
+                           files[task] = std::move(mb);
+                         }));
 
   if (!bitcodeFiles.empty())
     checkError(ltoObj->run(
         [&](size_t task) {
-          return std::make_unique<lto::NativeObjectStream>(
+          return std::make_unique<CachedFileStream>(
               std::make_unique<raw_svector_ostream>(buf[task]));
         },
         cache));

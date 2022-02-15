@@ -9,6 +9,7 @@
 #include "mlir/Conversion/ShapeToStandard/ShapeToStandard.h"
 
 #include "../PassDetail.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/SCF/SCF.h"
 #include "mlir/Dialect/Shape/IR/Shape.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
@@ -29,7 +30,7 @@ public:
   using OpRewritePattern::OpRewritePattern;
   LogicalResult matchAndRewrite(shape::CstrRequireOp op,
                                 PatternRewriter &rewriter) const override {
-    rewriter.create<AssertOp>(op.getLoc(), op.pred(), op.msgAttr());
+    rewriter.create<cf::AssertOp>(op.getLoc(), op.getPred(), op.getMsgAttr());
     rewriter.replaceOpWithNewOp<shape::ConstWitnessOp>(op, true);
     return success();
   }
@@ -37,9 +38,10 @@ public:
 } // namespace
 
 void mlir::populateConvertShapeConstraintsConversionPatterns(
-    OwningRewritePatternList &patterns, MLIRContext *ctx) {
-  patterns.insert<CstrBroadcastableToRequire>(ctx);
-  patterns.insert<ConvertCstrRequireOp>(ctx);
+    RewritePatternSet &patterns) {
+  patterns.add<CstrBroadcastableToRequire>(patterns.getContext());
+  patterns.add<CstrEqToRequire>(patterns.getContext());
+  patterns.add<ConvertCstrRequireOp>(patterns.getContext());
 }
 
 namespace {
@@ -53,8 +55,8 @@ class ConvertShapeConstraints
     auto func = getOperation();
     auto *context = &getContext();
 
-    OwningRewritePatternList patterns;
-    populateConvertShapeConstraintsConversionPatterns(patterns, context);
+    RewritePatternSet patterns(context);
+    populateConvertShapeConstraintsConversionPatterns(patterns);
 
     if (failed(applyPatternsAndFoldGreedily(func, std::move(patterns))))
       return signalPassFailure();

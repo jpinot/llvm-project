@@ -195,6 +195,8 @@ public:
   NODE(parser, ComponentAttrSpec)
   NODE(parser, ComponentDataSource)
   NODE(parser, ComponentDecl)
+  NODE(parser, FillDecl)
+  NODE(parser, ComponentOrFill)
   NODE(parser, ComponentDefStmt)
   NODE(parser, ComponentSpec)
   NODE(parser, ComputedGotoStmt)
@@ -708,55 +710,6 @@ public:
   NODE(parser, WhereConstructStmt)
   NODE(parser, WhereStmt)
   NODE(parser, WriteStmt)
-
-  // OmpSs-2
-  NODE(parser, OSSObject)
-  NODE(parser, OSSObjectList)
-
-  NODE(parser, OSSClause)
-  NODE(parser, OSSClauseList)
-
-  static std::string GetNodeName(const llvm::oss::Directive &x) {
-    return llvm::Twine(
-        "llvm::oss::Directive = ", llvm::oss::getOmpSsDirectiveName(x))
-        .str();
-  }
-  static std::string GetNodeName(const llvm::oss::Clause &x) {
-    return llvm::Twine(
-        "llvm::oss::Clause = ", llvm::oss::getOmpSsClauseName(x))
-        .str();
-  }
-
-#define GEN_FLANG_DUMP_PARSE_TREE_CLAUSES
-#include "llvm/Frontend/OmpSs/OSS.cpp.inc"
-
-  NODE(parser, OSSDependClause)
-  NODE(OSSDependClause, InOut)
-  NODE(parser, OSSDependenceType)
-  NODE_ENUM(OSSDependenceType, Type)
-
-  NODE(parser, OSSDefaultClause)
-  NODE_ENUM(OSSDefaultClause, Type)
-
-  NODE(parser, OSSReductionOperator)
-  NODE(parser, OSSReductionClause)
-
-  NODE(parser, OSSSimpleStandaloneDirective)
-
-  NODE(parser, OSSBlockDirective)
-  NODE(parser, OSSBeginBlockDirective)
-  NODE(parser, OSSEndBlockDirective)
-
-  NODE(parser, OSSLoopDirective)
-  NODE(parser, OSSBeginLoopDirective)
-  NODE(parser, OSSEndLoopDirective)
-
-  NODE(parser, OmpSsSimpleStandaloneConstruct)
-  NODE(parser, OmpSsStandaloneConstruct)
-  NODE(parser, OmpSsBlockConstruct)
-  NODE(parser, OmpSsLoopConstruct)
-
-  NODE(parser, OmpSsConstruct)
 #undef NODE
 #undef NODE_NAME
 
@@ -842,7 +795,7 @@ protected:
   template <typename T> std::string AsFortran(const T &x) {
     std::string buf;
     llvm::raw_string_ostream ss{buf};
-    if constexpr (std::is_same_v<T, Expr>) {
+    if constexpr (HasTypedExpr<T>::value) {
       if (asFortran_ && x.typedExpr) {
         asFortran_->expr(ss, *x.typedExpr);
       }

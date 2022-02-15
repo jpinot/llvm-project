@@ -129,8 +129,12 @@ bool UseAfterMoveFinder::find(Stmt *FunctionBody, const Expr *MovingCall,
   Visited.clear();
 
   const CFGBlock *Block = BlockMap->blockContainingStmt(MovingCall);
-  if (!Block)
-    return false;
+  if (!Block) {
+    // This can happen if MovingCall is in a constructor initializer, which is
+    // not included in the CFG because the CFG is built only from the function
+    // body.
+    Block = &TheCFG->getEntry();
+  }
 
   return findInternal(Block, MovingCall, MovedVariable, TheUseAfterMove);
 }
@@ -398,7 +402,13 @@ void UseAfterMoveCheck::registerMatchers(MatchFinder *Finder) {
                hasArgument(0, declRefExpr().bind("arg")),
                anyOf(hasAncestor(lambdaExpr().bind("containing-lambda")),
                      hasAncestor(functionDecl().bind("containing-func"))),
-               unless(inDecltypeOrTemplateArg()))
+               unless(inDecltypeOrTemplateArg()),
+               // try_emplace is a common maybe-moving function that returns a
+               // bool to tell callers whether it moved. Ignore std::move inside
+               // try_emplace to avoid false positives as we don't track uses of
+               // the bool.
+               unless(hasParent(cxxMemberCallExpr(
+                   callee(cxxMethodDecl(hasName("try_emplace")))))))
           .bind("call-move");
 
   Finder->addMatcher(

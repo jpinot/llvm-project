@@ -12,9 +12,18 @@ set(LLVM_LINK_COMPONENTS
 
 if(MLIR_INCLUDE_TESTS)
   set(test_libs
+    MLIRTestStandardToLLVM
     MLIRAffineTransformsTestPasses
+    MLIRDLTITestPasses
+    MLIRGPUTestPasses
+    MLIRLinalgTestPasses
+    MLIRMathTestPasses
+    MLIRMemRefTestPasses
+    MLIRSCFTestPasses
     MLIRShapeTestPasses
     MLIRSPIRVTestPasses
+    MLIRStandardOpsTestPasses
+    MLIRVectorTestPasses
     MLIRTestAnalysis
     MLIRTestDialect
     MLIRTestIR
@@ -29,10 +38,9 @@ set(LIBS
   ${dialect_libs}
   ${conversion_libs}
   ${test_libs}
-  MLIRLoopAnalysis
+  MLIRAffineAnalysis
   MLIRAnalysis
   MLIRDialect
-  MLIREDSC
   MLIROptLib
   MLIRParser
   MLIRPass

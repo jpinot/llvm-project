@@ -23,68 +23,18 @@ target triple = "x86_64-unknown-linux-gnu"
 %struct._depend_unpack_t = type { i32, i32, i32, i32 }
 %struct._depend_unpack_t.0 = type { i32*, i64, i64, i64 }
 
-@v = global [10 x i32] zeroinitializer, align 16
+@v = dso_local global [10 x i32] zeroinitializer, align 16
 
 ; Function Attrs: noinline nounwind optnone
-define i32 @main() #0 !dbg !6 {
-; CHECK-LABEL: @main(
-; CHECK-NEXT:  entry:
-; CHECK-NEXT:    [[J:%.*]] = alloca i32, align 4
-; CHECK-NEXT:    [[I:%.*]] = alloca i32, align 4
-; CHECK-NEXT:    store i32 0, i32* [[J]], align 4, [[DBG9:!dbg !.*]]
-; CHECK-NEXT:    store i32 0, i32* [[I]], align 4, [[DBG10:!dbg !.*]]
-; CHECK-NEXT:    [[TMP0:%.*]] = alloca %nanos6_task_args_main0*, align 8, [[DBG9]]
-; CHECK-NEXT:    [[TMP1:%.*]] = alloca i8*, align 8, [[DBG9]]
-; CHECK-NEXT:    [[NUM_DEPS:%.*]] = alloca i64, align 8, [[DBG9]]
-; CHECK-NEXT:    br label [[FINAL_COND:%.*]], [[DBG9]]
-; CHECK:       codeRepl:
-; CHECK-NEXT:    [[TMP2:%.*]] = bitcast %nanos6_task_args_main0** [[TMP0]] to i8**, [[DBG9]]
-; CHECK-NEXT:    store i64 -1, i64* [[NUM_DEPS]], align 8, [[DBG9]]
-; CHECK-NEXT:    [[TMP3:%.*]] = load i64, i64* [[NUM_DEPS]], align 8, [[DBG9]]
-; CHECK-NEXT:    call void @nanos6_create_loop(%nanos6_task_info_t* @task_info_var_main0, %nanos6_task_invocation_info_t* @task_invocation_info_main0, i64 32, i8** [[TMP2]], i8** [[TMP1]], i64 4, i64 [[TMP3]], i64 0, i64 10, i64 0, i64 0), [[DBG9]]
-; CHECK-NEXT:    [[TMP4:%.*]] = load %nanos6_task_args_main0*, %nanos6_task_args_main0** [[TMP0]], align 8, [[DBG9]]
-; CHECK-NEXT:    [[TMP5:%.*]] = bitcast %nanos6_task_args_main0* [[TMP4]] to i8*, [[DBG9]]
-; CHECK-NEXT:    [[ARGS_END:%.*]] = getelementptr i8, i8* [[TMP5]], i64 32, [[DBG9]]
-; CHECK-NEXT:    [[GEP_V:%.*]] = getelementptr [[NANOS6_TASK_ARGS_MAIN0:%.*]], %nanos6_task_args_main0* [[TMP4]], i32 0, i32 0, [[DBG9]]
-; CHECK-NEXT:    store [10 x i32]* @v, [10 x i32]** [[GEP_V]], align 8, [[DBG9]]
-; CHECK-NEXT:    [[CAPT_GEP_:%.*]] = getelementptr [[NANOS6_TASK_ARGS_MAIN0]], %nanos6_task_args_main0* [[TMP4]], i32 0, i32 3, [[DBG9]]
-; CHECK-NEXT:    store i32 0, i32* [[CAPT_GEP_]], align 4, [[DBG9]]
-; CHECK-NEXT:    [[CAPT_GEP_4:%.*]] = getelementptr [[NANOS6_TASK_ARGS_MAIN0]], %nanos6_task_args_main0* [[TMP4]], i32 0, i32 4, [[DBG9]]
-; CHECK-NEXT:    store i32 10, i32* [[CAPT_GEP_4]], align 4, [[DBG9]]
-; CHECK-NEXT:    [[CAPT_GEP_5:%.*]] = getelementptr [[NANOS6_TASK_ARGS_MAIN0]], %nanos6_task_args_main0* [[TMP4]], i32 0, i32 5, [[DBG9]]
-; CHECK-NEXT:    store i32 1, i32* [[CAPT_GEP_5]], align 4, [[DBG9]]
-; CHECK-NEXT:    [[TMP6:%.*]] = load i8*, i8** [[TMP1]], align 8, [[DBG9]]
-; CHECK-NEXT:    call void @nanos6_submit_task(i8* [[TMP6]]), [[DBG9]]
-; CHECK-NEXT:    br label [[FINAL_END:%.*]], [[DBG9]]
-; CHECK:       final.end:
-; CHECK-NEXT:    ret i32 0, [[DBG11:!dbg !.*]]
-; CHECK:       final.then:
-; CHECK-NEXT:    store i32 0, i32* [[J]], align 4, [[DBG9]]
-; CHECK-NEXT:    br label [[FOR_COND:%.*]], [[DBG9]]
-; CHECK:       for.cond:
-; CHECK-NEXT:    [[TMP7:%.*]] = load i32, i32* [[J]], align 4, [[DBG9]]
-; CHECK-NEXT:    [[TMP8:%.*]] = icmp slt i32 [[TMP7]], 10, [[DBG9]]
-; CHECK-NEXT:    br i1 [[TMP8]], label [[FOR_BODY:%.*]], label [[FINAL_END]], [[DBG9]]
-; CHECK:       for.body:
-; CHECK-NEXT:    br label [[FOR_INCR:%.*]], [[DBG11]]
-; CHECK:       for.incr:
-; CHECK-NEXT:    [[TMP9:%.*]] = load i32, i32* [[J]], align 4, [[DBG9]]
-; CHECK-NEXT:    [[TMP10:%.*]] = add i32 [[TMP9]], 1, [[DBG9]]
-; CHECK-NEXT:    store i32 [[TMP10]], i32* [[J]], align 4, [[DBG9]]
-; CHECK-NEXT:    br label [[FOR_COND]], [[DBG9]]
-; CHECK:       final.cond:
-; CHECK-NEXT:    [[TMP11:%.*]] = call i32 @nanos6_in_final(), [[DBG9]]
-; CHECK-NEXT:    [[TMP12:%.*]] = icmp ne i32 [[TMP11]], 0, [[DBG9]]
-; CHECK-NEXT:    br i1 [[TMP12]], label [[FINAL_THEN:%.*]], label [[CODEREPL:%.*]], [[DBG9]]
-;
+define dso_local i32 @main() #0 !dbg !6 {
 entry:
   %j = alloca i32, align 4
   %i = alloca i32, align 4
   store i32 0, i32* %j, align 4, !dbg !9
   store i32 0, i32* %i, align 4, !dbg !10
-  %0 = call token @llvm.directive.region.entry() [ "DIR.OSS"([9 x i8] c"TASKLOOP\00"), "QUAL.OSS.SHARED"([10 x i32]* @v), "QUAL.OSS.PRIVATE"(i32* %i), "QUAL.OSS.PRIVATE"(i32* %j), "QUAL.OSS.LOOP.IND.VAR"(i32* %j), "QUAL.OSS.LOOP.LOWER.BOUND"(i32 0), "QUAL.OSS.LOOP.UPPER.BOUND"(i32 10), "QUAL.OSS.LOOP.STEP"(i32 1), "QUAL.OSS.LOOP.TYPE"(i64 0, i64 1, i64 1, i64 1, i64 1), "QUAL.OSS.CAPTURED"(i32 0, i32 10, i32 1), "QUAL.OSS.MULTIDEP.RANGE.OUT"(i32* %i, %struct._depend_unpack_t (i32*, i32*)* @compute_dep, i32* %i, i32* %j, [10 x i32]* @v, [16 x i8] c"{ v[i], i=0;j }\00", %struct._depend_unpack_t.0 (i32*, i32*, [10 x i32]*)* @compute_dep.1, i32* %i, i32* %j, [10 x i32]* @v) ], !dbg !9
-  call void @llvm.directive.region.exit(token %0), !dbg !9
-  ret i32 0, !dbg !11
+  %0 = call token @llvm.directive.region.entry() [ "DIR.OSS"([9 x i8] c"TASKLOOP\00"), "QUAL.OSS.SHARED"([10 x i32]* @v), "QUAL.OSS.PRIVATE"(i32* %j), "QUAL.OSS.PRIVATE"(i32* %i), "QUAL.OSS.LOOP.IND.VAR"(i32* %j), "QUAL.OSS.LOOP.LOWER.BOUND"(i32 ()* @compute_lb), "QUAL.OSS.LOOP.UPPER.BOUND"(i32 ()* @compute_ub), "QUAL.OSS.LOOP.STEP"(i32 ()* @compute_step), "QUAL.OSS.LOOP.TYPE"(i64 0, i64 1, i64 1, i64 1, i64 1), "QUAL.OSS.MULTIDEP.RANGE.OUT"(i32* %i, %struct._depend_unpack_t (i32*, i32*, i64)* @compute_dep, i32* %i, i32* %j, [10 x i32]* @v, [16 x i8] c"{ v[i], i=0;j }\00", %struct._depend_unpack_t.0 (i32*, i32*, [10 x i32]*)* @compute_dep.1, i32* %i, i32* %j, [10 x i32]* @v) ], !dbg !11
+  call void @llvm.directive.region.exit(token %0), !dbg !12
+  ret i32 0, !dbg !13
 }
 
 ; Function Attrs: nounwind
@@ -93,155 +43,197 @@ declare token @llvm.directive.region.entry() #1
 ; Function Attrs: nounwind
 declare void @llvm.directive.region.exit(token) #1
 
-define internal %struct._depend_unpack_t @compute_dep(i32* %i, i32* %j) {
-; CHECK-LABEL: @compute_dep(
-; CHECK-NEXT:  entry:
-; CHECK-NEXT:    [[RETURN_VAL:%.*]] = alloca [[STRUCT__DEPEND_UNPACK_T:%.*]], align 4
-; CHECK-NEXT:    [[TMP0:%.*]] = load i32, i32* [[I:%.*]], align 4, [[DBG10]]
-; CHECK-NEXT:    [[TMP1:%.*]] = load i32, i32* [[J:%.*]], align 4, [[DBG10]]
-; CHECK-NEXT:    [[TMP2:%.*]] = add i32 0, [[TMP1]]
-; CHECK-NEXT:    [[TMP3:%.*]] = add i32 [[TMP2]], -1
-; CHECK-NEXT:    [[TMP4:%.*]] = getelementptr inbounds [[STRUCT__DEPEND_UNPACK_T]], %struct._depend_unpack_t* [[RETURN_VAL]], i32 0, i32 0
-; CHECK-NEXT:    store i32 0, i32* [[TMP4]], align 4
-; CHECK-NEXT:    [[TMP5:%.*]] = getelementptr inbounds [[STRUCT__DEPEND_UNPACK_T]], %struct._depend_unpack_t* [[RETURN_VAL]], i32 0, i32 1
-; CHECK-NEXT:    store i32 [[TMP0]], i32* [[TMP5]], align 4
-; CHECK-NEXT:    [[TMP6:%.*]] = getelementptr inbounds [[STRUCT__DEPEND_UNPACK_T]], %struct._depend_unpack_t* [[RETURN_VAL]], i32 0, i32 2
-; CHECK-NEXT:    store i32 [[TMP3]], i32* [[TMP6]], align 4
-; CHECK-NEXT:    [[TMP7:%.*]] = getelementptr inbounds [[STRUCT__DEPEND_UNPACK_T]], %struct._depend_unpack_t* [[RETURN_VAL]], i32 0, i32 3
-; CHECK-NEXT:    store i32 1, i32* [[TMP7]], align 4
-; CHECK-NEXT:    [[TMP8:%.*]] = load [[STRUCT__DEPEND_UNPACK_T]], %struct._depend_unpack_t* [[RETURN_VAL]], align 4
-; CHECK-NEXT:    ret [[STRUCT__DEPEND_UNPACK_T]] [[TMP8]]
-;
+define internal i32 @compute_lb() #2 !dbg !14 {
 entry:
-  %return.val = alloca %struct._depend_unpack_t, align 4
-  %0 = load i32, i32* %i, align 4, !dbg !10
-  %1 = load i32, i32* %j, align 4, !dbg !10
-  %2 = add i32 0, %1
-  %3 = add i32 %2, -1
-  %4 = getelementptr inbounds %struct._depend_unpack_t, %struct._depend_unpack_t* %return.val, i32 0, i32 0
-  store i32 0, i32* %4, align 4
-  %5 = getelementptr inbounds %struct._depend_unpack_t, %struct._depend_unpack_t* %return.val, i32 0, i32 1
-  store i32 %0, i32* %5, align 4
-  %6 = getelementptr inbounds %struct._depend_unpack_t, %struct._depend_unpack_t* %return.val, i32 0, i32 2
-  store i32 %3, i32* %6, align 4
-  %7 = getelementptr inbounds %struct._depend_unpack_t, %struct._depend_unpack_t* %return.val, i32 0, i32 3
-  store i32 1, i32* %7, align 4
-  %8 = load %struct._depend_unpack_t, %struct._depend_unpack_t* %return.val, align 4
-  ret %struct._depend_unpack_t %8
+  ret i32 0, !dbg !15
 }
 
-define internal %struct._depend_unpack_t.0 @compute_dep.1(i32* %i, i32* %j, [10 x i32]* %v) {
-; CHECK-LABEL: @compute_dep.1(
-; CHECK-NEXT:  entry:
-; CHECK-NEXT:    [[RETURN_VAL:%.*]] = alloca [[STRUCT__DEPEND_UNPACK_T_0:%.*]], align 8
-; CHECK-NEXT:    [[TMP0:%.*]] = load i32, i32* [[I:%.*]], align 4, [[DBG10]]
-; CHECK-NEXT:    [[TMP1:%.*]] = sext i32 [[TMP0]] to i64
-; CHECK-NEXT:    [[TMP2:%.*]] = add i64 [[TMP1]], 1
-; CHECK-NEXT:    [[ARRAYDECAY:%.*]] = getelementptr inbounds [10 x i32], [10 x i32]* [[V:%.*]], i64 0, i64 0, [[DBG10]]
-; CHECK-NEXT:    [[TMP3:%.*]] = mul i64 [[TMP1]], 4
-; CHECK-NEXT:    [[TMP4:%.*]] = mul i64 [[TMP2]], 4
-; CHECK-NEXT:    [[TMP5:%.*]] = getelementptr inbounds [[STRUCT__DEPEND_UNPACK_T_0]], %struct._depend_unpack_t.0* [[RETURN_VAL]], i32 0, i32 0
-; CHECK-NEXT:    store i32* [[ARRAYDECAY]], i32** [[TMP5]], align 8
-; CHECK-NEXT:    [[TMP6:%.*]] = getelementptr inbounds [[STRUCT__DEPEND_UNPACK_T_0]], %struct._depend_unpack_t.0* [[RETURN_VAL]], i32 0, i32 1
-; CHECK-NEXT:    store i64 40, i64* [[TMP6]], align 8
-; CHECK-NEXT:    [[TMP7:%.*]] = getelementptr inbounds [[STRUCT__DEPEND_UNPACK_T_0]], %struct._depend_unpack_t.0* [[RETURN_VAL]], i32 0, i32 2
-; CHECK-NEXT:    store i64 [[TMP3]], i64* [[TMP7]], align 8
-; CHECK-NEXT:    [[TMP8:%.*]] = getelementptr inbounds [[STRUCT__DEPEND_UNPACK_T_0]], %struct._depend_unpack_t.0* [[RETURN_VAL]], i32 0, i32 3
-; CHECK-NEXT:    store i64 [[TMP4]], i64* [[TMP8]], align 8
-; CHECK-NEXT:    [[TMP9:%.*]] = load [[STRUCT__DEPEND_UNPACK_T_0]], %struct._depend_unpack_t.0* [[RETURN_VAL]], align 8
-; CHECK-NEXT:    ret [[STRUCT__DEPEND_UNPACK_T_0]] [[TMP9]]
-;
+define internal i32 @compute_ub() #2 !dbg !17 {
 entry:
-  %return.val = alloca %struct._depend_unpack_t.0, align 8
-  %0 = load i32, i32* %i, align 4, !dbg !10
+  ret i32 10, !dbg !18
+}
+
+define internal i32 @compute_step() #2 !dbg !20 {
+entry:
+  ret i32 1, !dbg !21
+}
+
+define internal %struct._depend_unpack_t @compute_dep(i32* %i, i32* %j, i64 %0) #2 !dbg !23 {
+entry:
+  %retval = alloca %struct._depend_unpack_t, align 4
+  %i.addr = alloca i32*, align 8
+  %j.addr = alloca i32*, align 8
+  %.addr = alloca i64, align 8
+  store i32* %i, i32** %i.addr, align 8
+  store i32* %j, i32** %j.addr, align 8
+  store i64 %0, i64* %.addr, align 8
+  switch i64 %0, label %3 [
+    i64 0, label %4
+  ]
+
+1:                                                ; preds = %4, %3
+  %2 = load %struct._depend_unpack_t, %struct._depend_unpack_t* %retval, align 4, !dbg !24
+  ret %struct._depend_unpack_t %2, !dbg !24
+
+3:                                                ; preds = %entry
+  br label %1
+
+4:                                                ; preds = %entry
+  %5 = load i32, i32* %i, align 4, !dbg !26
+  %6 = load i32, i32* %j, align 4, !dbg !24
+  %7 = add i32 0, %6
+  %8 = add i32 %7, -1
+  %9 = getelementptr inbounds %struct._depend_unpack_t, %struct._depend_unpack_t* %retval, i32 0, i32 0
+  store i32 0, i32* %9, align 4
+  %10 = getelementptr inbounds %struct._depend_unpack_t, %struct._depend_unpack_t* %retval, i32 0, i32 1
+  store i32 %5, i32* %10, align 4
+  %11 = getelementptr inbounds %struct._depend_unpack_t, %struct._depend_unpack_t* %retval, i32 0, i32 2
+  store i32 %8, i32* %11, align 4
+  %12 = getelementptr inbounds %struct._depend_unpack_t, %struct._depend_unpack_t* %retval, i32 0, i32 3
+  store i32 1, i32* %12, align 4
+  br label %1
+}
+
+define internal %struct._depend_unpack_t.0 @compute_dep.1(i32* %i, i32* %j, [10 x i32]* %v) #2 !dbg !27 {
+entry:
+  %retval = alloca %struct._depend_unpack_t.0, align 8
+  %i.addr = alloca i32*, align 8
+  %j.addr = alloca i32*, align 8
+  %v.addr = alloca [10 x i32]*, align 8
+  store i32* %i, i32** %i.addr, align 8
+  store i32* %j, i32** %j.addr, align 8
+  store [10 x i32]* %v, [10 x i32]** %v.addr, align 8
+  %0 = load i32, i32* %i, align 4, !dbg !28
   %1 = sext i32 %0 to i64
   %2 = add i64 %1, 1
-  %arraydecay = getelementptr inbounds [10 x i32], [10 x i32]* %v, i64 0, i64 0, !dbg !10
+  %arraydecay = getelementptr inbounds [10 x i32], [10 x i32]* %v, i64 0, i64 0, !dbg !30
   %3 = mul i64 %1, 4
   %4 = mul i64 %2, 4
-  %5 = getelementptr inbounds %struct._depend_unpack_t.0, %struct._depend_unpack_t.0* %return.val, i32 0, i32 0
+  %5 = getelementptr inbounds %struct._depend_unpack_t.0, %struct._depend_unpack_t.0* %retval, i32 0, i32 0
   store i32* %arraydecay, i32** %5, align 8
-  %6 = getelementptr inbounds %struct._depend_unpack_t.0, %struct._depend_unpack_t.0* %return.val, i32 0, i32 1
+  %6 = getelementptr inbounds %struct._depend_unpack_t.0, %struct._depend_unpack_t.0* %retval, i32 0, i32 1
   store i64 40, i64* %6, align 8
-  %7 = getelementptr inbounds %struct._depend_unpack_t.0, %struct._depend_unpack_t.0* %return.val, i32 0, i32 2
+  %7 = getelementptr inbounds %struct._depend_unpack_t.0, %struct._depend_unpack_t.0* %retval, i32 0, i32 2
   store i64 %3, i64* %7, align 8
-  %8 = getelementptr inbounds %struct._depend_unpack_t.0, %struct._depend_unpack_t.0* %return.val, i32 0, i32 3
+  %8 = getelementptr inbounds %struct._depend_unpack_t.0, %struct._depend_unpack_t.0* %retval, i32 0, i32 3
   store i64 %4, i64* %8, align 8
-  %9 = load %struct._depend_unpack_t.0, %struct._depend_unpack_t.0* %return.val, align 8
-  ret %struct._depend_unpack_t.0 %9
+  %9 = load %struct._depend_unpack_t.0, %struct._depend_unpack_t.0* %retval, align 8, !dbg !30
+  ret %struct._depend_unpack_t.0 %9, !dbg !30
 }
 
-; CHECK: define internal void @nanos6_unpacked_deps_main0([10 x i32]* %v, i32* %i, i32* %j, i32 %0, i32 %1, i32 %2, %nanos6_loop_bounds_t* %loop_bounds, i8* %handler) {
+; CHECK: define internal void @nanos6_unpacked_deps_main0([10 x i32]* %v, i32* %j, i32* %i, %nanos6_loop_bounds_t* %loop_bounds, i8* %handler) {
 ; CHECK: entry:
 ; CHECK-NEXT:   %lb_gep = getelementptr %nanos6_loop_bounds_t, %nanos6_loop_bounds_t* %loop_bounds, i32 0, i32 0
-; CHECK-NEXT:   %3 = load i64, i64* %lb_gep, align 8
-; CHECK-NEXT:   %lb = trunc i64 %3 to i32
+; CHECK-NEXT:   %0 = load i64, i64* %lb_gep, align 8
+; CHECK-NEXT:   %lb = trunc i64 %0 to i32
 ; CHECK-NEXT:   %ub_gep = getelementptr %nanos6_loop_bounds_t, %nanos6_loop_bounds_t* %loop_bounds, i32 0, i32 1
-; CHECK-NEXT:   %4 = load i64, i64* %ub_gep, align 8
-; CHECK-NEXT:   %5 = trunc i64 %4 to i32
-; CHECK-NEXT:   %ub = sub i32 %5, 1
+; CHECK-NEXT:   %1 = load i64, i64* %ub_gep, align 8
+; CHECK-NEXT:   %2 = trunc i64 %1 to i32
+; CHECK-NEXT:   %ub = sub i32 %2, 1
+; CHECK-NEXT:   %3 = call i32 @compute_lb()
+; CHECK-NEXT:   %4 = call i32 @compute_ub()
+; CHECK-NEXT:   %5 = call i32 @compute_step()
+; CHECK-NEXT:   %6 = sub i32 %4, %3
+; CHECK-NEXT:   %7 = sub i32 %6, 1
+; CHECK-NEXT:   %8 = sdiv i32 %7, %5
+; CHECK-NEXT:   %9 = add i32 %8, 1
+; CHECK-NEXT:   %10 = sext i32 %9 to i64
 ; CHECK-NEXT:   %j.lb = alloca i32, align 4
 ; CHECK-NEXT:   %j.ub = alloca i32, align 4
-; CHECK-NEXT:   %6 = mul i32 1, %lb
-; CHECK-NEXT:   %7 = add i32 %6, 0
-; CHECK-NEXT:   store i32 %7, i32* %j.lb, align 4
-; CHECK-NEXT:   %8 = mul i32 1, %ub
-; CHECK-NEXT:   %9 = add i32 %8, 0
-; CHECK-NEXT:   store i32 %9, i32* %j.ub, align 4
+; CHECK-NEXT:   %11 = sext i32 %lb to i64
+; CHECK-NEXT:   %12 = udiv i64 %11, 1
+; CHECK-NEXT:   %13 = sext i32 %5 to i64
+; CHECK-NEXT:   %14 = mul i64 %12, %13
+; CHECK-NEXT:   %15 = sext i32 %3 to i64
+; CHECK-NEXT:   %16 = add i64 %14, %15
+; CHECK-NEXT:   %17 = mul i64 %12, 1
+; CHECK-NEXT:   %18 = sext i32 %lb to i64
+; CHECK-NEXT:   %19 = sub i64 %18, %17
+; CHECK-NEXT:   %20 = trunc i64 %16 to i32
+; CHECK-NEXT:   store i32 %20, i32* %j.lb, align 4
+; CHECK-NEXT:   %21 = sext i32 %ub to i64
+; CHECK-NEXT:   %22 = udiv i64 %21, 1
+; CHECK-NEXT:   %23 = sext i32 %5 to i64
+; CHECK-NEXT:   %24 = mul i64 %22, %23
+; CHECK-NEXT:   %25 = sext i32 %3 to i64
+; CHECK-NEXT:   %26 = add i64 %24, %25
+; CHECK-NEXT:   %27 = mul i64 %22, 1
+; CHECK-NEXT:   %28 = sext i32 %ub to i64
+; CHECK-NEXT:   %29 = sub i64 %28, %27
+; CHECK-NEXT:   %30 = trunc i64 %26 to i32
+; CHECK-NEXT:   store i32 %30, i32* %j.ub, align 4
 ; CHECK-NEXT:   %i.remap = alloca i32, align 4
-; CHECK-NEXT:   br label %10
-; CHECK: 10:                                               ; preds = %entry
+; CHECK-NEXT:   br label %31
+; CHECK: 31:                                               ; preds = %entry
 ; CHECK-NEXT:   store i32 0, i32* %i, align 4
-; CHECK-NEXT:   %11 = call %struct._depend_unpack_t @compute_dep(i32* %i, i32* %j.lb)
-; CHECK-NEXT:   %12 = extractvalue %struct._depend_unpack_t %11, 0
-; CHECK-NEXT:   store i32 %12, i32* %i, align 4
+; CHECK-NEXT:   %32 = call %struct._depend_unpack_t @compute_dep(i32* %i, i32* %j.lb, i64 0)
+; CHECK-NEXT:   %33 = extractvalue %struct._depend_unpack_t %32, 0
+; CHECK-NEXT:   %34 = extractvalue %struct._depend_unpack_t %32, 2
+; CHECK-NEXT:   %35 = extractvalue %struct._depend_unpack_t %32, 3
+; CHECK-NEXT:   store i32 %33, i32* %i, align 4
 ; CHECK-NEXT:   br label %for.cond
-; CHECK: for.cond:                                         ; preds = %for.incr, %10
-; CHECK-NEXT:   %13 = call %struct._depend_unpack_t @compute_dep(i32* %i, i32* %j.lb)
-; CHECK-NEXT:   %14 = extractvalue %struct._depend_unpack_t %13, 2
-; CHECK-NEXT:   %15 = load i32, i32* %i, align 4
-; CHECK-NEXT:   %16 = icmp sle i32 %15, %14
-; CHECK-NEXT:   br i1 %16, label %for.body, label %26
+; CHECK: for.cond:                                         ; preds = %for.incr, %31
+; CHECK-NEXT:   %36 = load i32, i32* %i, align 4
+; CHECK-NEXT:   %37 = icmp sle i32 %36, %34
+; CHECK-NEXT:   br i1 %37, label %for.body, label %47
 ; CHECK: for.body:                                         ; preds = %for.cond
-; CHECK-NEXT:   %17 = call %struct._depend_unpack_t @compute_dep(i32* %i, i32* %j.lb)
-; CHECK-NEXT:   %18 = extractvalue %struct._depend_unpack_t %17, 1
-; CHECK-NEXT:   store i32 %18, i32* %i.remap, align 4
-; CHECK-NEXT:   %19 = call %struct._depend_unpack_t.0 @compute_dep.1(i32* %i.remap, i32* %j.lb, [10 x i32]* %v)
-; CHECK-NEXT:   %20 = call %struct._depend_unpack_t.0 @compute_dep.1(i32* %i.remap, i32* %j.lb, [10 x i32]* %v)
-; CHECK-NEXT:   %21 = extractvalue %struct._depend_unpack_t.0 %19, 0
-; CHECK-NEXT:   %22 = bitcast i32* %21 to i8*
-; CHECK-NEXT:   %23 = extractvalue %struct._depend_unpack_t.0 %19, 1
-; CHECK-NEXT:   %24 = extractvalue %struct._depend_unpack_t.0 %19, 2
-; CHECK-NEXT:   %25 = extractvalue %struct._depend_unpack_t.0 %20, 3
-; CHECK-NEXT:   call void @nanos6_register_region_write_depinfo1(i8* %handler, i32 0, i8* getelementptr inbounds ([16 x i8], [16 x i8]* @1, i32 0, i32 0), i8* %22, i64 %23, i64 %24, i64 %25)
+; CHECK-NEXT:   %38 = call %struct._depend_unpack_t @compute_dep(i32* %i, i32* %j.lb, i64 0)
+; CHECK-NEXT:   %39 = extractvalue %struct._depend_unpack_t %38, 1
+; CHECK-NEXT:   store i32 %39, i32* %i.remap, align 4
+; CHECK-NEXT:   %40 = call %struct._depend_unpack_t.0 @compute_dep.1(i32* %i.remap, i32* %j.lb, [10 x i32]* %v)
+; CHECK-NEXT:   %41 = call %struct._depend_unpack_t.0 @compute_dep.1(i32* %i.remap, i32* %j.lb, [10 x i32]* %v)
+; CHECK-NEXT:   %42 = extractvalue %struct._depend_unpack_t.0 %40, 0
+; CHECK-NEXT:   %43 = bitcast i32* %42 to i8*
+; CHECK-NEXT:   %44 = extractvalue %struct._depend_unpack_t.0 %40, 1
+; CHECK-NEXT:   %45 = extractvalue %struct._depend_unpack_t.0 %40, 2
+; CHECK-NEXT:   %46 = extractvalue %struct._depend_unpack_t.0 %41, 3
+; CHECK-NEXT:   call void @nanos6_register_region_write_depinfo1(i8* %handler, i32 0, i8* getelementptr inbounds ([16 x i8], [16 x i8]* @1, i32 0, i32 0), i8* %43, i64 %44, i64 %45, i64 %46)
 ; CHECK-NEXT:   br label %for.incr
-; CHECK: 26:                                               ; preds = %for.cond
+; CHECK: 47:                                               ; preds = %for.cond
 ; CHECK-NEXT:   ret void
 ; CHECK: for.incr:                                         ; preds = %for.body
-; CHECK-NEXT:   %27 = call %struct._depend_unpack_t @compute_dep(i32* %i, i32* %j.lb)
-; CHECK-NEXT:   %28 = extractvalue %struct._depend_unpack_t %27, 3
-; CHECK-NEXT:   %29 = load i32, i32* %i, align 4
-; CHECK-NEXT:   %30 = add i32 %29, %28
-; CHECK-NEXT:   store i32 %30, i32* %i, align 4
+; CHECK-NEXT:   %48 = load i32, i32* %i, align 4
+; CHECK-NEXT:   %49 = add i32 %48, %35
+; CHECK-NEXT:   store i32 %49, i32* %i, align 4
 ; CHECK-NEXT:   br label %for.cond
 ; CHECK-NEXT: }
 
-attributes #0 = { noinline nounwind optnone "correctly-rounded-divide-sqrt-fp-math"="false" "disable-tail-calls"="false" "frame-pointer"="none" "less-precise-fpmad"="false" "min-legal-vector-width"="0" "no-infs-fp-math"="false" "no-jump-tables"="false" "no-nans-fp-math"="false" "no-signed-zeros-fp-math"="false" "no-trapping-math"="false" "stack-protector-buffer-size"="8" "target-features"="+cx8,+mmx,+sse,+sse2,+x87" "unsafe-fp-math"="false" "use-soft-float"="false" }
+attributes #0 = { noinline nounwind optnone "frame-pointer"="none" "min-legal-vector-width"="0" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-features"="+cx8,+mmx,+sse,+sse2,+x87" }
 attributes #1 = { nounwind }
+attributes #2 = { "min-legal-vector-width"="0" }
 
 !llvm.dbg.cu = !{!0}
 !llvm.module.flags = !{!3, !4}
 !llvm.ident = !{!5}
 
-!0 = distinct !DICompileUnit(language: DW_LANG_C99, file: !1, producer: "human", isOptimized: false, runtimeVersion: 0, emissionKind: NoDebug, enums: !2, nameTableKind: None)
+!0 = distinct !DICompileUnit(language: DW_LANG_C99, file: !1, producer: "", isOptimized: false, runtimeVersion: 0, emissionKind: NoDebug, enums: !2, splitDebugInlining: false, nameTableKind: None)
 !1 = !DIFile(filename: "<stdin>", directory: "")
 !2 = !{}
 !3 = !{i32 2, !"Debug Info Version", i32 3}
 !4 = !{i32 1, !"wchar_size", i32 4}
-!5 = !{!"clang version 11.0.0 "}
+!5 = !{!""}
 !6 = distinct !DISubprogram(name: "main", scope: !7, file: !7, line: 2, type: !8, scopeLine: 2, spFlags: DISPFlagDefinition, unit: !0, retainedNodes: !2)
 !7 = !DIFile(filename: "taskloop_multideps.ll", directory: "")
 !8 = !DISubroutineType(types: !2)
-!9 = !DILocation(line: 4, scope: !6)
-!10 = !DILocation(line: 3, scope: !6)
-!11 = !DILocation(line: 5, scope: !6)
+!9 = !DILocation(line: 4, column: 14, scope: !6)
+!10 = !DILocation(line: 3, column: 39, scope: !6)
+!11 = !DILocation(line: 4, column: 10, scope: !6)
+!12 = !DILocation(line: 4, column: 36, scope: !6)
+!13 = !DILocation(line: 5, column: 1, scope: !6)
+!14 = distinct !DISubprogram(linkageName: "compute_lb", scope: !1, file: !1, type: !8, flags: DIFlagArtificial, spFlags: DISPFlagLocalToUnit | DISPFlagDefinition, unit: !0, retainedNodes: !2)
+!15 = !DILocation(line: 4, column: 18, scope: !16)
+!16 = !DILexicalBlockFile(scope: !14, file: !7, discriminator: 0)
+!17 = distinct !DISubprogram(linkageName: "compute_ub", scope: !1, file: !1, type: !8, flags: DIFlagArtificial, spFlags: DISPFlagLocalToUnit | DISPFlagDefinition, unit: !0, retainedNodes: !2)
+!18 = !DILocation(line: 4, column: 25, scope: !19)
+!19 = !DILexicalBlockFile(scope: !17, file: !7, discriminator: 0)
+!20 = distinct !DISubprogram(linkageName: "compute_step", scope: !1, file: !1, type: !8, flags: DIFlagArtificial, spFlags: DISPFlagLocalToUnit | DISPFlagDefinition, unit: !0, retainedNodes: !2)
+!21 = !DILocation(line: 4, column: 29, scope: !22)
+!22 = !DILexicalBlockFile(scope: !20, file: !7, discriminator: 0)
+!23 = distinct !DISubprogram(linkageName: "compute_dep", scope: !1, file: !1, type: !8, flags: DIFlagArtificial, spFlags: DISPFlagLocalToUnit | DISPFlagDefinition, unit: !0, retainedNodes: !2)
+!24 = !DILocation(line: 3, column: 43, scope: !25)
+!25 = !DILexicalBlockFile(scope: !23, file: !7, discriminator: 0)
+!26 = !DILocation(line: 3, column: 39, scope: !25)
+!27 = distinct !DISubprogram(linkageName: "compute_dep.1", scope: !1, file: !1, type: !8, flags: DIFlagArtificial, spFlags: DISPFlagLocalToUnit | DISPFlagDefinition, unit: !0, retainedNodes: !2)
+!28 = !DILocation(line: 3, column: 35, scope: !29)
+!29 = !DILexicalBlockFile(scope: !27, file: !7, discriminator: 0)
+!30 = !DILocation(line: 3, column: 33, scope: !29)

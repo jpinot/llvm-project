@@ -14,7 +14,6 @@
 
 #include "kmp.h"
 #include "kmp_io.h"
-#include "kmp_i18n.h"
 #include "kmp_wait_release.h"
 #include "kmp_taskdeps.h"
 #if OMPT_SUPPORT
@@ -36,7 +35,6 @@ int fill_data = false;
 int prealloc = false;
 kmp_int32 ntdgs = 0;
 kmp_int32 numRoots = 0;
-kmp_int32 id_counter;
 
 // Pointers
 dynamic_tdg_info dynamic_tdgs[10];
@@ -64,6 +62,7 @@ ident_color *ColorMap;
 ident_task *TaskIdentMap;
 kmp_int32 ColorIndex = 0;
 
+//Structures for the prealloc mechanism
 struct kmp_space_indexer free_space_indexer;
 struct kmp_task_alloc_info *task_static_table;
 struct kmp_waiting_tdg waiting_tdg_to_execute;
@@ -130,6 +129,7 @@ static kmp_dephash_t *__kmp_dephash_extend(kmp_info_t *thread,
   h->buckets = (kmp_dephash_entry **)(h + 1);
   h->generation = gen;
   h->nconflicts = 0;
+  h->last_all = current_dephash->last_all;
 
   // make sure buckets are properly initialized
   for (size_t i = 0; i < new_size; i++) {
@@ -186,15 +186,13 @@ static kmp_dephash_t *__kmp_dephash_create(kmp_info_t *thread,
   h->nelements = 0;
   h->nconflicts = 0;
   h->buckets = (kmp_dephash_entry **)(h + 1);
+  h->last_all = NULL;
 
   for (size_t i = 0; i < h_size; i++)
     h->buckets[i] = 0;
 
   return h;
 }
-
-#define ENTRY_LAST_INS 0
-#define ENTRY_LAST_MTXS 1
 
 static kmp_dephash_entry *__kmp_dephash_find(kmp_info_t *thread,
                                              kmp_dephash_t **hash,
@@ -221,10 +219,13 @@ static kmp_dephash_entry *__kmp_dephash_find(kmp_info_t *thread,
         thread, sizeof(kmp_dephash_entry_t));
 #endif
     entry->addr = addr;
-    entry->last_out = NULL;
-    entry->last_ins = NULL;
-    entry->last_mtxs = NULL;
-    entry->last_flag = ENTRY_LAST_INS;
+    if (!h->last_all) // no predecessor task with omp_all_memory dependence
+      entry->last_out = NULL;
+    else // else link the omp_all_memory depnode to the new entry
+      entry->last_out = __kmp_node_ref(h->last_all);
+    entry->last_set = NULL;
+    entry->prev_set = NULL;
+    entry->last_flag = 0;
     entry->mtx_lock = NULL;
     entry->next_in_bucket = h->buckets[bucket];
     h->buckets[bucket] = entry;
@@ -258,9 +259,8 @@ static inline void __kmp_track_dependence(kmp_int32 gtid, kmp_depnode_t *source,
                                           kmp_depnode_t *sink,
                                           kmp_task_t *sink_task) {
 #if LIBOMP_TASKGRAPH
-  kmp_taskdata_t *task_source = KMP_TASK_TO_TASKDATA(source->dn.task);
-  kmp_taskdata_t *task_sink = KMP_TASK_TO_TASKDATA(sink_task);
   if (recording) {
+    kmp_taskdata_t *task_sink = KMP_TASK_TO_TASKDATA(sink_task);
     kmp_record_info *SourceInfo = &(RecordMap[source->dn.part_id]);
     bool exists = false;
     for (int i = 0; i < SourceInfo->nsuccessors; i++) {
@@ -325,11 +325,17 @@ __kmp_depnode_link_successor(kmp_int32 gtid, kmp_info_t *thread,
   // link node as successor of list elements
   for (kmp_depnode_list_t *p = plist; p; p = p->next) {
     kmp_depnode_t *dep = p->node;
-    __kmp_track_dependence(gtid, dep, node, task);
+#if LIBOMP_TASKGRAPH
+    if (recording)
+      __kmp_track_dependence(gtid, dep, node, task);
+#endif
     if (dep->dn.task) {
       KMP_ACQUIRE_DEPNODE(gtid, dep);
       if (dep->dn.task) {
-        //__kmp_track_dependence(gtid, dep, node, task);
+#if LIBOMP_TASKGRAPH
+        if (!recording)
+#endif
+          __kmp_track_dependence(gtid, dep, node, task);
         dep->dn.successors = __kmp_add_node(thread, dep->dn.successors, node);
         KA_TRACE(40, ("__kmp_process_deps: T#%d adding dependence from %p to "
                       "%p\n",
@@ -351,12 +357,18 @@ static inline kmp_int32 __kmp_depnode_link_successor(kmp_int32 gtid,
   if (!sink)
     return 0;
   kmp_int32 npredecessors = 0;
-  __kmp_track_dependence(gtid, sink, source, task);
+#if LIBOMP_TASKGRAPH
+  if (recording)
+    __kmp_track_dependence(gtid, sink, source, task);
+#endif
   if (sink->dn.task) {
     // synchronously add source to sink' list of successors
     KMP_ACQUIRE_DEPNODE(gtid, sink);
     if (sink->dn.task) {
-      //__kmp_track_dependence(gtid, sink, source, task);
+#if LIBOMP_TASKGRAPH
+      if (!recording)
+#endif
+        __kmp_track_dependence(gtid, sink, source, task);
       sink->dn.successors = __kmp_add_node(thread, sink->dn.successors, source);
       KA_TRACE(40, ("__kmp_process_deps: T#%d adding dependence from %p to "
                     "%p\n",
@@ -366,6 +378,63 @@ static inline kmp_int32 __kmp_depnode_link_successor(kmp_int32 gtid,
     }
     KMP_RELEASE_DEPNODE(gtid, sink);
   }
+  return npredecessors;
+}
+
+static inline kmp_int32
+__kmp_process_dep_all(kmp_int32 gtid, kmp_depnode_t *node, kmp_dephash_t *h,
+                      bool dep_barrier, kmp_task_t *task) {
+  KA_TRACE(30, ("__kmp_process_dep_all: T#%d processing dep_all, "
+                "dep_barrier = %d\n",
+                gtid, dep_barrier));
+  kmp_info_t *thread = __kmp_threads[gtid];
+  kmp_int32 npredecessors = 0;
+
+  // process previous omp_all_memory node if any
+  npredecessors +=
+      __kmp_depnode_link_successor(gtid, thread, task, node, h->last_all);
+  __kmp_node_deref(thread, h->last_all);
+  if (!dep_barrier) {
+    h->last_all = __kmp_node_ref(node);
+  } else {
+    // if this is a sync point in the serial sequence, then the previous
+    // outputs are guaranteed to be completed after the execution of this
+    // task so the previous output nodes can be cleared.
+    h->last_all = NULL;
+  }
+
+  // process all regular dependences
+  for (size_t i = 0; i < h->size; i++) {
+    kmp_dephash_entry_t *info = h->buckets[i];
+    if (!info) // skip empty slots in dephash
+      continue;
+    for (; info; info = info->next_in_bucket) {
+      // for each entry the omp_all_memory works as OUT dependence
+      kmp_depnode_t *last_out = info->last_out;
+      kmp_depnode_list_t *last_set = info->last_set;
+      kmp_depnode_list_t *prev_set = info->prev_set;
+      if (last_set) {
+        npredecessors +=
+            __kmp_depnode_link_successor(gtid, thread, task, node, last_set);
+        __kmp_depnode_list_free(thread, last_set);
+        __kmp_depnode_list_free(thread, prev_set);
+        info->last_set = NULL;
+        info->prev_set = NULL;
+        info->last_flag = 0; // no sets in this dephash entry
+      } else {
+        npredecessors +=
+            __kmp_depnode_link_successor(gtid, thread, task, node, last_out);
+      }
+      __kmp_node_deref(thread, last_out);
+      if (!dep_barrier) {
+        info->last_out = __kmp_node_ref(node);
+      } else {
+        info->last_out = NULL;
+      }
+    }
+  }
+  KA_TRACE(30, ("__kmp_process_dep_all: T#%d found %d predecessors\n", gtid,
+                npredecessors));
   return npredecessors;
 }
 
@@ -389,96 +458,96 @@ __kmp_process_deps(kmp_int32 gtid, kmp_depnode_t *node, kmp_dephash_t **hash,
     kmp_dephash_entry_t *info =
         __kmp_dephash_find(thread, hash, dep->base_addr);
     kmp_depnode_t *last_out = info->last_out;
-    kmp_depnode_list_t *last_ins = info->last_ins;
-    kmp_depnode_list_t *last_mtxs = info->last_mtxs;
+    kmp_depnode_list_t *last_set = info->last_set;
+    kmp_depnode_list_t *prev_set = info->prev_set;
 
-    if (dep->flags.out) { // out --> clean lists of ins and mtxs if any
-      if (last_ins || last_mtxs) {
-        if (info->last_flag == ENTRY_LAST_INS) { // INS were last
-          npredecessors +=
-              __kmp_depnode_link_successor(gtid, thread, task, node, last_ins);
-        } else { // MTXS were last
-          npredecessors +=
-              __kmp_depnode_link_successor(gtid, thread, task, node, last_mtxs);
-        }
-        __kmp_depnode_list_free(thread, last_ins);
-        __kmp_depnode_list_free(thread, last_mtxs);
-        info->last_ins = NULL;
-        info->last_mtxs = NULL;
+    if (dep->flags.out) { // out or inout --> clean lists if any
+      if (last_set) {
+        npredecessors +=
+            __kmp_depnode_link_successor(gtid, thread, task, node, last_set);
+        __kmp_depnode_list_free(thread, last_set);
+        __kmp_depnode_list_free(thread, prev_set);
+        info->last_set = NULL;
+        info->prev_set = NULL;
+        info->last_flag = 0; // no sets in this dephash entry
       } else {
         npredecessors +=
             __kmp_depnode_link_successor(gtid, thread, task, node, last_out);
       }
       __kmp_node_deref(thread, last_out);
-      if (dep_barrier) {
+      if (!dep_barrier) {
+        info->last_out = __kmp_node_ref(node);
+      } else {
         // if this is a sync point in the serial sequence, then the previous
         // outputs are guaranteed to be completed after the execution of this
         // task so the previous output nodes can be cleared.
         info->last_out = NULL;
-      } else {
-        info->last_out = __kmp_node_ref(node);
       }
-    } else if (dep->flags.in) {
-      // in --> link node to either last_out or last_mtxs, clean earlier deps
-      if (last_mtxs) {
-        npredecessors +=
-            __kmp_depnode_link_successor(gtid, thread, task, node, last_mtxs);
-        __kmp_node_deref(thread, last_out);
-        info->last_out = NULL;
-        if (info->last_flag == ENTRY_LAST_MTXS && last_ins) { // MTXS were last
-          // clean old INS before creating new list
-          __kmp_depnode_list_free(thread, last_ins);
-          info->last_ins = NULL;
-        }
-      } else {
+    } else { // either IN or MTX or SET
+      if (info->last_flag == 0 || info->last_flag == dep->flag) {
+        // last_set either didn't exist or of same dep kind
         // link node as successor of the last_out if any
         npredecessors +=
             __kmp_depnode_link_successor(gtid, thread, task, node, last_out);
-      }
-      info->last_flag = ENTRY_LAST_INS;
-      info->last_ins = __kmp_add_node(thread, info->last_ins, node);
-    } else {
-      KMP_DEBUG_ASSERT(dep->flags.mtx == 1);
-      // mtx --> link node to either last_out or last_ins, clean earlier deps
-      if (last_ins) {
+        // link node as successor of all nodes in the prev_set if any
         npredecessors +=
-            __kmp_depnode_link_successor(gtid, thread, task, node, last_ins);
+            __kmp_depnode_link_successor(gtid, thread, task, node, prev_set);
+        if (dep_barrier) {
+          // clean last_out and prev_set if any; don't touch last_set
+          __kmp_node_deref(thread, last_out);
+          info->last_out = NULL;
+          __kmp_depnode_list_free(thread, prev_set);
+          info->prev_set = NULL;
+        }
+      } else { // last_set is of different dep kind, make it prev_set
+        // link node as successor of all nodes in the last_set
+        npredecessors +=
+            __kmp_depnode_link_successor(gtid, thread, task, node, last_set);
+        // clean last_out if any
         __kmp_node_deref(thread, last_out);
         info->last_out = NULL;
-        if (info->last_flag == ENTRY_LAST_INS && last_mtxs) { // INS were last
-          // clean old MTXS before creating new list
-          __kmp_depnode_list_free(thread, last_mtxs);
-          info->last_mtxs = NULL;
+        // clean prev_set if any
+        __kmp_depnode_list_free(thread, prev_set);
+        if (!dep_barrier) {
+          // move last_set to prev_set, new last_set will be allocated
+          info->prev_set = last_set;
+        } else {
+          info->prev_set = NULL;
+          info->last_flag = 0;
         }
-      } else {
-        // link node as successor of the last_out if any
-        npredecessors +=
-            __kmp_depnode_link_successor(gtid, thread, task, node, last_out);
+        info->last_set = NULL;
       }
-      info->last_flag = ENTRY_LAST_MTXS;
-      info->last_mtxs = __kmp_add_node(thread, info->last_mtxs, node);
-      if (info->mtx_lock == NULL) {
-        info->mtx_lock = (kmp_lock_t *)__kmp_allocate(sizeof(kmp_lock_t));
-        __kmp_init_lock(info->mtx_lock);
+      // for dep_barrier last_flag value should remain:
+      // 0 if last_set is empty, unchanged otherwise
+      if (!dep_barrier) {
+        info->last_flag = dep->flag; // store dep kind of the last_set
+        info->last_set = __kmp_add_node(thread, info->last_set, node);
       }
-      KMP_DEBUG_ASSERT(node->dn.mtx_num_locks < MAX_MTX_DEPS);
-      kmp_int32 m;
-      // Save lock in node's array
-      for (m = 0; m < MAX_MTX_DEPS; ++m) {
-        // sort pointers in decreasing order to avoid potential livelock
-        if (node->dn.mtx_locks[m] < info->mtx_lock) {
-          KMP_DEBUG_ASSERT(node->dn.mtx_locks[node->dn.mtx_num_locks] == NULL);
-          for (int n = node->dn.mtx_num_locks; n > m; --n) {
-            // shift right all lesser non-NULL pointers
-            KMP_DEBUG_ASSERT(node->dn.mtx_locks[n - 1] != NULL);
-            node->dn.mtx_locks[n] = node->dn.mtx_locks[n - 1];
+      // check if we are processing MTX dependency
+      if (dep->flag == KMP_DEP_MTX) {
+        if (info->mtx_lock == NULL) {
+          info->mtx_lock = (kmp_lock_t *)__kmp_allocate(sizeof(kmp_lock_t));
+          __kmp_init_lock(info->mtx_lock);
+        }
+        KMP_DEBUG_ASSERT(node->dn.mtx_num_locks < MAX_MTX_DEPS);
+        kmp_int32 m;
+        // Save lock in node's array
+        for (m = 0; m < MAX_MTX_DEPS; ++m) {
+          // sort pointers in decreasing order to avoid potential livelock
+          if (node->dn.mtx_locks[m] < info->mtx_lock) {
+            KMP_DEBUG_ASSERT(!node->dn.mtx_locks[node->dn.mtx_num_locks]);
+            for (int n = node->dn.mtx_num_locks; n > m; --n) {
+              // shift right all lesser non-NULL pointers
+              KMP_DEBUG_ASSERT(node->dn.mtx_locks[n - 1] != NULL);
+              node->dn.mtx_locks[n] = node->dn.mtx_locks[n - 1];
+            }
+            node->dn.mtx_locks[m] = info->mtx_lock;
+            break;
           }
-          node->dn.mtx_locks[m] = info->mtx_lock;
-          break;
         }
+        KMP_DEBUG_ASSERT(m < MAX_MTX_DEPS); // must break from loop
+        node->dn.mtx_num_locks++;
       }
-      KMP_DEBUG_ASSERT(m < MAX_MTX_DEPS); // must break from loop
-      node->dn.mtx_num_locks++;
     }
   }
   KA_TRACE(30, ("__kmp_process_deps<%d>: T#%d found %d predecessors\n", filter,
@@ -496,7 +565,7 @@ static bool __kmp_check_deps(kmp_int32 gtid, kmp_depnode_t *node,
                              kmp_depend_info_t *dep_list,
                              kmp_int32 ndeps_noalias,
                              kmp_depend_info_t *noalias_dep_list) {
-  int i, n_mtxs = 0;
+  int i, n_mtxs = 0, dep_all = 0;
 #if KMP_DEBUG
   kmp_taskdata_t *taskdata = KMP_TASK_TO_TASKDATA(task);
 #endif
@@ -508,30 +577,36 @@ static bool __kmp_check_deps(kmp_int32 gtid, kmp_depnode_t *node,
   // Filter deps in dep_list
   // TODO: Different algorithm for large dep_list ( > 10 ? )
   for (i = 0; i < ndeps; i++) {
-    if (dep_list[i].base_addr != 0) {
+    if (dep_list[i].base_addr != 0 &&
+        dep_list[i].base_addr != (kmp_intptr_t)KMP_SIZE_T_MAX) {
+      KMP_DEBUG_ASSERT(
+          dep_list[i].flag == KMP_DEP_IN || dep_list[i].flag == KMP_DEP_OUT ||
+          dep_list[i].flag == KMP_DEP_INOUT ||
+          dep_list[i].flag == KMP_DEP_MTX || dep_list[i].flag == KMP_DEP_SET);
       for (int j = i + 1; j < ndeps; j++) {
         if (dep_list[i].base_addr == dep_list[j].base_addr) {
-          dep_list[i].flags.in |= dep_list[j].flags.in;
-          dep_list[i].flags.out |=
-              (dep_list[j].flags.out ||
-               (dep_list[i].flags.in && dep_list[j].flags.mtx) ||
-               (dep_list[i].flags.mtx && dep_list[j].flags.in));
-          dep_list[i].flags.mtx =
-              dep_list[i].flags.mtx | dep_list[j].flags.mtx &&
-              !dep_list[i].flags.out;
+          if (dep_list[i].flag != dep_list[j].flag) {
+            // two different dependences on same address work identical to OUT
+            dep_list[i].flag = KMP_DEP_OUT;
+          }
           dep_list[j].base_addr = 0; // Mark j element as void
         }
       }
-      if (dep_list[i].flags.mtx) {
+      if (dep_list[i].flag == KMP_DEP_MTX) {
         // limit number of mtx deps to MAX_MTX_DEPS per node
         if (n_mtxs < MAX_MTX_DEPS && task != NULL) {
           ++n_mtxs;
         } else {
-          dep_list[i].flags.in = 1; // downgrade mutexinoutset to inout
-          dep_list[i].flags.out = 1;
-          dep_list[i].flags.mtx = 0;
+          dep_list[i].flag = KMP_DEP_OUT; // downgrade mutexinoutset to inout
         }
       }
+    } else if (dep_list[i].flag == KMP_DEP_ALL ||
+               dep_list[i].base_addr == (kmp_intptr_t)KMP_SIZE_T_MAX) {
+      // omp_all_memory dependence can be marked by compiler by either
+      // (addr=0 && flag=0x80) (flag KMP_DEP_ALL), or (addr=-1).
+      // omp_all_memory overrides all other dependences if any
+      dep_all = 1;
+      break;
     }
   }
 
@@ -545,10 +620,14 @@ static bool __kmp_check_deps(kmp_int32 gtid, kmp_depnode_t *node,
   // the end
   int npredecessors;
 
-  npredecessors = __kmp_process_deps<true>(gtid, node, hash, dep_barrier, ndeps,
-                                           dep_list, task);
-  npredecessors += __kmp_process_deps<false>(
-      gtid, node, hash, dep_barrier, ndeps_noalias, noalias_dep_list, task);
+  if (!dep_all) { // regular dependences
+    npredecessors = __kmp_process_deps<true>(gtid, node, hash, dep_barrier,
+                                             ndeps, dep_list, task);
+    npredecessors += __kmp_process_deps<false>(
+        gtid, node, hash, dep_barrier, ndeps_noalias, noalias_dep_list, task);
+  } else { // omp_all_memory dependence
+    npredecessors = __kmp_process_dep_all(gtid, node, *hash, dep_barrier, task);
+  }
 
   node->dn.task = task;
   KMP_MB();
@@ -687,6 +766,8 @@ kmp_int32 __kmpc_omp_task_with_deps(ident_t *loc_ref, kmp_int32 gtid,
         ompt_deps[i].dependence_type = ompt_dependence_type_in;
       else if (dep_list[i].flags.mtx)
         ompt_deps[i].dependence_type = ompt_dependence_type_mutexinoutset;
+      else if (dep_list[i].flags.set)
+        ompt_deps[i].dependence_type = ompt_dependence_type_inoutset;
     }
     for (i = 0; i < ndeps_noalias; i++) {
       ompt_deps[ndeps + i].variable.ptr = (void *)noalias_dep_list[i].base_addr;
@@ -699,6 +780,8 @@ kmp_int32 __kmpc_omp_task_with_deps(ident_t *loc_ref, kmp_int32 gtid,
       else if (noalias_dep_list[i].flags.mtx)
         ompt_deps[ndeps + i].dependence_type =
             ompt_dependence_type_mutexinoutset;
+      else if (noalias_dep_list[i].flags.set)
+        ompt_deps[ndeps + i].dependence_type = ompt_dependence_type_inoutset;
     }
     ompt_callbacks.ompt_callback(ompt_callback_dependences)(
         &(new_taskdata->ompt_task_info.task_data), ompt_deps, ompt_ndeps);
@@ -775,11 +858,7 @@ void __ompt_taskwait_dep_finish(kmp_taskdata_t *current_task,
                                 ompt_data_t *taskwait_task_data) {
   if (ompt_enabled.ompt_callback_task_schedule) {
     ompt_callbacks.ompt_callback(ompt_callback_task_schedule)(
-        &(current_task->ompt_task_info.task_data), ompt_task_switch,
-        taskwait_task_data);
-    ompt_callbacks.ompt_callback(ompt_callback_task_schedule)(
-        taskwait_task_data, ompt_task_complete,
-        &(current_task->ompt_task_info.task_data));
+        taskwait_task_data, ompt_taskwait_complete, NULL);
   }
   current_task->ompt_task_info.frame.enter_frame.ptr = NULL;
   *taskwait_task_data = ompt_data_none;
@@ -1065,16 +1144,15 @@ void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid, void (*entry)(void *),
                       void *args, kmp_int32 tdg_type) {
 
   __kmp_init_futex_lock(&taskgraph_lock);
-  id_counter = 0;
   for (int i = 0; i < ntdgs; i++) {
     if (dynamic_tdgs[i].loc == loc_ref->psource) {
-      // printf("Executing!  \n");
+       //printf("Executing!  \n");
       __kmpc_execute_tdg(loc_ref, gtid);
       return;
     }
   }
   if (tdg_type == DYNAMIC_TDG) {
-    // printf("Recording! \n");
+     //printf("Recording! \n");
     __kmpc_record(loc_ref, gtid, entry, args);
   } else if (tdg_type == STATIC_TDG) {
     // printf("Fill data and executing! \n");
@@ -1251,7 +1329,7 @@ kmp_task_t *kmp_get_free_task_from_indexer() {
 }
 
 void clean_free_task(kmp_task_t *task) {
-  kmp_taskdata_t *taskdata = KMP_TASK_TO_TASKDATA(task);
+  // kmp_taskdata_t *taskdata = KMP_TASK_TO_TASKDATA(task);
   // TODO: Limpiar task + privates tambien, no solo el taskdata
   // memset(&taskdata, 0, sizeof(kmp_taskdata_t));
 }
@@ -1354,7 +1432,6 @@ kmp_task_t *kmp_init_lazy_task(int static_id, kmp_task_t *current_task,
   new_taskdata->td_flags.proxy = flags->proxy;
   new_taskdata->td_flags.detachable = flags->detachable;
   new_taskdata->td_flags.hidden_helper = flags->hidden_helper;
-  new_taskdata->encountering_gtid = gtid;
   new_taskdata->td_task_team = thread->th.th_task_team;
   new_taskdata->td_size_alloc = tdg_static_data.sizeOfTask +
                                 tdg_static_data.sizeOfShareds +
@@ -1450,7 +1527,7 @@ void __kmpc_omp_wait_deps(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 ndeps,
       ompt_callbacks.ompt_callback(ompt_callback_task_create)(
           &(current_task->ompt_task_info.task_data),
           &(current_task->ompt_task_info.frame), taskwait_task_data,
-          ompt_task_explicit | ompt_task_undeferred | ompt_task_mergeable, 1,
+          ompt_task_taskwait | ompt_task_undeferred | ompt_task_mergeable, 1,
           OMPT_LOAD_OR_GET_RETURN_ADDRESS(gtid));
     }
   }
@@ -1477,6 +1554,8 @@ void __kmpc_omp_wait_deps(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 ndeps,
       else if (dep_list[i].flags.mtx)
         ompt_deps[ndeps + i].dependence_type =
             ompt_dependence_type_mutexinoutset;
+      else if (dep_list[i].flags.set)
+        ompt_deps[ndeps + i].dependence_type = ompt_dependence_type_inoutset;
     }
     for (i = 0; i < ndeps_noalias; i++) {
       ompt_deps[ndeps + i].variable.ptr = (void *)noalias_dep_list[i].base_addr;
@@ -1489,6 +1568,8 @@ void __kmpc_omp_wait_deps(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 ndeps,
       else if (noalias_dep_list[i].flags.mtx)
         ompt_deps[ndeps + i].dependence_type =
             ompt_dependence_type_mutexinoutset;
+      else if (noalias_dep_list[i].flags.set)
+        ompt_deps[ndeps + i].dependence_type = ompt_dependence_type_inoutset;
     }
     ompt_callbacks.ompt_callback(ompt_callback_dependences)(
         taskwait_task_data, ompt_deps, ompt_ndeps);
@@ -1506,8 +1587,10 @@ void __kmpc_omp_wait_deps(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 ndeps,
   bool ignore = current_task->td_flags.team_serial ||
                 current_task->td_flags.tasking_ser ||
                 current_task->td_flags.final;
-  ignore = ignore && thread->th.th_task_team != NULL &&
-           thread->th.th_task_team->tt.tt_found_proxy_tasks == FALSE;
+  ignore =
+      ignore && thread->th.th_task_team != NULL &&
+      thread->th.th_task_team->tt.tt_found_proxy_tasks == FALSE &&
+      thread->th.th_task_team->tt.tt_hidden_helper_task_encountered == FALSE;
   ignore = ignore || current_task->td_dephash == NULL;
 
   if (ignore) {
@@ -1522,8 +1605,6 @@ void __kmpc_omp_wait_deps(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 ndeps,
 
   kmp_depnode_t node = {0};
   __kmp_init_node(&node);
-  // the stack owns the node
-  __kmp_node_ref(&node);
 
   if (!__kmp_check_deps(gtid, &node, NULL, &current_task->td_dephash,
                         DEP_BARRIER, ndeps, dep_list, ndeps_noalias,

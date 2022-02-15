@@ -22,6 +22,26 @@
 namespace clang {
 namespace driver {
 
+/// ABI version of device library.
+struct DeviceLibABIVersion {
+  unsigned ABIVersion = 0;
+  DeviceLibABIVersion(unsigned V) : ABIVersion(V) {}
+  static DeviceLibABIVersion fromCodeObjectVersion(unsigned CodeObjectVersion) {
+    if (CodeObjectVersion < 4)
+      CodeObjectVersion = 4;
+    return DeviceLibABIVersion(CodeObjectVersion * 100);
+  }
+  /// Whether ABI version bc file is requested.
+  /// ABIVersion is code object version multiplied by 100. Code object v4
+  /// and below works with ROCm 5.0 and below which does not have
+  /// abi_version_*.bc. Code object v5 requires abi_version_500.bc.
+  bool requiresLibrary() { return ABIVersion >= 500; }
+  std::string toString() {
+    assert(ABIVersion % 100 == 0 && "Not supported");
+    return Twine(ABIVersion / 100).str();
+  }
+};
+
 /// A class to find a viable ROCM installation
 /// TODO: Generalize to handle libclc.
 class RocmInstallationDetector {
@@ -42,9 +62,16 @@ private:
   struct Candidate {
     llvm::SmallString<0> Path;
     bool StrictChecking;
+    // Release string for ROCm packages built with SPACK if not empty. The
+    // installation directories of ROCm packages built with SPACK follow the
+    // convention <package_name>-<rocm_release_string>-<hash>.
+    std::string SPACKReleaseStr;
 
-    Candidate(std::string Path, bool StrictChecking = false)
-        : Path(Path), StrictChecking(StrictChecking) {}
+    bool isSPACK() const { return !SPACKReleaseStr.empty(); }
+    Candidate(std::string Path, bool StrictChecking = false,
+              StringRef SPACKReleaseStr = {})
+        : Path(Path), StrictChecking(StrictChecking),
+          SPACKReleaseStr(SPACKReleaseStr.str()) {}
   };
 
   const Driver &D;
@@ -67,6 +94,8 @@ private:
   StringRef RocmPathArg;
   // ROCm device library paths specified by --rocm-device-lib-path.
   std::vector<std::string> RocmDeviceLibPathArg;
+  // HIP runtime path specified by --hip-path.
+  StringRef HIPPathArg;
   // HIP version specified by --hip-version.
   StringRef HIPVersionArg;
   // Wheter -nogpulib is specified.
@@ -98,6 +127,15 @@ private:
   ConditionalLibrary DenormalsAreZero;
   ConditionalLibrary CorrectlyRoundedSqrt;
 
+  // Maps ABI version to library path. The version number is in the format of
+  // three digits as used in the ABI version library name.
+  std::map<unsigned, std::string> ABIVersionMap;
+
+  // Cache ROCm installation search paths.
+  SmallVector<Candidate, 4> ROCmSearchDirs;
+  bool PrintROCmSearchDirs;
+  bool Verbose;
+
   bool allGenericLibsValid() const {
     return !OCML.empty() && !OCKL.empty() && !OpenCL.empty() && !HIP.empty() &&
            WavefrontSize64.isValid() && FiniteOnly.isValid() &&
@@ -107,7 +145,14 @@ private:
 
   void scanLibDevicePath(llvm::StringRef Path);
   bool parseHIPVersionFile(llvm::StringRef V);
-  SmallVector<Candidate, 4> getInstallationPathCandidates();
+  const SmallVectorImpl<Candidate> &getInstallationPathCandidates();
+
+  /// Find the path to a SPACK package under the ROCm candidate installation
+  /// directory if the candidate is a SPACK ROCm candidate. \returns empty
+  /// string if the candidate is not SPACK ROCm candidate or the requested
+  /// package is not found.
+  llvm::SmallString<0> findSPACKPackage(const Candidate &Cand,
+                                        StringRef PackageName);
 
 public:
   RocmInstallationDetector(const Driver &D, const llvm::Triple &HostTriple,
@@ -121,7 +166,12 @@ public:
   getCommonBitcodeLibs(const llvm::opt::ArgList &DriverArgs,
                        StringRef LibDeviceFile, bool Wave64, bool DAZ,
                        bool FiniteOnly, bool UnsafeMathOpt,
-                       bool FastRelaxedMath, bool CorrectSqrt) const;
+                       bool FastRelaxedMath, bool CorrectSqrt,
+                       DeviceLibABIVersion ABIVer, bool isOpenMP) const;
+  /// Check file paths of default bitcode libraries common to AMDGPU based
+  /// toolchains. \returns false if there are invalid or missing files.
+  bool checkCommonBitcodeLibs(StringRef GPUArch, StringRef LibDeviceFile,
+                              DeviceLibABIVersion ABIVer) const;
 
   /// Check whether we detected a valid HIP runtime.
   bool hasHIPRuntime() const { return HasHIPRuntime; }
@@ -191,6 +241,13 @@ public:
 
   StringRef getCorrectlyRoundedSqrtPath(bool Enabled) const {
     return CorrectlyRoundedSqrt.get(Enabled);
+  }
+
+  StringRef getABIVersionPath(DeviceLibABIVersion ABIVer) const {
+    auto Loc = ABIVersionMap.find(ABIVer.ABIVersion);
+    if (Loc == ABIVersionMap.end())
+      return StringRef();
+    return Loc->second;
   }
 
   /// Get libdevice file for given architecture

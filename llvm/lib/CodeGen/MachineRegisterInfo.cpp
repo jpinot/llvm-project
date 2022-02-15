@@ -43,8 +43,7 @@ void MachineRegisterInfo::Delegate::anchor() {}
 
 MachineRegisterInfo::MachineRegisterInfo(MachineFunction *MF)
     : MF(MF), TracksSubRegLiveness(MF->getSubtarget().enableSubRegLiveness() &&
-                                   EnableSubRegLiveness),
-      IsUpdatedCSRsInitialized(false) {
+                                   EnableSubRegLiveness) {
   unsigned NumRegs = getTargetRegisterInfo()->getNumRegs();
   VRegInfo.reserve(256);
   RegAllocHints.reserve(256);
@@ -383,9 +382,7 @@ void MachineRegisterInfo::replaceRegWith(Register FromReg, Register ToReg) {
   const TargetRegisterInfo *TRI = getTargetRegisterInfo();
 
   // TODO: This could be more efficient by bulk changing the operands.
-  for (reg_iterator I = reg_begin(FromReg), E = reg_end(); I != E; ) {
-    MachineOperand &O = *I;
-    ++I;
+  for (MachineOperand &O : llvm::make_early_inc_range(reg_operands(FromReg))) {
     if (Register::isPhysicalRegister(ToReg)) {
       O.substPhysReg(ToReg, *TRI);
     } else {
@@ -530,11 +527,11 @@ bool MachineRegisterInfo::isConstantPhysReg(MCRegister PhysReg) const {
 /// specified register as undefined which causes the DBG_VALUE to be
 /// deleted during LiveDebugVariables analysis.
 void MachineRegisterInfo::markUsesInDebugValueAsUndef(Register Reg) const {
-  // Mark any DBG_VALUE that uses Reg as undef (but don't delete it.)
+  // Mark any DBG_VALUE* that uses Reg as undef (but don't delete it.)
   // We use make_early_inc_range because setReg invalidates the iterator.
   for (MachineInstr &UseMI : llvm::make_early_inc_range(use_instructions(Reg))) {
-    if (UseMI.isDebugValue())
-      UseMI.getDebugOperandForReg(Reg)->setReg(0U);
+    if (UseMI.isDebugValue() && UseMI.hasDebugOperandForReg(Reg))
+      UseMI.setDebugValueUndef();
   }
 }
 
@@ -582,8 +579,9 @@ bool MachineRegisterInfo::isPhysRegModified(MCRegister PhysReg,
   return false;
 }
 
-bool MachineRegisterInfo::isPhysRegUsed(MCRegister PhysReg) const {
-  if (UsedPhysRegMask.test(PhysReg))
+bool MachineRegisterInfo::isPhysRegUsed(MCRegister PhysReg,
+                                        bool SkipRegMaskTest) const {
+  if (!SkipRegMaskTest && UsedPhysRegMask.test(PhysReg))
     return true;
   const TargetRegisterInfo *TRI = getTargetRegisterInfo();
   for (MCRegAliasIterator AliasReg(PhysReg, TRI, true); AliasReg.isValid();

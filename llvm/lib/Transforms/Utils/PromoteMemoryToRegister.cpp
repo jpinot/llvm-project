@@ -25,13 +25,13 @@
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/InstructionSimplify.h"
 #include "llvm/Analysis/IteratedDominanceFrontier.h"
-#include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Constant.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DIBuilder.h"
+#include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
@@ -45,6 +45,7 @@
 #include "llvm/IR/Type.h"
 #include "llvm/IR/User.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/PromoteMemToReg.h"
 #include <algorithm>
 #include <cassert>
@@ -70,7 +71,8 @@ bool llvm::isAllocaPromotable(const AllocaInst *AI) {
       if (LI->isVolatile())
         return false;
     } else if (const StoreInst *SI = dyn_cast<StoreInst>(U)) {
-      if (SI->getOperand(0) == AI)
+      if (SI->getValueOperand() == AI ||
+          SI->getValueOperand()->getType() != AI->getAllocatedType())
         return false; // Don't allow a store OF the AI, only INTO the AI.
       // Note that atomic stores can be transformed; atomic semantics do
       // not have any meaning for a local alloca.
@@ -306,7 +308,7 @@ static void addAssumeNonNull(AssumptionCache *AC, LoadInst *LI) {
   LoadNotNull->insertAfter(LI);
   CallInst *CI = CallInst::Create(AssumeIntrinsic, {LoadNotNull});
   CI->insertAfter(LoadNotNull);
-  AC->registerAssumption(CI);
+  AC->registerAssumption(cast<AssumeInst>(CI));
 }
 
 static void removeIntrinsicUsers(AllocaInst *AI) {
@@ -399,7 +401,7 @@ static bool rewriteSingleStoreAlloca(AllocaInst *AI, AllocaInfo &Info,
     // If the replacement value is the load, this must occur in unreachable
     // code.
     if (ReplVal == LI)
-      ReplVal = UndefValue::get(LI->getType());
+      ReplVal = PoisonValue::get(LI->getType());
 
     // If the load was marked as nonnull we don't want to lose
     // that information when we erase this Load. So we preserve
@@ -508,7 +510,7 @@ static bool promoteSingleBlockAlloca(AllocaInst *AI, const AllocaInfo &Info,
       // If the replacement value is the load, this must occur in unreachable
       // code.
       if (ReplVal == LI)
-        ReplVal = UndefValue::get(LI->getType());
+        ReplVal = PoisonValue::get(LI->getType());
 
       LI->replaceAllUsesWith(ReplVal);
     }
@@ -672,7 +674,7 @@ void PromoteMem2Reg::run() {
     // unreachable basic blocks that were not processed by walking the dominator
     // tree. Just delete the users now.
     if (!A->use_empty())
-      A->replaceAllUsesWith(UndefValue::get(A->getType()));
+      A->replaceAllUsesWith(PoisonValue::get(A->getType()));
     A->eraseFromParent();
   }
 

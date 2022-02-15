@@ -28,7 +28,7 @@ using namespace llvm;
 
 ARMException::ARMException(AsmPrinter *A) : DwarfCFIExceptionBase(A) {}
 
-ARMException::~ARMException() {}
+ARMException::~ARMException() = default;
 
 ARMTargetStreamer &ARMException::getTargetStreamer() {
   MCTargetStreamer &TS = *Asm->OutStreamer->getTargetStreamer();
@@ -39,13 +39,13 @@ void ARMException::beginFunction(const MachineFunction *MF) {
   if (Asm->MAI->getExceptionHandlingType() == ExceptionHandling::ARM)
     getTargetStreamer().emitFnStart();
   // See if we need call frame info.
-  AsmPrinter::CFIMoveType MoveType = Asm->needsCFIMoves();
-  assert(MoveType != AsmPrinter::CFI_M_EH &&
+  AsmPrinter::CFISection CFISecType = Asm->getFunctionCFISectionType(*MF);
+  assert(CFISecType != AsmPrinter::CFISection::EH &&
          "non-EH CFI not yet supported in prologue with EHABI lowering");
 
-  if (MoveType == AsmPrinter::CFI_M_Debug) {
+  if (CFISecType == AsmPrinter::CFISection::Debug) {
     if (!hasEmittedCFISections) {
-      if (Asm->needsOnlyDebugCFIMoves())
+      if (Asm->getModuleCFISectionType() == AsmPrinter::CFISection::Debug)
         Asm->OutStreamer->emitCFISections(false, true);
       hasEmittedCFISections = true;
     }
@@ -75,7 +75,6 @@ void ARMException::endFunction(const MachineFunction *MF) {
     // Emit references to personality.
     if (Per) {
       MCSymbol *PerSym = Asm->getSymbol(Per);
-      Asm->OutStreamer->emitSymbolAttribute(PerSym, MCSA_Global);
       ATS.emitPersonality(PerSym);
     }
 

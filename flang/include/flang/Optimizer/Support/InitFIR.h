@@ -24,16 +24,27 @@
 
 namespace fir::support {
 
+#define FLANG_NONCODEGEN_DIALECT_LIST                                          \
+  mlir::AffineDialect, FIROpsDialect, mlir::acc::OpenACCDialect,               \
+      mlir::omp::OpenMPDialect, mlir::scf::SCFDialect,                         \
+      mlir::arith::ArithmeticDialect, mlir::cf::ControlFlowDialect,            \
+      mlir::StandardOpsDialect, mlir::vector::VectorDialect
+
 // The definitive list of dialects used by flang.
 #define FLANG_DIALECT_LIST                                                     \
-  mlir::AffineDialect, FIROpsDialect, mlir::LLVM::LLVMDialect,                 \
-      mlir::acc::OpenACCDialect, mlir::omp::OpenMPDialect,                     \
-      mlir::scf::SCFDialect, mlir::StandardOpsDialect,                         \
-      mlir::vector::VectorDialect
+  FLANG_NONCODEGEN_DIALECT_LIST, FIRCodeGenDialect, mlir::LLVM::LLVMDialect
+
+inline void registerNonCodegenDialects(mlir::DialectRegistry &registry) {
+  registry.insert<FLANG_NONCODEGEN_DIALECT_LIST>();
+}
 
 /// Register all the dialects used by flang.
 inline void registerDialects(mlir::DialectRegistry &registry) {
   registry.insert<FLANG_DIALECT_LIST>();
+}
+
+inline void loadNonCodegenDialects(mlir::MLIRContext &context) {
+  context.loadDialect<FLANG_NONCODEGEN_DIALECT_LIST>();
 }
 
 /// Forced load of all the dialects used by flang.  Lowering is not an MLIR
@@ -45,7 +56,7 @@ inline void loadDialects(mlir::MLIRContext &context) {
 
 /// Register the standard passes we use. This comes from registerAllPasses(),
 /// but is a smaller set since we aren't using many of the passes found there.
-inline void registerFIRPasses() {
+inline void registerMLIRPassesForFortranTools() {
   mlir::registerCanonicalizerPass();
   mlir::registerCSEPass();
   mlir::registerAffineLoopFusionPass();
@@ -55,7 +66,7 @@ inline void registerFIRPasses() {
   mlir::registerPrintOpStatsPass();
   mlir::registerInlinerPass();
   mlir::registerSCCPPass();
-  mlir::registerMemRefDataFlowOptPass();
+  mlir::registerAffineScalarReplacementPass();
   mlir::registerSymbolDCEPass();
   mlir::registerLocationSnapshotPass();
   mlir::registerAffinePipelineDataTransferPass();
@@ -70,6 +81,9 @@ inline void registerFIRPasses() {
 
   mlir::registerConvertAffineToStandardPass();
 }
+
+/// Register the interfaces needed to lower to LLVM IR.
+void registerLLVMTranslation(mlir::MLIRContext &context);
 
 } // namespace fir::support
 

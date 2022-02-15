@@ -50,7 +50,7 @@ std::string EquivalenceObject::AsFortran() const {
 }
 
 Scope &Scope::MakeScope(Kind kind, Symbol *symbol) {
-  return children_.emplace_back(*this, kind, symbol);
+  return children_.emplace_back(*this, kind, symbol, context_);
 }
 
 template <typename T>
@@ -61,7 +61,7 @@ static std::vector<common::Reference<T>> GetSortedSymbols(
   for (auto &pair : symbols) {
     result.push_back(*pair.second);
   }
-  std::sort(result.begin(), result.end());
+  std::sort(result.begin(), result.end(), SymbolSourcePositionCompare{});
   return result;
 }
 
@@ -215,7 +215,7 @@ const DeclTypeSpec *Scope::GetType(const SomeExpr &expr) {
       case TypeCategory::Complex:
         return &MakeNumericType(dyType->category(), KindExpr{dyType->kind()});
       case TypeCategory::Character:
-        if (const ParamValue * lenParam{dyType->charLength()}) {
+        if (const ParamValue * lenParam{dyType->charLengthParamValue()}) {
           return &MakeCharacterType(
               ParamValue{*lenParam}, KindExpr{dyType->kind()});
         } else {
@@ -285,7 +285,7 @@ void Scope::add_importName(const SourceName &name) {
 
 // true if name can be imported or host-associated from parent scope.
 bool Scope::CanImport(const SourceName &name) const {
-  if (IsGlobal() || parent_.IsGlobal()) {
+  if (IsTopLevel() || parent_.IsTopLevel()) {
     return false;
   }
   switch (GetImportKind()) {
@@ -306,7 +306,7 @@ const Scope *Scope::FindScope(parser::CharBlock source) const {
 
 Scope *Scope::FindScope(parser::CharBlock source) {
   bool isContained{sourceRange_.Contains(source)};
-  if (!isContained && !IsGlobal() && !IsModuleFile()) {
+  if (!isContained && !IsTopLevel() && !IsModuleFile()) {
     return nullptr;
   }
   for (auto &child : children_) {
@@ -314,11 +314,11 @@ Scope *Scope::FindScope(parser::CharBlock source) {
       return scope;
     }
   }
-  return isContained ? this : nullptr;
+  return isContained && !IsTopLevel() ? this : nullptr;
 }
 
 void Scope::AddSourceRange(const parser::CharBlock &source) {
-  for (auto *scope = this; !scope->IsGlobal(); scope = &scope->parent()) {
+  for (auto *scope{this}; !scope->IsGlobal(); scope = &scope->parent()) {
     scope->sourceRange_.ExtendToCover(source);
   }
 }
@@ -404,11 +404,11 @@ const Scope &Scope::GetDerivedTypeBase() const {
   return *child;
 }
 
-void Scope::InstantiateDerivedTypes(SemanticsContext &context) {
+void Scope::InstantiateDerivedTypes() {
   for (DeclTypeSpec &type : declTypeSpecs_) {
     if (type.category() == DeclTypeSpec::TypeDerived ||
         type.category() == DeclTypeSpec::ClassDerived) {
-      type.derivedTypeSpec().Instantiate(*this, context);
+      type.derivedTypeSpec().Instantiate(*this);
     }
   }
 }

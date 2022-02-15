@@ -44,6 +44,11 @@ typedef struct MlirDialectHandle MlirDialectHandle;
 MLIR_CAPI_EXPORTED
 MlirStringRef mlirDialectHandleGetNamespace(MlirDialectHandle);
 
+/// Inserts the dialect associated with the provided dialect handle into the
+/// provided dialect registry
+MLIR_CAPI_EXPORTED void mlirDialectHandleInsertDialect(MlirDialectHandle,
+                                                       MlirDialectRegistry);
+
 /// Registers the dialect associated with the provided dialect handle.
 MLIR_CAPI_EXPORTED void mlirDialectHandleRegisterDialect(MlirDialectHandle,
                                                          MlirContext);
@@ -56,6 +61,12 @@ MLIR_CAPI_EXPORTED MlirDialect mlirDialectHandleLoadDialect(MlirDialectHandle,
 /// This is needed before creating IR for these Dialects.
 /// TODO: Remove this function once the real registration API is finished.
 MLIR_CAPI_EXPORTED void mlirRegisterAllDialects(MlirContext context);
+
+/// Register all translations to LLVM IR for dialects that can support it.
+MLIR_CAPI_EXPORTED void mlirRegisterAllLLVMTranslations(MlirContext context);
+
+/// Register all compiler passes of MLIR.
+MLIR_CAPI_EXPORTED void mlirRegisterAllPasses();
 
 #ifdef __cplusplus
 }

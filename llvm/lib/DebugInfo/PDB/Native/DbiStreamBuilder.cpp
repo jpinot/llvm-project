@@ -18,6 +18,7 @@
 #include "llvm/DebugInfo/PDB/Native/RawError.h"
 #include "llvm/Object/COFF.h"
 #include "llvm/Support/BinaryStreamWriter.h"
+#include "llvm/Support/Parallel.h"
 
 using namespace llvm;
 using namespace llvm::codeview;
@@ -29,7 +30,7 @@ DbiStreamBuilder::DbiStreamBuilder(msf::MSFBuilder &Msf)
       PdbDllVersion(0), PdbDllRbld(0), Flags(0), MachineType(PDB_Machine::x86),
       Header(nullptr) {}
 
-DbiStreamBuilder::~DbiStreamBuilder() {}
+DbiStreamBuilder::~DbiStreamBuilder() = default;
 
 void DbiStreamBuilder::setVersionHeader(PdbRaw_DbiVer V) { VerHeader = V; }
 
@@ -333,8 +334,6 @@ static uint16_t toSecMapFlags(uint32_t Flags) {
     Ret |= static_cast<uint16_t>(OMFSegDescFlags::Write);
   if (Flags & COFF::IMAGE_SCN_MEM_EXECUTE)
     Ret |= static_cast<uint16_t>(OMFSegDescFlags::Execute);
-  if (Flags & COFF::IMAGE_SCN_MEM_EXECUTE)
-    Ret |= static_cast<uint16_t>(OMFSegDescFlags::Execute);
   if (!(Flags & COFF::IMAGE_SCN_MEM_16BIT))
     Ret |= static_cast<uint16_t>(OMFSegDescFlags::AddressIs32Bit);
 
@@ -394,9 +393,16 @@ Error DbiStreamBuilder::commit(const msf::MSFLayout &Layout,
     return EC;
 
   for (auto &M : ModiList) {
-    if (auto EC = M->commit(Writer, Layout, MsfBuffer))
+    if (auto EC = M->commit(Writer))
       return EC;
   }
+
+  // Commit symbol streams. This is a lot of data, so do it in parallel.
+  if (auto EC = parallelForEachError(
+          ModiList, [&](std::unique_ptr<DbiModuleDescriptorBuilder> &M) {
+            return M->commitSymbolStream(Layout, MsfBuffer);
+          }))
+    return EC;
 
   if (!SectionContribs.empty()) {
     if (auto EC = Writer.writeEnum(DbiSecContribVer60))

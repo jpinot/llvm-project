@@ -51,8 +51,11 @@ static void PrintResults(AliasResult AR, bool P, const Value *V1,
       V2->printAsOperand(os2, true, M);
     }
 
-    if (o2 < o1)
+    if (o2 < o1) {
       std::swap(o1, o2);
+      // Change offset sign for the local AR, for printing only.
+      AR.swap();
+    }
     errs() << "  " << AR << ":\t" << o1 << ", " << o2 << "\n";
   }
 }
@@ -139,31 +142,31 @@ void AAEvaluator::runInternal(Function &F, AAResults &AA) {
   for (SetVector<Value *>::iterator I1 = Pointers.begin(), E = Pointers.end();
        I1 != E; ++I1) {
     auto I1Size = LocationSize::afterPointer();
-    Type *I1ElTy = cast<PointerType>((*I1)->getType())->getElementType();
+    Type *I1ElTy = (*I1)->getType()->getPointerElementType();
     if (I1ElTy->isSized())
       I1Size = LocationSize::precise(DL.getTypeStoreSize(I1ElTy));
 
     for (SetVector<Value *>::iterator I2 = Pointers.begin(); I2 != I1; ++I2) {
       auto I2Size = LocationSize::afterPointer();
-      Type *I2ElTy = cast<PointerType>((*I2)->getType())->getElementType();
+      Type *I2ElTy = (*I2)->getType()->getPointerElementType();
       if (I2ElTy->isSized())
         I2Size = LocationSize::precise(DL.getTypeStoreSize(I2ElTy));
 
       AliasResult AR = AA.alias(*I1, I1Size, *I2, I2Size);
       switch (AR) {
-      case NoAlias:
+      case AliasResult::NoAlias:
         PrintResults(AR, PrintNoAlias, *I1, *I2, F.getParent());
         ++NoAliasCount;
         break;
-      case MayAlias:
+      case AliasResult::MayAlias:
         PrintResults(AR, PrintMayAlias, *I1, *I2, F.getParent());
         ++MayAliasCount;
         break;
-      case PartialAlias:
+      case AliasResult::PartialAlias:
         PrintResults(AR, PrintPartialAlias, *I1, *I2, F.getParent());
         ++PartialAliasCount;
         break;
-      case MustAlias:
+      case AliasResult::MustAlias:
         PrintResults(AR, PrintMustAlias, *I1, *I2, F.getParent());
         ++MustAliasCount;
         break;
@@ -178,19 +181,19 @@ void AAEvaluator::runInternal(Function &F, AAResults &AA) {
         AliasResult AR = AA.alias(MemoryLocation::get(cast<LoadInst>(Load)),
                                   MemoryLocation::get(cast<StoreInst>(Store)));
         switch (AR) {
-        case NoAlias:
+        case AliasResult::NoAlias:
           PrintLoadStoreResults(AR, PrintNoAlias, Load, Store, F.getParent());
           ++NoAliasCount;
           break;
-        case MayAlias:
+        case AliasResult::MayAlias:
           PrintLoadStoreResults(AR, PrintMayAlias, Load, Store, F.getParent());
           ++MayAliasCount;
           break;
-        case PartialAlias:
+        case AliasResult::PartialAlias:
           PrintLoadStoreResults(AR, PrintPartialAlias, Load, Store, F.getParent());
           ++PartialAliasCount;
           break;
-        case MustAlias:
+        case AliasResult::MustAlias:
           PrintLoadStoreResults(AR, PrintMustAlias, Load, Store, F.getParent());
           ++MustAliasCount;
           break;
@@ -205,19 +208,19 @@ void AAEvaluator::runInternal(Function &F, AAResults &AA) {
         AliasResult AR = AA.alias(MemoryLocation::get(cast<StoreInst>(*I1)),
                                   MemoryLocation::get(cast<StoreInst>(*I2)));
         switch (AR) {
-        case NoAlias:
+        case AliasResult::NoAlias:
           PrintLoadStoreResults(AR, PrintNoAlias, *I1, *I2, F.getParent());
           ++NoAliasCount;
           break;
-        case MayAlias:
+        case AliasResult::MayAlias:
           PrintLoadStoreResults(AR, PrintMayAlias, *I1, *I2, F.getParent());
           ++MayAliasCount;
           break;
-        case PartialAlias:
+        case AliasResult::PartialAlias:
           PrintLoadStoreResults(AR, PrintPartialAlias, *I1, *I2, F.getParent());
           ++PartialAliasCount;
           break;
-        case MustAlias:
+        case AliasResult::MustAlias:
           PrintLoadStoreResults(AR, PrintMustAlias, *I1, *I2, F.getParent());
           ++MustAliasCount;
           break;
@@ -230,7 +233,7 @@ void AAEvaluator::runInternal(Function &F, AAResults &AA) {
   for (CallBase *Call : Calls) {
     for (auto Pointer : Pointers) {
       auto Size = LocationSize::afterPointer();
-      Type *ElTy = cast<PointerType>(Pointer->getType())->getElementType();
+      Type *ElTy = Pointer->getType()->getPointerElementType();
       if (ElTy->isSized())
         Size = LocationSize::precise(DL.getTypeStoreSize(ElTy));
 

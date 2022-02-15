@@ -33,6 +33,7 @@
 
 namespace clang {
 
+class AnalyzerOptions;
 class BlockDecl;
 class CXXBoolLiteralExpr;
 class CXXMethodDecl;
@@ -66,14 +67,13 @@ protected:
 
   ProgramStateManager &StateMgr;
 
+  const AnalyzerOptions &AnOpts;
+
   /// The scalar type to use for array indices.
   const QualType ArrayIndexTy;
 
   /// The width of the scalar type used for array indices.
   const unsigned ArrayIndexWidth;
-
-  virtual SVal evalCastFromNonLoc(NonLoc val, QualType castTy) = 0;
-  virtual SVal evalCastFromLoc(Loc val, QualType castTy) = 0;
 
   SVal evalCastKind(UndefinedVal V, QualType CastTy, QualType OriginalTy);
   SVal evalCastKind(UnknownVal V, QualType CastTy, QualType OriginalTy);
@@ -96,33 +96,23 @@ protected:
                        QualType OriginalTy);
   SVal evalCastSubKind(nonloc::PointerToMember V, QualType CastTy,
                        QualType OriginalTy);
-
-public:
-  // FIXME: Make these protected again once RegionStoreManager correctly
-  // handles loads from different bound value types.
-  virtual SVal dispatchCast(SVal val, QualType castTy) = 0;
+  /// Reduce cast expression by removing redundant intermediate casts.
+  /// E.g.
+  /// - (char)(short)(int x) -> (char)(int x)
+  /// - (int)(int x) -> int x
+  ///
+  /// \param V -- SymbolVal, which pressumably contains SymbolCast or any symbol
+  /// that is applicable for cast operation.
+  /// \param CastTy -- QualType, which `V` shall be cast to.
+  /// \return SVal with simplified cast expression.
+  /// \note: Currently only support integral casts.
+  SVal simplifySymbolCast(nonloc::SymbolVal V, QualType CastTy);
 
 public:
   SValBuilder(llvm::BumpPtrAllocator &alloc, ASTContext &context,
-              ProgramStateManager &stateMgr)
-      : Context(context), BasicVals(context, alloc),
-        SymMgr(context, BasicVals, alloc), MemMgr(context, alloc),
-        StateMgr(stateMgr), ArrayIndexTy(context.LongLongTy),
-        ArrayIndexWidth(context.getTypeSize(ArrayIndexTy)) {}
+              ProgramStateManager &stateMgr);
 
   virtual ~SValBuilder() = default;
-
-  bool haveSameType(const SymExpr *Sym1, const SymExpr *Sym2) {
-    return haveSameType(Sym1->getType(), Sym2->getType());
-  }
-
-  bool haveSameType(QualType Ty1, QualType Ty2) {
-    // FIXME: Remove the second disjunct when we support symbolic
-    // truncation/extension.
-    return (Context.getCanonicalType(Ty1) == Context.getCanonicalType(Ty2) ||
-            (Ty1->isIntegralOrEnumerationType() &&
-             Ty2->isIntegralOrEnumerationType()));
-  }
 
   SVal evalCast(SVal V, QualType CastTy, QualType OriginalTy);
 
@@ -196,6 +186,8 @@ public:
   MemRegionManager &getRegionManager() { return MemMgr; }
   const MemRegionManager &getRegionManager() const { return MemMgr; }
 
+  const AnalyzerOptions &getAnalyzerOptions() const { return AnOpts; }
+
   // Forwarding methods to SymbolManager.
 
   const SymbolConjured* conjureSymbol(const Stmt *stmt,
@@ -245,6 +237,14 @@ public:
   DefinedOrUnknownSVal getConjuredHeapSymbolVal(const Expr *E,
                                                 const LocationContext *LCtx,
                                                 unsigned Count);
+
+  /// Conjure a symbol representing heap allocated memory region.
+  ///
+  /// Note, now, the expression *doesn't* need to represent a location.
+  /// But the type need to!
+  DefinedOrUnknownSVal getConjuredHeapSymbolVal(const Expr *E,
+                                                const LocationContext *LCtx,
+                                                QualType type, unsigned Count);
 
   DefinedOrUnknownSVal getDerivedRegionValueSymbolVal(
       SymbolRef parentSymbol, const TypedValueRegion *region);
@@ -387,6 +387,10 @@ public:
   Loc makeLoc(const llvm::APSInt& integer) {
     return loc::ConcreteInt(BasicVals.getValue(integer));
   }
+
+  /// Return MemRegionVal on success cast, otherwise return None.
+  Optional<loc::MemRegionVal> getCastedMemRegionVal(const MemRegion *region,
+                                                    QualType type);
 
   /// Make an SVal that represents the given symbol. This follows the convention
   /// of representing Loc-type symbols (symbolic pointers and references)

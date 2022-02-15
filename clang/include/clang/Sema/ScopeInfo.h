@@ -58,7 +58,6 @@ class Scope;
 class Stmt;
 class SwitchStmt;
 class TemplateParameterList;
-class TemplateTypeParmDecl;
 class VarDecl;
 
 namespace sema {
@@ -117,6 +116,10 @@ public:
 
   /// Whether this function contains any indirect gotos.
   bool HasIndirectGoto : 1;
+
+  /// Whether this function contains any statement marked with
+  /// \c [[clang::musttail]].
+  bool HasMustTail : 1;
 
   /// Whether a statement was dropped because it was invalid.
   bool HasDroppedStmt : 1;
@@ -177,8 +180,9 @@ public:
   /// First 'return' statement in the current function.
   SourceLocation FirstReturnLoc;
 
-  /// First C++ 'try' statement in the current function.
-  SourceLocation FirstCXXTryLoc;
+  /// First C++ 'try' or ObjC @try statement in the current function.
+  SourceLocation FirstCXXOrObjCTryLoc;
+  enum { TryLocIsCXX, TryLocIsObjC, Unknown } FirstTryType = Unknown;
 
   /// First SEH '__try' statement in the current function.
   SourceLocation FirstSEHTryLoc;
@@ -376,16 +380,15 @@ protected:
 public:
   FunctionScopeInfo(DiagnosticsEngine &Diag)
       : Kind(SK_Function), HasBranchProtectedScope(false),
-        HasBranchIntoScope(false), HasIndirectGoto(false),
+        HasBranchIntoScope(false), HasIndirectGoto(false), HasMustTail(false),
         HasDroppedStmt(false), HasOMPDeclareReductionCombiner(false),
         HasOSSDeclareReductionCombiner(false),
         HasOSSExecutableDirective(false),
         HasFallthroughStmt(false), UsesFPIntrin(false),
-        HasPotentialAvailabilityViolations(false),
-        ObjCShouldCallSuper(false), ObjCIsDesignatedInit(false),
-        ObjCWarnForNoDesignatedInitChain(false), ObjCIsSecondaryInit(false),
-        ObjCWarnForNoInitDelegation(false), NeedsCoroutineSuspends(true),
-        ErrorTrap(Diag) {}
+        HasPotentialAvailabilityViolations(false), ObjCShouldCallSuper(false),
+        ObjCIsDesignatedInit(false), ObjCWarnForNoDesignatedInitChain(false),
+        ObjCIsSecondaryInit(false), ObjCWarnForNoInitDelegation(false),
+        NeedsCoroutineSuspends(true), ErrorTrap(Diag) {}
 
   virtual ~FunctionScopeInfo();
 
@@ -431,6 +434,8 @@ public:
     HasIndirectGoto = true;
   }
 
+  void setHasMustTail() { HasMustTail = true; }
+
   void setHasDroppedStmt() {
     HasDroppedStmt = true;
   }
@@ -457,7 +462,14 @@ public:
 
   void setHasCXXTry(SourceLocation TryLoc) {
     setHasBranchProtectedScope();
-    FirstCXXTryLoc = TryLoc;
+    FirstCXXOrObjCTryLoc = TryLoc;
+    FirstTryType = TryLocIsCXX;
+  }
+
+  void setHasObjCTry(SourceLocation TryLoc) {
+    setHasBranchProtectedScope();
+    FirstCXXOrObjCTryLoc = TryLoc;
+    FirstTryType = TryLocIsObjC;
   }
 
   void setHasSEHTry(SourceLocation TryLoc) {
@@ -466,9 +478,8 @@ public:
   }
 
   bool NeedsScopeChecking() const {
-    return !HasDroppedStmt &&
-        (HasIndirectGoto ||
-          (HasBranchProtectedScope && HasBranchIntoScope));
+    return !HasDroppedStmt && (HasIndirectGoto || HasMustTail ||
+                               (HasBranchProtectedScope && HasBranchIntoScope));
   }
 
   // Add a block introduced in this function.
@@ -1013,10 +1024,7 @@ public:
     return NonODRUsedCapturingExprs.count(CapturingVarExpr);
   }
   void removePotentialCapture(Expr *E) {
-    PotentiallyCapturingExprs.erase(
-        std::remove(PotentiallyCapturingExprs.begin(),
-            PotentiallyCapturingExprs.end(), E),
-        PotentiallyCapturingExprs.end());
+    llvm::erase_value(PotentiallyCapturingExprs, E);
   }
   void clearPotentialCaptures() {
     PotentiallyCapturingExprs.clear();
