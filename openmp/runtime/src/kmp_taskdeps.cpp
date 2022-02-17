@@ -697,7 +697,7 @@ kmp_int32 __kmpc_omp_task_with_deps(ident_t *loc_ref, kmp_int32 gtid,
         kmp_int32 *successorsList =
             (kmp_int32 *)malloc(SuccessorsSize * sizeof(kmp_int32));
         kmp_record_info newRecord = {0, nullptr, successorsList, 0,
-                                     0, 0,       SuccessorsSize};
+                                     0, 0,       SuccessorsSize, -1};
         RecordMap[i] = newRecord;
       }
     }
@@ -1075,7 +1075,6 @@ void __kmpc_fill_data(ident_t *loc_ref, kmp_int32 gtid, void (*entry)(void *),
 
 void __kmpc_set_tdg(struct kmp_record_info *tdg, kmp_int32 ntasks,
                     kmp_int32 *roots, kmp_int32 nroots) {
-
   if (ntdgs)
     return;
   // printf("TDG set! \n");
@@ -1100,7 +1099,7 @@ kmp_int32 __kmpc_record(ident_t *loc_ref, kmp_int32 gtid, void (*entry)(void *),
     kmp_int32 *successorsList =
         (kmp_int32 *)malloc(SuccessorsSize * sizeof(kmp_int32));
     kmp_record_info newRecord = {0, nullptr, successorsList, 0,
-                                 0, 0,       SuccessorsSize};
+                                 0, 0,       SuccessorsSize, -1};
     RecordMap[i] = newRecord;
   }
   for (int i = 0; i < ColorMapSize; i++) {

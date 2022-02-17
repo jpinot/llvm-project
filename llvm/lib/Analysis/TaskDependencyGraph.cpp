@@ -632,7 +632,8 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName) {
   Tdgfile << "  int static_id;\n  struct kmp_task_t *task;\n  int "
              "* succesors;\n  int nsuccessors;\n  "
              "int npredecessors_counter;\n  int npredecessors;\n  int "
-             "successors_size;\n  int pragma_id;\n  void * private_data;\n  "
+             "successors_size;\n  int static_thread;\n  int pragma_id;\n  void "
+             "* private_data;\n  "
              "void * shared_data;\n  void * parent_task;\n  struct "
              "kmp_record_info * next_waiting_tdg;\n};\n";
 
@@ -679,7 +680,8 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName) {
         else
           Tdgfile << "};\n";
       }
-
+      if(!FunctionTasks[i].FirstPrivateData.size())
+         Tdgfile << "};\n";
       Tdgfile << "struct shared_data_" << FunctionTasks[i].pragmaId << " task_"
               << FunctionTasks[i].id << "_shared_data;\n";
     }
@@ -712,6 +714,7 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName) {
             << FunctionTasks[i].predecessors.size()
             << ", .npredecessors = " << FunctionTasks[i].predecessors.size()
             << ", .successors_size = 0"
+            << ", .static_thread = -1"
             << ", .pragma_id = " << FunctionTasks[i].pragmaId;
     if (Prealloc)
       Tdgfile << ", .private_data = &task_" << FunctionTasks[i].id

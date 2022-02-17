@@ -2478,6 +2478,8 @@ struct kmp_record_info {
   kmp_int32 npredecessors_counter;
   kmp_int32 npredecessors;
   kmp_int32 successors_size;
+  kmp_int32 static_thread;
+
   // Temporal members for preallocation
   kmp_int32 pragma_id;
   void *private_data;

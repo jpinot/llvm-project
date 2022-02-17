@@ -34,6 +34,7 @@ extern struct kmp_task_alloc_info *task_static_table;
 extern kmp_task_t *kmp_get_free_task_from_indexer();
 extern void kmp_insert_task_in_indexer(kmp_task_t *task);
 extern kmp_futex_lock_t taskgraph_lock;
+bool disable_stealing = false;
 #endif
 
 /* forward declaration */
@@ -1847,7 +1848,7 @@ kmp_int32 __kmp_omp_task(kmp_int32 gtid, kmp_task_t *new_task,
         kmp_int32 *successorsList =
             (kmp_int32 *)malloc(SuccessorsSize * sizeof(kmp_int32));
         kmp_record_info newRecord = {0, nullptr, successorsList, 0,
-                                     0, 0,       SuccessorsSize};
+                                     0, 0,       SuccessorsSize, -1};
         RecordMap[i] = newRecord;
       }
     }
@@ -1879,16 +1880,32 @@ kmp_int32 __kmp_omp_task(kmp_int32 gtid, kmp_task_t *new_task,
     }*/
     return TASK_CURRENT_NOT_QUEUED;
   }
-#endif
   
-  /*
-  int newGtid= __kmp_gtid_from_tid(2, __kmp_threads[gtid]->th.th_team);
-  __kmp_assert_valid_gtid(newGtid);
- 
-  while ( __kmp_threads[newGtid]->th.th_task_team == nullptr){
-   __asm__ volatile("nop");
+  if (new_taskdata->is_taskgraph) {
+    int threadID = RecordMap[new_taskdata->td_task_id].static_thread;
+    if (threadID != -1) {
+      if (!disable_stealing)
+        disable_stealing = true;
+
+      // Transform local ID to global ID
+      int newGtid =
+          __kmp_gtid_from_tid(threadID, __kmp_threads[gtid]->th.th_team);
+
+      // Check that there are suficient number of spawned threads
+      if (UNLIKELY(threadID < 0 ||
+                   threadID >=
+                       __kmp_threads[gtid]->th.th_task_team->tt.tt_nproc))
+        KMP_FATAL(ThreadIdentInvalid);
+
+      // Wait for the target thread to spawn
+      while (__kmp_threads[newGtid]->th.th_task_team == nullptr) {
+        __asm__ volatile("nop");
+      }
+
+      gtid = newGtid;
+    }
   }
-  */
+#endif
   /* Should we execute the new task or queue it? For now, let's just always try
      to queue it.  If the queue fills up, then we'll execute it.  */
   if (new_taskdata->td_flags.proxy == TASK_PROXY ||
@@ -3070,7 +3087,7 @@ static inline int __kmp_execute_tasks_template(
       if (use_own_tasks) { // check on own queue first
         task = __kmp_remove_my_task(thread, gtid, task_team, is_constrained);
       }
-      if ((task == NULL) && (nthreads > 1)) { // Steal a task
+      if ((task == NULL) && (nthreads > 1) && !disable_stealing) { // Steal a task
         int asleep = 1;
         use_own_tasks = 0;
         // Try to steal from the last place I stole from successfully.
