@@ -2475,7 +2475,7 @@ struct kmp_record_info {
   kmp_task_t *task;
   kmp_int32 *successors;
   kmp_int32 nsuccessors;
-  kmp_int32 npredecessors_counter;
+  std::atomic<kmp_int32> npredecessors_counter;
   kmp_int32 npredecessors;
   kmp_int32 successors_size;
   kmp_int32 static_thread;

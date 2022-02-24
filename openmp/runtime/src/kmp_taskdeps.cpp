@@ -30,6 +30,8 @@
 // TODO: Any ITT support needed?
 
 #if LIBOMP_TASKGRAPH
+#include <new>
+
 int recording = false;
 int fill_data = false;
 int prealloc = false;
@@ -48,7 +50,6 @@ kmp_int32 SuccessorsSize = 10;
 kmp_int32 SuccessorsIncrement = 5;
 kmp_int32 ColorMapSize = 20;
 
-kmp_futex_lock_t taskgraph_lock;
 
 // Colors for the graphviz output
 const char *color_names[] = {
@@ -686,19 +687,24 @@ kmp_int32 __kmpc_omp_task_with_deps(ident_t *loc_ref, kmp_int32 gtid,
 
       int OldSize = MapSize;
       MapSize = MapSize *2;
-      __kmp_acquire_futex_lock(&taskgraph_lock, 0);
       RecordMap = (kmp_record_info *)realloc(RecordMap,
                                              MapSize * sizeof(kmp_record_info));
-      __kmp_release_futex_lock(&taskgraph_lock, 0);
       TaskIdentMap =
           (ident_task *)realloc(TaskIdentMap, MapSize * sizeof(ident_task));
 
       for (int i = OldSize; i < MapSize; i++) {
         kmp_int32 *successorsList =
             (kmp_int32 *)malloc(SuccessorsSize * sizeof(kmp_int32));
-        kmp_record_info newRecord = {0, nullptr, successorsList, 0,
-                                     0, 0,       SuccessorsSize, -1};
-        RecordMap[i] = newRecord;
+
+        RecordMap[i].static_id = 0;
+        RecordMap[i].task = nullptr;
+        RecordMap[i].successors = successorsList;
+        RecordMap[i].nsuccessors = 0;
+        RecordMap[i].npredecessors = 0;
+        RecordMap[i].successors_size = SuccessorsSize;
+        RecordMap[i].static_thread = -1;
+        void * pCounters = (void *) &RecordMap[i].npredecessors_counter;
+        new (pCounters) std::atomic<kmp_int32>(0);
       }
     }
     TaskIdentMap[new_taskdata->td_task_id].td_ident = new_taskdata->td_ident->psource;
@@ -1034,6 +1040,8 @@ void __kmpc_execute_tdg(ident_t *loc_ref, kmp_int32 gtid) {
         // kmp_taskdata_t *new_taskdata =
         // KMP_TASK_TO_TASKDATA(RecordMap[i].task);
 
+        KMP_ATOMIC_ST_RLX(&RecordMap[i].npredecessors_counter,RecordMap[i].npredecessors);
+
         KMP_ATOMIC_INC(&RecordMap[i].parent_task->td_incomplete_child_tasks);
 
         // Protect with if?
@@ -1050,6 +1058,7 @@ void __kmpc_execute_tdg(ident_t *loc_ref, kmp_int32 gtid) {
     if (prealloc) {
       kmp_info_t *thread = __kmp_threads[gtid];
       kmp_taskdata_t *parent_task = thread->th.th_current_task;
+      RecordMap[rootTasks[i]].task = nullptr;
       kmp_task_t *task = kmp_init_lazy_task(
           rootTasks[i], KMP_TASKDATA_TO_TASK(parent_task), gtid);
       if (task == nullptr) {
@@ -1098,9 +1107,15 @@ kmp_int32 __kmpc_record(ident_t *loc_ref, kmp_int32 gtid, void (*entry)(void *),
     TaskIdentMap[i] = {nullptr};
     kmp_int32 *successorsList =
         (kmp_int32 *)malloc(SuccessorsSize * sizeof(kmp_int32));
-    kmp_record_info newRecord = {0, nullptr, successorsList, 0,
-                                 0, 0,       SuccessorsSize, -1};
-    RecordMap[i] = newRecord;
+    RecordMap[i].static_id = 0;
+    RecordMap[i].task = nullptr;
+    RecordMap[i].successors = successorsList;
+    RecordMap[i].nsuccessors = 0;
+    RecordMap[i].npredecessors = 0;
+    RecordMap[i].successors_size = SuccessorsSize;
+    RecordMap[i].static_thread = -1;
+    void * pCounters = (void *) &RecordMap[i].npredecessors_counter;
+    new (pCounters) std::atomic<kmp_int32>(0);
   }
   for (int i = 0; i < ColorMapSize; i++) {
     ColorMap[i] = {nullptr, nullptr};
@@ -1132,7 +1147,7 @@ kmp_int32 __kmpc_record(ident_t *loc_ref, kmp_int32 gtid, void (*entry)(void *),
 
   for (int i = 0; i < MapSize; i++) {
     if (RecordMap[i].task != nullptr)
-      RecordMap[i].npredecessors_counter = RecordMap[i].npredecessors;
+      KMP_ATOMIC_ST_RLX(&RecordMap[i].npredecessors_counter, RecordMap[i].npredecessors);
   }
   recording = false;
 
@@ -1142,7 +1157,6 @@ kmp_int32 __kmpc_record(ident_t *loc_ref, kmp_int32 gtid, void (*entry)(void *),
 void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid, void (*entry)(void *),
                       void *args, kmp_int32 tdg_type) {
 
-  __kmp_init_futex_lock(&taskgraph_lock);
   for (int i = 0; i < ntdgs; i++) {
     if (dynamic_tdgs[i].loc == loc_ref->psource) {
        //printf("Executing!  \n");
@@ -1385,10 +1399,10 @@ kmp_task_t *kmp_init_lazy_task(int static_id, kmp_task_t *current_task,
     return nullptr;
   kmp_taskdata_t *new_taskdata = KMP_TASK_TO_TASKDATA(new_task);
   kmp_info_t *thread = __kmp_threads[gtid];
-  kmp_record_info tdg = RecordMap[static_id];
-  kmp_taskdata_t *parent_task = tdg.parent_task;
+  kmp_record_info *tdg = &RecordMap[static_id];
+  kmp_taskdata_t *parent_task = tdg->parent_task;
   kmp_team_t *team = thread->th.th_team;
-  kmp_task_alloc_info tdg_static_data = task_static_table[tdg.pragma_id];
+  kmp_task_alloc_info tdg_static_data = task_static_table[tdg->pragma_id];
   kmp_tasking_flags_t *flags = (kmp_tasking_flags_t *)&tdg_static_data.flags;
 
   if (tdg_static_data.sizeOfShareds > 0) {
@@ -1408,7 +1422,7 @@ kmp_task_t *kmp_init_lazy_task(int static_id, kmp_task_t *current_task,
 
   //new_task->part_id = tdg.static_id;
   new_taskdata->is_taskgraph = 1;
-  new_taskdata->td_task_id = tdg.static_id;
+  new_taskdata->td_task_id = tdg->static_id;
   new_taskdata->td_team = thread->th.th_team;
   new_taskdata->td_alloc_thread = thread;
   new_taskdata->td_parent = parent_task;
@@ -1475,11 +1489,11 @@ kmp_task_t *kmp_init_lazy_task(int static_id, kmp_task_t *current_task,
   new_taskdata->td_allow_completion_event.pending_events_count = 1;
   new_taskdata->td_allow_completion_event.ed.task = new_task;
 
-  memcpy(new_task + 1, tdg.private_data,
+  memcpy(new_task + 1, tdg->private_data,
          tdg_static_data.sizeOfTask - sizeof(kmp_task_t));
-  memcpy(new_task->shareds, tdg.shared_data, tdg_static_data.sizeOfShareds);
+  memcpy(new_task->shareds, tdg->shared_data, tdg_static_data.sizeOfShareds);
 
-  tdg.task = new_task;
+  tdg->task = new_task;
   return new_task;
 }
 #endif

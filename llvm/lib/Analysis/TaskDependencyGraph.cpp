@@ -622,16 +622,16 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName) {
 
   int offout = 0;
   Tdgfile << "#include <stddef.h>\n";
+  Tdgfile << "#include <atomic>\n";
   if (Prealloc) {
     Tdgfile << "#include <stdint.h>\n";
-    Tdgfile << "#include <atomic>\n";
     Tdgfile << "#include <stdio.h>\n";
   }
 
   Tdgfile << "struct kmp_task_t;\nstruct kmp_record_info\n{\n";
   Tdgfile << "  int static_id;\n  struct kmp_task_t *task;\n  int "
              "* succesors;\n  int nsuccessors;\n  "
-             "int npredecessors_counter;\n  int npredecessors;\n  int "
+             "std::atomic<int> npredecessors_counter;\n  int npredecessors;\n  int "
              "successors_size;\n  int static_thread;\n  int pragma_id;\n  void "
              "* private_data;\n  "
              "void * shared_data;\n  void * parent_task;\n  struct "
@@ -710,9 +710,9 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName) {
     Tdgfile << "{ .static_id = " << FunctionTasks[i].id
             << ", .task = NULL, .succesors = &kmp_tdg_outs_0[" << offout << "]"
             << ", .nsuccessors = " << FunctionTasks[i].successors.size()
-            << ", .npredecessors_counter = "
+            << ", .npredecessors_counter = {"
             << FunctionTasks[i].predecessors.size()
-            << ", .npredecessors = " << FunctionTasks[i].predecessors.size()
+            << "}, .npredecessors = " << FunctionTasks[i].predecessors.size()
             << ", .successors_size = 0"
             << ", .static_thread = -1"
             << ", .pragma_id = " << FunctionTasks[i].pragmaId;
@@ -1035,7 +1035,7 @@ int TaskDependencyGraphData::findPragmaId(CallInst &TaskCallInst,
       if (LoadInst *ArgLoad = dyn_cast<LoadInst>(GetArg->getNextNode())) {
         ArgPositions[position] = ArgLoad;
       } else {
-        Start = dyn_cast<Instruction>(TaskAlloc)->getPrevNode();
+        Start = TaskCallInst.getPrevNode();
         bool Found = false;
         while (!Found) {
           if (LoadInst *ArgLoad = dyn_cast<LoadInst>(Start)) {
@@ -1044,17 +1044,20 @@ int TaskDependencyGraphData::findPragmaId(CallInst &TaskCallInst,
               Found = true;
             }
           }
+          if(Start->getPrevNode()==nullptr)
+            break;
+
           Start = Start->getPrevNode();
         }
       }
     }
   }
-
   Start = dyn_cast<Instruction>(TaskAlloc);
   End = dyn_cast<Instruction>(&TaskCallInst);
 
   while (Start != End) {
-    for (int i = 0; i < (int)ArgPositions.size(); i++)
+    for (int i = 0; i < (int)ArgPositions.size(); i++){
+      if(ArgPositions[i] ==nullptr) continue;
       for (Value *ArgUser : ArgPositions[i]->users()) {
         if (Start == dyn_cast<Instruction>(ArgUser)) {
           if(dyn_cast<StoreInst>(ArgUser))
@@ -1063,6 +1066,7 @@ int TaskDependencyGraphData::findPragmaId(CallInst &TaskCallInst,
             FinalFirstPrivatePositions.push_back(i);
         }
       }
+    }
     Start = Start->getNextNode();
   }
 

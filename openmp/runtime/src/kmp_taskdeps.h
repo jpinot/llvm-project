@@ -19,7 +19,6 @@
 #define KMP_RELEASE_DEPNODE(gtid, n) __kmp_release_lock(&(n)->dn.lock, (gtid))
 
 #if LIBOMP_TASKGRAPH
-extern kmp_futex_lock_t taskgraph_lock;
 extern kmp_record_info *RecordMap;
 extern int recording;
 extern int fill_data;
@@ -106,7 +105,6 @@ static inline void __kmp_release_deps(kmp_int32 gtid, kmp_taskdata_t *task) {
 #if LIBOMP_TASKGRAPH
   if (task->is_taskgraph && !recording && !fill_data) {
     // TODO: Not needed when taskifying
-    __kmp_acquire_futex_lock(&taskgraph_lock, 0);
     // printf("[OpenMP] ---- Task %d ends, checking successors ----\n",
     // this_task->part_id);
     kmp_record_info *TaskInfo = &(RecordMap[task->td_task_id]);
@@ -116,7 +114,8 @@ static inline void __kmp_release_deps(kmp_int32 gtid, kmp_taskdata_t *task) {
       kmp_record_info *successor = &(RecordMap[successorNumber]);
       // printf("  [OpenMP] Found one successor %d , deps : %d \n",
       // successorNumber, successor->npredecessors_counter);
-      successor->npredecessors_counter--;
+
+       kmp_int32 npredecessors = KMP_ATOMIC_DEC(&successor->npredecessors_counter) - 1;
       if (prealloc) {
         if (!successor->npredecessors_counter) {
           kmp_task_t *NextTask = kmp_init_lazy_task(
@@ -128,7 +127,7 @@ static inline void __kmp_release_deps(kmp_int32 gtid, kmp_taskdata_t *task) {
             __kmp_omp_task(gtid, NextTask, false);
         }
       } else {
-        if (successor->task != nullptr && !successor->npredecessors_counter) {
+        if (successor->task != nullptr && !npredecessors) {
           // printf("  [OpenMP] Successor ready, executing \n");
           __kmp_omp_task(gtid, successor->task, false);
 
@@ -138,7 +137,6 @@ static inline void __kmp_release_deps(kmp_int32 gtid, kmp_taskdata_t *task) {
         }
       }
     }
-    __kmp_release_futex_lock(&taskgraph_lock, 0);
     return;
   }
 #endif

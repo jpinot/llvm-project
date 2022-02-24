@@ -23,6 +23,8 @@
 
 
 #if LIBOMP_TASKGRAPH
+#include <new>
+
 // Taskgraph
 extern int recording;
 extern int fill_data;
@@ -33,7 +35,6 @@ extern ident_task *TaskIdentMap;
 extern struct kmp_task_alloc_info *task_static_table;
 extern kmp_task_t *kmp_get_free_task_from_indexer();
 extern void kmp_insert_task_in_indexer(kmp_task_t *task);
-extern kmp_futex_lock_t taskgraph_lock;
 bool disable_stealing = false;
 #endif
 
@@ -761,23 +762,15 @@ static void __kmp_free_task(kmp_int32 gtid, kmp_taskdata_t *taskdata,
 #if LIBOMP_TASKGRAPH
   } else {
     if (prealloc) {
-
-      __kmp_acquire_futex_lock(&taskgraph_lock, 0);
-      if (RecordMap) {
-        RecordMap[taskdata->td_task_id].npredecessors_counter =
-            RecordMap[taskdata->td_task_id].npredecessors;
-        RecordMap[taskdata->td_task_id].task = nullptr;
-      }
-
       kmp_insert_task_in_indexer(task);
       if (check_waiting_tdg()) {
         kmp_record_info *Next = get_from_waiting_tdg();
-        kmp_task_t *NextTask = kmp_init_lazy_task(
+        if(Next!=NULL) {
+          kmp_task_t *NextTask = kmp_init_lazy_task(
             Next->static_id, KMP_TASKDATA_TO_TASK(taskdata->td_parent), gtid);
-        __kmp_omp_task(gtid, NextTask, false);
+          __kmp_omp_task(gtid, NextTask, false);
+        }
       }
-      __kmp_release_futex_lock(&taskgraph_lock, 0);
-
     } else {
       taskdata->td_flags.complete = 0;
       taskdata->td_flags.started = 0;
@@ -793,15 +786,6 @@ static void __kmp_free_task(kmp_int32 gtid, kmp_taskdata_t *taskdata,
       KMP_ATOMIC_ST_RLX(&taskdata->td_incomplete_child_tasks, 0);
       // start at one because counts current task and children
       KMP_ATOMIC_ST_RLX(&taskdata->td_allocated_child_tasks, 1);
-
-      
-      if (RecordMap) {
-        __kmp_acquire_futex_lock(&taskgraph_lock, 0);
-        RecordMap[taskdata->td_task_id].npredecessors_counter =
-            RecordMap[taskdata->td_task_id].npredecessors;
-        __kmp_release_futex_lock(&taskgraph_lock, 0);
-
-      }
       
     }
   }
@@ -1836,20 +1820,24 @@ kmp_int32 __kmp_omp_task(kmp_int32 gtid, kmp_task_t *new_task,
     if (new_taskdata->td_task_id >= MapSize) {
       int OldSize = MapSize;
       MapSize = MapSize * 2;
-      __kmp_acquire_futex_lock(&taskgraph_lock, 0);
       RecordMap = (kmp_record_info *)realloc(RecordMap,
                                              MapSize * sizeof(kmp_record_info));
 
-      __kmp_release_futex_lock(&taskgraph_lock, 0);
       TaskIdentMap =
           (ident_task *)realloc(TaskIdentMap, MapSize * sizeof(ident_task));
 
       for (int i = OldSize; i < MapSize; i++) {
         kmp_int32 *successorsList =
             (kmp_int32 *)malloc(SuccessorsSize * sizeof(kmp_int32));
-        kmp_record_info newRecord = {0, nullptr, successorsList, 0,
-                                     0, 0,       SuccessorsSize, -1};
-        RecordMap[i] = newRecord;
+        RecordMap[i].static_id = 0;
+        RecordMap[i].task = nullptr;
+        RecordMap[i].successors = successorsList;
+        RecordMap[i].nsuccessors = 0;
+        RecordMap[i].npredecessors = 0;
+        RecordMap[i].successors_size = SuccessorsSize;
+        RecordMap[i].static_thread = -1;
+        void * pCounters = (void *) &RecordMap[i].npredecessors_counter;
+        new (pCounters) std::atomic<kmp_int32>(0);
       }
     }
 
@@ -1916,7 +1904,6 @@ kmp_int32 __kmp_omp_task(kmp_int32 gtid, kmp_task_t *new_task,
       new_taskdata->td_flags.task_serial = 1;
     __kmp_invoke_task(gtid, new_task, current_task);
   }
-
   return TASK_CURRENT_NOT_QUEUED;
 }
 
