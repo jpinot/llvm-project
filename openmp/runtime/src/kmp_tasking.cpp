@@ -36,6 +36,7 @@ extern struct kmp_task_alloc_info *task_static_table;
 extern kmp_task_t *kmp_get_free_task_from_indexer();
 extern void kmp_insert_task_in_indexer(kmp_task_t *task);
 bool disable_stealing = false;
+extern bool staticSchedule;
 #endif
 
 /* forward declaration */
@@ -1869,7 +1870,7 @@ kmp_int32 __kmp_omp_task(kmp_int32 gtid, kmp_task_t *new_task,
     return TASK_CURRENT_NOT_QUEUED;
   }
   
-  if (new_taskdata->is_taskgraph) {
+  if (new_taskdata->is_taskgraph && staticSchedule) {
     int threadID = RecordMap[new_taskdata->td_task_id].static_thread;
     if (threadID != -1) {
       if (!disable_stealing)
@@ -1885,12 +1886,15 @@ kmp_int32 __kmp_omp_task(kmp_int32 gtid, kmp_task_t *new_task,
                        __kmp_threads[gtid]->th.th_task_team->tt.tt_nproc))
         KMP_FATAL(ThreadIdentInvalid);
 
-      // Wait for the target thread to spawn
-      while (__kmp_threads[newGtid]->th.th_task_team == nullptr) {
-        __asm__ volatile("nop");
-      }
-
       gtid = newGtid;
+    }
+    else{
+      RecordMap[new_taskdata->td_task_id].static_thread = __kmp_tid_from_gtid(gtid);
+    }
+
+    // Wait for the target thread to spawn
+    while (__kmp_threads[gtid]->th.th_task_team == nullptr) {
+        __asm__ volatile("nop");
     }
   }
 #endif

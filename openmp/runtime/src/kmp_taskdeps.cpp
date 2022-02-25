@@ -63,6 +63,7 @@ ident_color *ColorMap;
 ident_task *TaskIdentMap;
 kmp_int32 ColorIndex = 0;
 
+bool staticSchedule = false;
 //Structures for the prealloc mechanism
 struct kmp_space_indexer free_space_indexer;
 struct kmp_task_alloc_info *task_static_table;
@@ -1168,6 +1169,11 @@ void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid, void (*entry)(void *),
      //printf("Recording! \n");
     __kmpc_record(loc_ref, gtid, entry, args);
   } else if (tdg_type == STATIC_TDG) {
+
+    char *my_env_var = getenv("OMP_TASK_SCHEDULE");
+    if (my_env_var && strcmp(my_env_var, "static") == 0) {
+      staticSchedule = true;
+    }
     // printf("Fill data and executing! \n");
     dynamic_tdgs[0].loc = loc_ref->psource;
 
