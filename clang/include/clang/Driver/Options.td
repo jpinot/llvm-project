@@ -2490,6 +2490,9 @@ def static_tdg : Flag<["-"], "static-tdg">, Group<f_Group>,
 def prealloc_tdg : Flag<["-"], "prealloc">, Group<f_Group>,
   Flags<[CC1Option, NoArgumentUnused, HelpHidden]>,
   HelpText<"Enable support for taskgraph preallocation.">;
+def dynamic_variant : Flag<["-"], "dynamic-variant">, Group<f_Group>,
+  Flags<[CC1Option, NoArgumentUnused, HelpHidden]>,
+  HelpText<"Enable support for dynamic variants.">;
 def static_openmp: Flag<["-"], "static-openmp">,
   HelpText<"Use the static host OpenMP runtime while linking.">;
 def fopenmp_new_driver : Flag<["-"], "fopenmp-new-driver">, Flags<[CC1Option]>, Group<Action_Group>,

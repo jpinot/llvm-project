@@ -11,3 +11,5 @@ add_subdirectory(Coroutines)
 add_subdirectory(CFGuard)
 add_subdirectory(OmpSs)
 add_subdirectory(StaticTDG)
+add_subdirectory(DynamicVariant)
+

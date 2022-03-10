@@ -143,6 +143,7 @@ void initializeDomPrinterPass(PassRegistry&);
 void initializeDomViewerPass(PassRegistry&);
 void initializeDominanceFrontierWrapperPassPass(PassRegistry&);
 void initializeDominatorTreeWrapperPassPass(PassRegistry&);
+void initializeDynamicVariantLegacyPassPass(PassRegistry&);
 void initializeDwarfEHPrepareLegacyPassPass(PassRegistry &);
 void initializeEarlyCSELegacyPassPass(PassRegistry&);
 void initializeEarlyCSEMemSSALegacyPassPass(PassRegistry&);

@@ -4009,6 +4009,7 @@ KMP_EXPORT void __kmpc_prealloc_tasks(
     kmp_uint32 max_concurrent_tasks, kmp_uint32 task_size);
 KMP_EXPORT void __kmpc_set_task_static_id(kmp_task_t *task, int staticID);
 #endif
+KMP_EXPORT kmp_int32 __kmpc_dynamic_variant(kmp_int32 *traits, int numVariants);
 KMP_EXPORT kmp_int32 __kmpc_omp_taskyield(ident_t *loc_ref, kmp_int32 gtid,
                                           int end_part);
 

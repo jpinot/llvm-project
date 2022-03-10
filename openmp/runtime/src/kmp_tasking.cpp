@@ -1491,6 +1491,11 @@ void __kmpc_set_task_static_id(kmp_task_t *task, kmp_int32 staticID) {
 }
 #endif
 
+kmp_int32 __kmpc_dynamic_variant(kmp_int32 *traits, int numVariants) {
+
+  return -1;
+}
+
 kmp_task_t *__kmpc_omp_task_alloc(ident_t *loc_ref, kmp_int32 gtid,
                                   kmp_int32 flags, size_t sizeof_kmp_task_t,
                                   size_t sizeof_shareds,

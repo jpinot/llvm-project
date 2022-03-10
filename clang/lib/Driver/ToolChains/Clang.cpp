@@ -5961,6 +5961,8 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
       Args.AddAllArgs(CmdArgs, options::OPT_fopenmp_taskgraph);
       Args.AddAllArgs(CmdArgs, options::OPT_static_tdg);
       Args.AddAllArgs(CmdArgs, options::OPT_prealloc_tdg);
+      Args.AddAllArgs(CmdArgs, options::OPT_dynamic_variant);
+
       // When in OpenMP offloading mode, forward assumptions information about
       // thread and team counts in the device.
       if (Args.hasFlag(options::OPT_fopenmp_assume_teams_oversubscription,

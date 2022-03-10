@@ -248,6 +248,7 @@ LANGOPT(OpenMPOptimisticCollapse  , 1, 0, "Use at most 32 bits to represent the 
 LANGOPT(OpenMPTaskGraph   , 1, 0, "Enable support for #pragma omp taskgraph")
 LANGOPT(OpenMPStaticTaskGraph   , 1, 0, "Enable support for static #pragma omp taskgraph")
 LANGOPT(OpenMPPrealloc , 1, 0, "Enable support for taskgraph preallocation")
+LANGOPT(OpenMPDynamicVariant , 1, 0, "Enable support for dynamic variants")
 LANGOPT(OpenMPThreadSubscription  , 1, 0, "Assume work-shared loops do not have more iterations than participating threads.")
 LANGOPT(OpenMPTeamSubscription  , 1, 0, "Assume distributed loops do not have more iterations than participating teams.")
 LANGOPT(RenderScript      , 1, 0, "RenderScript")

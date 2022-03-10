@@ -58,6 +58,7 @@
 #include "llvm/Transforms/Coroutines/CoroEarly.h"
 #include "llvm/Transforms/Coroutines/CoroElide.h"
 #include "llvm/Transforms/Coroutines/CoroSplit.h"
+#include "llvm/Transforms/DynamicVariant.h"
 #include "llvm/Transforms/IPO.h"
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
 #include "llvm/Transforms/IPO/LowerTypeTests.h"
@@ -242,6 +243,12 @@ static void addStaticTDGPass(const PassManagerBuilder &Builder,
                                   PassManagerBase &PM) {
   if (Builder.OptLevel > 1)
     PM.add(createTaskDependencyGraphPass());
+}
+
+static void addDynamicVariantPass(const PassManagerBuilder &Builder,
+                                  PassManagerBase &PM) {
+  if (Builder.OptLevel > 1)
+    PM.add(createDynamicVariantLegacyPass());
 }
 
 static SanitizerCoverageOptions
@@ -776,6 +783,10 @@ void EmitAssemblyHelper::CreatePasses(legacy::PassManager &MPM,
   if (LangOpts.OpenMPTaskGraph)
     PMBuilder.addExtension(PassManagerBuilder::EP_LoopOptimizerEnd,
        addStaticTDGPass);
+
+  if (LangOpts.OpenMP && LangOpts.OpenMPDynamicVariant)
+    PMBuilder.addExtension(PassManagerBuilder::EP_LoopOptimizerEnd,
+       addDynamicVariantPass);
 
   if (!CodeGenOpts.MemoryProfileOutput.empty()) {
     PMBuilder.addExtension(PassManagerBuilder::EP_OptimizerLast,
@@ -1420,6 +1431,14 @@ void EmitAssemblyHelper::RunOptimizationPipeline(
           [](ModulePassManager &MPM, OptimizationLevel Level) {
             if (Level != OptimizationLevel::O0 && Level != OptimizationLevel::O1)
               MPM.addPass(TaskDependencyGraphAnalysisPass());
+          });
+    }
+
+    if (LangOpts.OpenMP && LangOpts.OpenMPDynamicVariant) {
+      PB.registerPipelineStartEPCallback(
+          [](ModulePassManager &MPM, OptimizationLevel Level) {
+            if (Level != OptimizationLevel::O0 && Level != OptimizationLevel::O1)
+              MPM.addPass(DynamicVariantPass());
           });
     }
 

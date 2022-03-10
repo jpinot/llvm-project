@@ -45,6 +45,7 @@ void llvm::initializeAnalysis(PassRegistry &Registry) {
   initializeDomOnlyViewerPass(Registry);
   initializePostDomViewerPass(Registry);
   initializeDomOnlyPrinterPass(Registry);
+  initializeDynamicVariantLegacyPassPass(Registry);
   initializePostDomPrinterPass(Registry);
   initializePostDomOnlyViewerPass(Registry);
   initializePostDomOnlyPrinterPass(Registry);

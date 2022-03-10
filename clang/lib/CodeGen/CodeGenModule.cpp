@@ -65,6 +65,8 @@
 #include "llvm/Support/TimeProfiler.h"
 #include "llvm/Support/X86TargetParser.h"
 
+#include "llvm/Frontend/OpenMP/OMPContext.h"
+
 using namespace clang;
 using namespace CodeGen;
 
@@ -5052,6 +5054,63 @@ void CodeGenModule::EmitGlobalFunctionDefinition(GlobalDecl GD,
   // want to propagate this information down (e.g. to local static
   // declarations).
   auto *Fn = cast<llvm::Function>(GV);
+
+  // Extend the IR with OpenMP Variants Info:
+  // 1 - Create two global arrays, with variants function pointers and variants
+  // traits 2 - Anotate variants function with an extra attribute
+  if (LangOpts.OpenMPDynamicVariant && D->hasAttr<OMPDeclareVariantAttr>()) {
+
+    // Vectors to store variants functions and variants traits
+    std::vector<llvm::Constant *> VariantFunctions;
+    std::vector<int> TraitProperties;
+    // Annotate and store main function
+    Fn->addFnAttr("variant", Fn->getName());
+    VariantFunctions.push_back(dyn_cast<llvm::Constant>(Fn));
+    TraitProperties.push_back(0);
+
+    // Iterate over all variants
+    for (OMPDeclareVariantAttr *A :
+         D->specific_attrs<OMPDeclareVariantAttr>()) {
+
+      Expr *VariantRef = A->getVariantFuncRef();
+      OMPTraitInfo &TI = A->getTraitInfo();
+      llvm::omp::TraitProperty Kind =
+          TI.Sets[0].Selectors[0].Properties[0].Kind;
+      if (DeclRefExpr *DRE = dyn_cast<DeclRefExpr>(VariantRef))
+        if (FunctionDecl *FD = dyn_cast<FunctionDecl>(DRE->getDecl())) {
+          VariantFunctions.push_back(GetAddrOfGlobal(FD));
+          TraitProperties.push_back(static_cast<int>(Kind));
+          llvm::Function *VFunc = dyn_cast<llvm::Function>(GetAddrOfGlobal(FD));
+          VFunc->addFnAttr("variant", Fn->getName());
+        }
+    }
+
+    // Construct the variant function array
+    ConstantInitBuilder builder(*this);
+    auto VariantStruct = builder.beginArray();
+
+    for (int i = 0; i < (int)VariantFunctions.size(); i++)
+      VariantStruct.add(VariantFunctions[i]);
+
+    auto VariantStructGlobal = VariantStruct.finishAndCreateGlobal(
+        Fn->getName() + "_variants", getPointerAlign(),
+        /*constant*/ false, llvm::GlobalValue::PrivateLinkage);
+
+    VariantStructGlobal->setAlignment(llvm::None);
+
+    // Construct the trait array
+    auto TraitStruct = builder.beginArray();
+
+    for (int i = 0; i < (int)TraitProperties.size(); i++)
+      TraitStruct.addInt(Int32Ty, TraitProperties[i]);
+
+    auto TraitStructGlobal = TraitStruct.finishAndCreateGlobal(
+        Fn->getName() + "_traits", getPointerAlign(),
+        /*constant*/ false, llvm::GlobalValue::PrivateLinkage);
+
+    TraitStructGlobal->setAlignment(llvm::None);
+  }
+
   setFunctionLinkage(GD, Fn);
 
   // FIXME: this is redundant with part of setFunctionDefinitionAttributes
