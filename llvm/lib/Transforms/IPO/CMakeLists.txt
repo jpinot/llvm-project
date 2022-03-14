@@ -61,6 +61,7 @@ add_llvm_component_library(LLVMipo
   BitReader
   BitWriter
   Core
+  DynamicVariant
   FrontendOpenMP
   InstCombine
   IRReader
