@@ -38,7 +38,6 @@ struct DynamicVariant {
     if (M.empty())
       return false;
 
-    SmallVector<Function *, 4> Functs;
     bool VariantFound = false;
     for (auto &F : M) {
       // Nothing to do for declarations.
@@ -73,7 +72,8 @@ struct DynamicVariant {
 
         for (Instruction &I : *BB) {
           if (CallInst *FuncCall = dyn_cast<CallInst>(&I))
-            if (FuncCall->getCalledFunction()->hasFnAttribute("variant")) {
+            if (FuncCall->getCalledFunction() &&
+                FuncCall->getCalledFunction()->hasFnAttribute("variant")) {
 
               VariantFound = true;
               // Get global structures names
