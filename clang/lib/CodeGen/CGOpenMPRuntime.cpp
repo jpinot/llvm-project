@@ -140,6 +140,22 @@ private:
   StringRef HelperName;
 };
 
+/// API for captured statement code generation in OpenMP taskgraphs.
+class CGOpenMPTaskgraphRegionInfo final : public CGOpenMPRegionInfo {
+public:
+  CGOpenMPTaskgraphRegionInfo(const CapturedStmt &CS,
+                             const RegionCodeGenTy &CodeGen)
+      : CGOpenMPRegionInfo(CS, ParallelOutlinedRegion, CodeGen, llvm::omp::OMPD_taskgraph, false){}
+
+  const VarDecl *getThreadIDVariable() const override { return 0; }
+
+  static bool classof(const CGCapturedStmtInfo *Info) {
+    return CGOpenMPRegionInfo::classof(Info) &&
+           cast<CGOpenMPRegionInfo>(Info)->getRegionKind() ==
+               ParallelOutlinedRegion;
+  }
+};
+
 /// API for captured statement code generation in OpenMP constructs.
 class CGOpenMPTaskOutlinedRegionInfo final : public CGOpenMPRegionInfo {
 public:
@@ -6405,9 +6421,19 @@ void CGOpenMPRuntime::emitTaskgraphCall(CodeGenFunction &CGF,
   //  }
   //}
 
+  CodeGenFunction OutlinedCGF(CGM, true);
+
   const CapturedStmt *CS = cast<CapturedStmt>(D.getAssociatedStmt());
 
-  auto OutlineInfo = CGF.EmitCapturedStmtNoCall(*CS, CR_Default);
+  auto &&BodyGen = [CS](CodeGenFunction &CGF, PrePostActionTy &) {
+    CGF.EmitStmt(CS->getCapturedStmt());
+  };
+
+  LValue CapStruct = CGF.InitCapturedStruct(*CS);
+
+  CGOpenMPTaskgraphRegionInfo TaskgraphRegion(*CS, BodyGen);
+  CodeGenFunction::CGCapturedStmtRAII CapInfoRAII(OutlinedCGF, &TaskgraphRegion);
+  llvm::Function *FnT = OutlinedCGF.GenerateCapturedStmtFunction(*CS);
 
   /*
   llvm::Value *Condition = nullptr;
@@ -6419,10 +6445,10 @@ void CGOpenMPRuntime::emitTaskgraphCall(CodeGenFunction &CGF,
 
   // Static TDG
   if (tdg_type) {
-    markFunctionsInsideTaskgraph(*OutlineInfo.first,
+    markFunctionsInsideTaskgraph(*FnT,
                                  "llvm.omp.taskgraph.static");
     if (CGF.CGM.getLangOpts().OpenMPPrealloc) {
-      markFunctionsInsideTaskgraph(*OutlineInfo.first,
+      markFunctionsInsideTaskgraph(*FnT,
                                    "llvm.omp.taskgraph.prealloc");
     }
     auto *FT = llvm::FunctionType::get(CGF.VoidTy, false);
@@ -6431,17 +6457,18 @@ void CGOpenMPRuntime::emitTaskgraphCall(CodeGenFunction &CGF,
 
   llvm::Value *Args[] = {emitUpdateLocation(CGF, Loc), getThreadID(CGF, Loc),
                          CGF.Builder.CreatePointerBitCastOrAddrSpaceCast(
-                             OutlineInfo.first, CGF.Int8PtrTy),
+                             FnT, CGF.Int8PtrTy),
                          CGF.Builder.CreatePointerBitCastOrAddrSpaceCast(
-                             OutlineInfo.second, CGF.Int8PtrTy),
+                             CapStruct.getPointer(OutlinedCGF), CGF.Int8PtrTy),
                          CGF.Builder.getInt32(tdg_type)};
   CGF.EmitRuntimeCall(OMPBuilder.getOrCreateRuntimeFunction(
                           CGM.getModule(), OMPRTL___kmpc_taskgraph),
                       Args);
 
+  //TODO: Move to BodyGen
   auto InsertP = CGF.Builder.saveIP();
   CGF.Builder.SetInsertPoint(
-      OutlineInfo.first->getEntryBlock().getFirstNonPHI());
+      FnT->getEntryBlock().getFirstNonPHI());
 
   llvm::GlobalVariable *TaskID = getOrInsertTaskID(CGF);
 
@@ -6449,6 +6476,7 @@ void CGOpenMPRuntime::emitTaskgraphCall(CodeGenFunction &CGF,
       CGF.CGM.getDataLayout().getABITypeAlignment(CGF.Int32Ty));
   CGF.Builder.CreateStore(CGF.Builder.getInt32(0), Address(TaskID, Align));
   CGF.Builder.restoreIP(InsertP);
+
 }
 
 void CGOpenMPRuntime::emitInlinedDirective(CodeGenFunction &CGF,
