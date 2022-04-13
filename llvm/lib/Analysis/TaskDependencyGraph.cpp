@@ -124,6 +124,8 @@ void TaskDependencyGraphData::obtainTaskInfo(TaskInfo &TaskFound,
 
               if (LoadInst *BaseLoad = dyn_cast<LoadInst>(GEP->getOperand(0))) {
                 CurrentTaskDepInfo.base = BaseLoad->getPointerOperand();
+                if(LoadInst *DobleLoad = dyn_cast<LoadInst>(CurrentTaskDepInfo.base))
+                  CurrentTaskDepInfo.base = DobleLoad->getPointerOperand();
               } else {
                 CurrentTaskDepInfo.base = GEP->getOperand(0);
               }

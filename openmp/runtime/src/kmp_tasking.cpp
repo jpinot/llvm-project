@@ -24,6 +24,9 @@
 
 #if LIBOMP_TASKGRAPH
 #include <new>
+#include <sys/sysinfo.h>
+#define LOW_MEMORY 45
+#define LOW_CPU_USAGE 46
 
 // Taskgraph
 extern int recording;
@@ -1491,9 +1494,59 @@ void __kmpc_set_task_static_id(kmp_task_t *task, kmp_int32 staticID) {
 }
 #endif
 
-kmp_int32 __kmpc_dynamic_variant(kmp_int32 *traits, int numVariants) {
+int GetRamFreePercentage(void) {
+  FILE *meminfo = fopen("/proc/meminfo", "r");
+  if (meminfo == NULL)
+    return 0; // handle error
 
-  return -1;
+  int MemTotal, MemFree, MemAvailable;
+
+  if (fscanf(meminfo, "MemTotal: %d kB MemFree: %d kB MemAvailable: %d",
+             &MemTotal, &MemFree, &MemAvailable)) {
+    fclose(meminfo);
+  } else {
+    fclose(meminfo);
+    return 0;
+  }
+
+  int PercentageUsage =
+      (int)((((double)MemAvailable / (double)MemTotal)) * 100);
+  // printf( "MemTotal: %d kB MemFree: %d kB MemAvailable: %d kB %d \n",
+  // MemTotal, MemFree, MemAvailable, percentage);
+  return PercentageUsage;
+}
+
+
+kmp_int32 __kmpc_dynamic_variant(kmp_int32 *traits, int numVariants) {
+  struct sysinfo sys_info;
+  sysinfo(&sys_info);
+  int number_of_processors = sysconf(_SC_NPROCESSORS_ONLN);
+  float load_average= sys_info.loads[0]/65536.0;
+  /*
+  printf("Load %f %d \n",load_average, number_of_processors);
+  if(load_average > number_of_processors){
+    printf("CPU is overloaded \n");
+  }
+  */
+  int SelectedTrait= -1;
+  for (int i=0; i< numVariants; i++){
+    if(traits[i] == LOW_MEMORY){
+        int FreeRam = GetRamFreePercentage();
+        printf("Free ram: %d\% \n", FreeRam);
+      if(FreeRam<60){
+        SelectedTrait= i;
+      }
+    }
+    else if (traits[i] == LOW_CPU_USAGE){
+       printf("Load: %f Cores: %d \n",load_average, number_of_processors);
+       if(load_average > number_of_processors){
+         if(SelectedTrait==-1)
+          SelectedTrait= i;
+       }
+    }
+  }
+  //printf("Trait: %d ", traits[i]);
+  return SelectedTrait;
 }
 
 kmp_task_t *__kmpc_omp_task_alloc(ident_t *loc_ref, kmp_int32 gtid,
@@ -1531,8 +1584,13 @@ kmp_task_t *__kmpc_omp_target_task_alloc(ident_t *loc_ref, kmp_int32 gtid,
   // target task is untied defined in the specification
   input_flags.tiedness = TASK_UNTIED;
 
+#if LIBOMP_TASKGRAPH
+  if (__kmp_enable_hidden_helper && !fill_data)
+    input_flags.hidden_helper = TRUE;
+#else
   if (__kmp_enable_hidden_helper)
     input_flags.hidden_helper = TRUE;
+#endif
 
   return __kmpc_omp_task_alloc(loc_ref, gtid, flags, sizeof_kmp_task_t,
                                sizeof_shareds, task_entry);

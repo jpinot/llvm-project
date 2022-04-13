@@ -4431,22 +4431,21 @@ CGOpenMPRuntime::emitTaskInit(CodeGenFunction &CGF, SourceLocation Loc,
         CGF.EmitRuntimeCall(OMPBuilder.getOrCreateRuntimeFunction(
                                 CGM.getModule(), OMPRTL___kmpc_omp_task_alloc),
                             AllocArgs);
-    if (CGF.CGM.getLangOpts().OpenMPTaskGraph) {
-      // Taskgraph support: compute the static id.
-      llvm::GlobalVariable *TaskID = getOrInsertTaskID(CGF);
+  }
+  if (CGF.CGM.getLangOpts().OpenMPTaskGraph) {
+    // Taskgraph support: compute the static id.
+    llvm::GlobalVariable *TaskID = getOrInsertTaskID(CGF);
 
-      CharUnits Align = CharUnits::fromQuantity(
-          CGF.CGM.getDataLayout().getABITypeAlignment(CGF.Int32Ty));
+    CharUnits Align = CharUnits::fromQuantity(
+        CGF.CGM.getDataLayout().getABITypeAlignment(CGF.Int32Ty));
 
-      llvm::Value *TaskIDValue = CGF.Builder.CreateLoad(Address(TaskID, Align));
-      llvm::Value *TaskIDAdded =
-          CGF.Builder.CreateAdd(TaskIDValue, CGF.Builder.getInt32(1));
-      CGF.Builder.CreateStore(TaskIDAdded, Address(TaskID, Align));
-      CGF.EmitRuntimeCall(
-          OMPBuilder.getOrCreateRuntimeFunction(
-              CGM.getModule(), OMPRTL___kmpc_set_task_static_id),
-          {NewTask, TaskIDValue});
-    }
+    llvm::Value *TaskIDValue = CGF.Builder.CreateLoad(Address(TaskID, Align));
+    llvm::Value *TaskIDAdded =
+        CGF.Builder.CreateAdd(TaskIDValue, CGF.Builder.getInt32(1));
+    CGF.Builder.CreateStore(TaskIDAdded, Address(TaskID, Align));
+    CGF.EmitRuntimeCall(OMPBuilder.getOrCreateRuntimeFunction(
+                            CGM.getModule(), OMPRTL___kmpc_set_task_static_id),
+                        {NewTask, TaskIDValue});
   }
 
   // Emit detach clause initialization.

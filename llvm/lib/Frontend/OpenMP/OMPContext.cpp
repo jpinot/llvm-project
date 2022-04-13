@@ -151,6 +151,16 @@ static int isVariantApplicableInContextHelper(
   enum MatchKind { MK_ALL, MK_ANY, MK_NONE };
 
   MatchKind MK = MK_ALL;
+
+  //Low memory not elegible
+  if (VMI.RequiredTraits.test(
+          unsigned(TraitProperty::implementation_extension_low_memory)))
+  return false;
+
+  if (VMI.RequiredTraits.test(
+          unsigned(TraitProperty::implementation_extension_low_cpu_usage)))
+  return false;
+
   // Determine the match kind the user wants, "all" is the default and provided
   // to the user only for completeness.
   if (VMI.RequiredTraits.test(
