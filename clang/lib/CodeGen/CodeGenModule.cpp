@@ -5078,6 +5078,8 @@ void CodeGenModule::EmitGlobalFunctionDefinition(GlobalDecl GD,
           TI.Sets[0].Selectors[0].Properties[0].Kind;
       if (DeclRefExpr *DRE = dyn_cast<DeclRefExpr>(VariantRef))
         if (FunctionDecl *FD = dyn_cast<FunctionDecl>(DRE->getDecl())) {
+          //Copy Expr attributes to variants, needed to evaluate user conditions
+          FD->setAttrs(D->getAttrs());
           VariantFunctions.push_back(GetAddrOfGlobal(FD));
           TraitProperties.push_back(static_cast<int>(Kind));
           llvm::Function *VFunc = dyn_cast<llvm::Function>(GetAddrOfGlobal(FD));

@@ -4907,6 +4907,28 @@ RValue CodeGenFunction::EmitCallExpr(const CallExpr *E,
     }
   }
 
+  // Evaluate user conditions for OpenMP dynamic variants
+  if (getLangOpts().OpenMPDynamicVariant) {
+    if (const auto *FD = dyn_cast_or_null<FunctionDecl>(E->getCalleeDecl())) {
+      if (FD->hasAttr<OMPDeclareVariantAttr>()) {
+        for (OMPDeclareVariantAttr *A :
+             FD->specific_attrs<OMPDeclareVariantAttr>()) {
+          OMPTraitInfo &TI = A->getTraitInfo();
+          for (auto &Set : TI.Sets)
+            for (auto &Selector : Set.Selectors) {
+              if (Selector.Kind == llvm::omp::TraitSelector::user_condition &&
+                  Selector.ScoreOrCondition) {
+                llvm::Value *ExprResult =
+                    EvaluateExprAsBool(Selector.ScoreOrCondition);
+                //Annotate condition result
+                dyn_cast<llvm::Instruction>(ExprResult)
+                    ->addAnnotationMetadata("user condition");
+              }
+            }
+        }
+      }
+    }
+  }
   // Builtins never have block type.
   if (E->getCallee()->getType()->isBlockPointerType())
     return EmitBlockCallExpr(E, ReturnValue);

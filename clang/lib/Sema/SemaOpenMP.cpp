@@ -7045,7 +7045,7 @@ Sema::checkOpenMPDeclareVariantFunction(Sema::DeclGroupPtrTy DG,
   // Deal with non-constant score and user condition expressions.
   auto HandleNonConstantScoresAndConditions = [this](Expr *&E,
                                                      bool IsScore) -> bool {
-    if (!E || E->isIntegerConstantExpr(Context))
+    if (!E || E->isIntegerConstantExpr(Context) || LangOpts.OpenMPDynamicVariant)
       return false;
 
     if (IsScore) {

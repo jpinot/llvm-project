@@ -58,7 +58,7 @@ struct DynamicVariant {
       IRBuilder<> IRB(&F.getEntryBlock());
       Type *returnType = IRB.getInt32Ty();
       std::vector<Type *> argTypes = {Type::getInt32PtrTy(M.getContext()),
-                                      IRB.getInt32Ty()};
+                                      IRB.getInt32Ty(), Type::getInt32PtrTy(M.getContext())};
       FunctionType *functionType =
           FunctionType::get(returnType, argTypes, false);
       auto DynVariantF =
@@ -101,13 +101,49 @@ struct DynamicVariant {
 
               // Build dynamic variant runtime call and store pair
               IRB.SetInsertPoint(&I);
+
+              // Parse user conditions, look for annotations
+              SmallVector<Value *, 2> UserConditions;
+              Instruction *Start = I.getPrevNode();
+              while (Start) {
+                if (Start->getMetadata("annotation")) {
+                  UserConditions.insert(UserConditions.begin(), Start);
+                }
+                Start = Start->getPrevNode();
+              }
+
+              Value *UserConditionsArray = ConstantPointerNull::get(
+                  PointerType::getInt32PtrTy(M.getContext()));
+              ArrayType *UserConditionsArrayType =
+                  ArrayType::get(IRB.getInt32Ty(), UserConditions.size());
+              // Store user conditions
+              if (UserConditions.size()) {
+                UserConditionsArray = IRB.CreateAlloca(UserConditionsArrayType);
+                int Index = 0;
+                for (Value *Condition : UserConditions) {
+                  Value *GEP = IRB.CreateInBoundsGEP(
+                      UserConditionsArrayType, UserConditionsArray,
+                      {IRB.getInt32(0), IRB.getInt32(Index)});
+                  Value *ConditionBitcast =
+                      IRB.CreateIntCast(Condition, IRB.getInt32Ty(), false);
+                  IRB.CreateStore(ConditionBitcast, GEP);
+                  Index++;
+                }
+              }
+
               GlobalVariable *TraitsArray =
                   M.getGlobalVariable(TraitsName, true);
               Value *TraitsBitCast = IRB.CreateBitCast(
                   TraitsArray, Type::getInt32PtrTy(M.getContext()));
+
+              Value *UserConditionsArrayBitcast =
+                  IRB.CreateInBoundsGEP(UserConditionsArrayType,
+                                        UserConditionsArray, IRB.getInt32(0));
+
               Instruction *ChoosedVariant =
                   dyn_cast<Instruction>(IRB.CreateCall(
-                      DynVariantF, {TraitsBitCast, IRB.getInt32(numVariants)}));
+                      DynVariantF, {TraitsBitCast, IRB.getInt32(numVariants),
+                                    UserConditionsArrayBitcast}));
 
               VariantCallsFound.push_back(
                   std::make_pair(ChoosedVariant, VariantFuncions));

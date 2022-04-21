@@ -1437,7 +1437,6 @@ void EmitAssemblyHelper::RunOptimizationPipeline(
     if (LangOpts.OpenMP && LangOpts.OpenMPDynamicVariant) {
       PB.registerPipelineStartEPCallback(
           [](ModulePassManager &MPM, OptimizationLevel Level) {
-            if (Level != OptimizationLevel::O0 && Level != OptimizationLevel::O1)
               MPM.addPass(DynamicVariantPass());
           });
     }

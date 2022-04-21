@@ -27,6 +27,8 @@
 #include <sys/sysinfo.h>
 #define LOW_MEMORY 45
 #define LOW_CPU_USAGE 46
+#define USER_CONDITION 49
+
 
 // Taskgraph
 extern int recording;
@@ -1517,7 +1519,7 @@ int GetRamFreePercentage(void) {
 }
 
 
-kmp_int32 __kmpc_dynamic_variant(kmp_int32 *traits, int numVariants) {
+kmp_int32 __kmpc_dynamic_variant(kmp_int32 *traits, int numVariants, kmp_int32 *user_conditions) {
   struct sysinfo sys_info;
   sysinfo(&sys_info);
   int number_of_processors = sysconf(_SC_NPROCESSORS_ONLN);
@@ -1529,6 +1531,7 @@ kmp_int32 __kmpc_dynamic_variant(kmp_int32 *traits, int numVariants) {
   }
   */
   int SelectedTrait= -1;
+  int UserConditionsEncountered=0;
   for (int i=0; i< numVariants; i++){
     if(traits[i] == LOW_MEMORY){
         int FreeRam = GetRamFreePercentage();
@@ -1543,6 +1546,14 @@ kmp_int32 __kmpc_dynamic_variant(kmp_int32 *traits, int numVariants) {
          if(SelectedTrait==-1)
           SelectedTrait= i;
        }
+    }
+    else if (traits[i] == USER_CONDITION){
+      if(user_conditions[UserConditionsEncountered]){
+        SelectedTrait = i;
+        break;
+      }
+      else
+        UserConditionsEncountered++;
     }
   }
   //printf("Trait: %d ", traits[i]);
