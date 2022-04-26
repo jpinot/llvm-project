@@ -489,26 +489,36 @@ int main(int Argc, const char **Argv) {
 
   // FIXME: Initial workaround, look for a more elegant solution
   bool isStaticTdg = false;
+  bool isOffloading = false;
   for (int i = 1; i < (int)Args.size(); i++) {
-    if (!strcmp(Args[i], "-static-tdg")) {
+    if (!strcmp(Args[i], "-static-tdg")) 
       isStaticTdg = true;
-      break;
-    }
+    else if (!strncmp(Args[i], "-fopenmp-targets",16))
+      isOffloading = true;
   }
   //Add -O2 flag to force loop unrolling when using static tdgs
   if(isStaticTdg){
     Args.push_back("-O2");
   }
-  //Remove -o flag when using static tdgs
+
+  //Remove -o and fopenmp-target flag when using static tdgs
   SmallVector<const char *, 256>  ArgsCopy = Args;
+  SmallVector<const char *, 256>  ArgsCopyOffloading = Args;
   if (isStaticTdg) {
     for (int i = 1; i < (int)ArgsCopy.size(); i++) {
       if (!strcmp(Args[i], "-o")) {
         ArgsCopy.erase(ArgsCopy.begin()+i, ArgsCopy.begin() + i + 2);
+	ArgsCopyOffloading.erase(ArgsCopyOffloading.begin()+i, ArgsCopyOffloading.begin() + i + 2);
         break;
       }
     }
-
+    if(isOffloading)
+    for (int i = 1; i < (int)ArgsCopy.size(); i++) {
+      if (!strncmp(Args[i], "-fopenmp-targets",16)) {
+        ArgsCopy.erase(ArgsCopy.begin()+i, ArgsCopy.begin() + i + 1);
+        break;
+      }
+    }
   }
   std::unique_ptr<Compilation> C(TheDriver.BuildCompilation(ArgsCopy));
   int Res = 1;
@@ -563,6 +573,13 @@ int main(int Argc, const char **Argv) {
 
     // FIXME: Initial workaround, look for a more elegant solution
     if (C->getArgs().hasArg(driver::options::OPT_static_tdg) && !IsCrash) {
+      
+      if (isOffloading){
+      	std::unique_ptr<Compilation> C_offloading(TheDriver.BuildCompilation(ArgsCopyOffloading));
+      	SmallVector<std::pair<int, const Command *>, 4> FailingCommandsOffloading;
+      	TheDriver.ExecuteCompilation(*C_offloading, FailingCommandsOffloading);
+      }
+
       //Replace input files by objects files
       SmallVector <char *, 4> FileNames;
       auto it = Args.begin()+1;
