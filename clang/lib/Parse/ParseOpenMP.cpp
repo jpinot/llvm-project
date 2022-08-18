@@ -3337,6 +3337,9 @@ OMPClause *Parser::ParseOpenMPClause(OpenMPDirectiveKind DKind,
           << getOpenMPClauseName(CKind) << getOpenMPDirectiveName(DKind);
     SkipUntil(tok::comma, tok::annot_pragma_openmp_end, StopBeforeMatch);
     break;
+  case OMPC_replicated:
+    Clause = ParseReplicatedClause(DKind, CKind);
+    break;
   default:
     break;
   }
@@ -4094,6 +4097,80 @@ ExprResult Parser::ParseOpenMPIteratorsExpr() {
                                       Data);
 }
 
+// Parse replicated clause for OpenMP task
+OMPClause *Parser::ParseReplicatedClause(OpenMPDirectiveKind DKind,
+                                         OpenMPClauseKind Kind) {
+  if (DKind != OMPD_task || Kind != OMPC_replicated) {
+    return nullptr;
+  }
+
+  SourceLocation Loc = ConsumeToken();
+  SourceLocation LLoc = Tok.getLocation();
+  SourceLocation RLoc;
+
+  BalancedDelimiterTracker T(*this, tok::l_paren, tok::annot_pragma_openmp_end);
+  if (T.expectAndConsume(diag::err_expected_lparen_after,
+                         getOpenMPClauseName(Kind).data()))
+    return nullptr;
+
+  SmallVector<Expr *, 3> Vars;
+  int NumVars = 0;
+  while ((Tok.isNot(tok::r_paren) && Tok.isNot(tok::colon) &&
+          Tok.isNot(tok::annot_pragma_openmp_end))) {
+    ParseScope OMPListScope(this, Scope::OpenMPDirectiveScope);
+    ColonProtectionRAIIObject ColonRAII(*this, false);
+    // Parse variable
+    ExprResult VarExpr =
+        Actions.CorrectDelayedTyposInExpr(ParseAssignmentExpression());
+    if (VarExpr.isUsable()) {
+      Expr *Var = VarExpr.get();
+      if (NumVars == 0) {
+        if (!Var->isIntegerConstantExpr(Actions.getASTContext())) {
+          Diag(Tok.getLocation(), diag::err_expected)
+              << "constant integer in first argument of replicated clause";
+          return nullptr;
+        }
+        int numReplicas = Var->getIntegerConstantExpr(Actions.getASTContext())
+                              ->getZExtValue();
+        if (numReplicas <= 0) {
+          Diag(Tok.getLocation(), diag::err_expected)
+              << "positive integer in first argument of replicated clause";
+          return nullptr;
+        }
+      }
+      if (NumVars == 2 && !Var->getType().getTypePtr()->isFunctionType()) {
+        Diag(Tok.getLocation(), diag::err_expected)
+            << "function pointer in third argument of replicated clause";
+        return nullptr;
+      }
+      Vars.push_back(Var);
+      NumVars++;
+
+    } else {
+      SkipUntil(tok::comma, tok::r_paren, tok::annot_pragma_openmp_end,
+                StopBeforeMatch);
+    }
+    // Skip ',' if any
+    bool IsComma = Tok.is(tok::comma);
+    if (IsComma)
+      ConsumeToken();
+    else if (Tok.isNot(tok::r_paren) && Tok.isNot(tok::annot_pragma_openmp_end))
+      Diag(Tok, diag::err_omp_expected_punc) << getOpenMPClauseName(Kind);
+  }
+  // Parse ')'.
+  RLoc = Tok.getLocation();
+  if (!T.consumeClose())
+    RLoc = T.getCloseLocation();
+
+  if (Vars.size() == 3) {
+    return Actions.ActOnOpenMPReplicatedClause(Vars[0], Vars[1], Vars[2], Loc,
+                                               LLoc, RLoc);
+  } else {
+    Diag(Tok.getLocation(), diag::err_expected)
+        << "three arguments for replicated clause";
+    return nullptr;
+  }
+}
 /// Parses clauses with list.
 bool Parser::ParseOpenMPVarList(OpenMPDirectiveKind DKind,
                                 OpenMPClauseKind Kind,

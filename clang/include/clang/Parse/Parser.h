@@ -3517,6 +3517,14 @@ private:
   /// nullptr.
   ///
   OMPClause *ParseOpenMPClause(OpenMPClauseKind Kind, bool ParseOnly = false);
+
+  /// Parses OpenMP task replicated clause
+  ///
+  /// \param Kind Kind of current clause.
+  ///
+  OMPClause *ParseReplicatedClause(OpenMPDirectiveKind DKind,
+                                    OpenMPClauseKind Kind);
+
   /// Parses clause with the list of variables of a kind \a Kind.
   ///
   /// \param Kind Kind of current clause.

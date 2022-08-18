@@ -1717,6 +1717,16 @@ void OMPClausePrinter::VisitOMPNumPreallocsClause(OMPNumPreallocsClause *Node) {
   OS << ")";
 }
 
+void OMPClausePrinter::VisitOMPReplicatedClause(OMPReplicatedClause *Node) {
+  OS << "replicated(";
+  Node->getNumReplications()->printPretty(OS, nullptr, Policy, 0);
+  OS << ",";
+  Node->getVar()->printPretty(OS, nullptr, Policy, 0);
+  OS << ",";
+  Node->getFunc()->printPretty(OS, nullptr, Policy, 0);
+  OS << ")";
+}
+
 void OMPClausePrinter::VisitOMPUnifiedAddressClause(OMPUnifiedAddressClause *) {
   OS << "unified_address";
 }

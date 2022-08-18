@@ -121,6 +121,14 @@ struct OMPTaskDataTy final {
   bool Nogroup = false;
   bool IsReductionWithTaskMod = false;
   bool IsWorksharingReduction = false;
+  //Boolean to diferenciate original instance from replicas instances
+  bool IsReplica = false;
+  //Boolean to diferenciate last sync node  of a task with replicas
+  bool IsLastReplicaNode = false;
+  //String to store the name of the global variable replicated for replicas
+  std::string ReplicatedVarName;
+  //Value to store the groupID of the task with replicas from the runtime call
+  llvm::Value *GroupID = 0;
 };
 
 /// Class intended to support codegen of all kind of the reduction clauses.
@@ -1358,6 +1366,13 @@ public:
                             Address Shareds, const Expr *IfCond,
                             const OMPTaskDataTy &Data);
 
+  virtual void
+  emitTaskReplicasCallback(CodeGenFunction &CGF, SourceLocation Loc,
+                           const OMPExecutableDirective &D, Expr *FuncToCall,
+                           llvm::Value *OriginalVar, llvm::Value *GroupID);
+
+  virtual llvm::Value *
+  emitGetNewGroupID(CodeGenFunction &CGF, SourceLocation Loc);
   /// Emit task region for the taskloop directive. The taskloop region is
   /// emitted in several steps:
   /// 1. Emit a call to kmp_task_t *__kmpc_omp_task_alloc(ident_t *, kmp_int32
@@ -2241,6 +2256,12 @@ public:
                     Address Shareds, const Expr *IfCond,
                     const OMPTaskDataTy &Data) override;
 
+  void emitTaskReplicasCallback(CodeGenFunction &CGF, SourceLocation Loc,
+                                const OMPExecutableDirective &D,
+                                Expr *FuncToCall, llvm::Value *OriginalVar,
+                                llvm::Value *GroupID) override;
+
+  llvm::Value *emitGetNewGroupID(CodeGenFunction &CGF, SourceLocation Loc) override;
   /// Emit task region for the taskloop directive. The taskloop region is
   /// emitted in several steps:
   /// 1. Emit a call to kmp_task_t *__kmpc_omp_task_alloc(ident_t *, kmp_int32

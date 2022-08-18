@@ -520,6 +520,16 @@ void OMPClauseProfiler::VisitOMPNumPreallocsClause(const OMPNumPreallocsClause *
     Profiler->VisitStmt(C->getNumPreallocs());
 }
 
+void OMPClauseProfiler::VisitOMPReplicatedClause(const OMPReplicatedClause *C) {
+  VistOMPClauseWithPreInit(C);
+  if (C->getNumReplications())
+    Profiler->VisitStmt(C->getNumReplications());
+  if(C->getVar())
+    Profiler->VisitStmt(C->getVar());
+  if(C->getFunc())
+    Profiler->VisitStmt(C->getFunc());
+}
+
 void OMPClauseProfiler::VisitOMPUnifiedAddressClause(
     const OMPUnifiedAddressClause *C) {}
 

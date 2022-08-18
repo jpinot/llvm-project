@@ -42,6 +42,38 @@ extern kmp_task_t *kmp_get_free_task_from_indexer();
 extern void kmp_insert_task_in_indexer(kmp_task_t *task);
 bool disable_stealing = false;
 extern bool staticSchedule;
+
+
+struct ReplicationNode{
+  void *task;
+  void *data;
+  bool finished;
+};
+
+struct ReplicationList{
+  int groupID;
+  int numNodes;
+  int numNodesSize;
+  struct ReplicationNode *nodes;
+  void *functionToCall;
+  bool callbackExecuted;
+};
+
+struct ReplicationList *listsOfReplicas;
+int numReplicasList = 0;
+int numReplicasListSize = 0;
+int initalNumOfLists = 2;
+
+//Predeclaration
+void freeReplicatedNode(kmp_task *task, int groupID, int gtid);
+void disableReplicatedNode(kmp_task *task, int groupID, int gtid);
+
+//Lock for managing redudants
+kmp_futex_lock_t replicationsLock =  KMP_FUTEX_LOCK_INITIALIZER(replicationsLock);
+
+//Atomic counter to manage groupIDs generation
+std::atomic<kmp_int32> groupIdCounter = ATOMIC_VAR_INIT(1);
+
 #endif
 
 /* forward declaration */
@@ -759,6 +791,8 @@ static void __kmp_free_task(kmp_int32 gtid, kmp_taskdata_t *taskdata,
   if (!taskdata->is_taskgraph) {
 #endif // LIBOMP_TASKGRAPH
     // only free tasks created outside taskgraph
+    if(taskdata->groupID!=0)
+      taskdata->groupID=0;
 #if USE_FAST_MEMORY
     __kmp_fast_free(thread, taskdata);
 #else /* ! USE_FAST_MEMORY */
@@ -908,6 +942,20 @@ static void __kmp_task_finish(kmp_int32 gtid, kmp_task_t *task,
                 gtid, taskdata, resumed_task));
 
   KMP_DEBUG_ASSERT(taskdata->td_flags.tasktype == TASK_EXPLICIT);
+
+  //Free redundant node here, to avoid execute the callback after the taskwait
+  if (!taskdata->is_taskgraph) {
+    if(taskdata->groupID!=0){
+      //printf("Finished task with groupID %d \n", taskdata->groupID);
+      freeReplicatedNode(task, taskdata->groupID, gtid);
+    }
+  }
+  else{
+    if(taskdata->groupID!=0){
+      //printf("Finished task with groupID %d inside TDG \n", taskdata->groupID);
+      disableReplicatedNode(task, taskdata->groupID, gtid);
+    }
+ }
 
 // Pop task from stack if tied
 #ifdef BUILD_TIED_TASK_STACK
@@ -1493,6 +1541,207 @@ void __kmpc_set_task_static_id(kmp_task_t *task, kmp_int32 staticID) {
     taskdata->td_task_id = staticID;
     taskdata->is_taskgraph = 1;
   }
+}
+kmp_int32 __kmpc_getNewGroupID(ident_t *loc_ref){
+    int id= KMP_ATOMIC_INC(&groupIdCounter);
+    return id;
+}
+void __kmpc_prepare_taskwait(void *task, void *data, kmp_int32 groupID,
+                             kmp_int32 gtid) {
+  __kmp_acquire_futex_lock(&replicationsLock, gtid);
+
+  // Initialize the list if it is not created
+  if (!numReplicasListSize) {
+    //printf("--- Runtime ---:Initialize list of lists \n");
+    listsOfReplicas =
+        (ReplicationList *)malloc(sizeof(ReplicationList) * initalNumOfLists);
+    numReplicasListSize = initalNumOfLists;
+    for (int i = 0; i < initalNumOfLists; i++) {
+      listsOfReplicas[i] = {-1, 0, initalNumOfLists, nullptr, nullptr, FALSE};
+    }
+  }
+  // Increment the list size if it is not enough
+  else if (numReplicasList >= numReplicasListSize) {
+    //printf("--- Runtime ---:Increment list of lists size \n");
+    int oldSize = numReplicasListSize;
+    numReplicasListSize = numReplicasListSize * 2;
+    listsOfReplicas = (ReplicationList *)realloc(
+        listsOfReplicas, sizeof(ReplicationList) * numReplicasListSize);
+    for (int i = oldSize; i < numReplicasListSize; i++) {
+      listsOfReplicas[i] = {-1, 0, initalNumOfLists, nullptr, nullptr, FALSE};
+    }
+  }
+
+  // Find an empty list
+  struct ReplicationList *ListToUse = nullptr;
+  for (int i = 0; i < numReplicasListSize; i++) {
+    // Figure out if a list with the GroupID is already created
+    if (listsOfReplicas[i].groupID == groupID) {
+      ListToUse = &(listsOfReplicas[i]);
+      //printf("--- Runtime ---:List of same groupID %d found \n", groupID);
+    }
+  }
+  if(ListToUse==nullptr)
+  for (int i = 0; i < numReplicasListSize; i++) {
+    if (listsOfReplicas[i].groupID == -1) {
+      ListToUse = &(listsOfReplicas[i]);
+      //printf("--- Runtime ---:Created list of groupID %d \n", groupID);
+      // Increment by 1 the number of lists used
+      ListToUse->groupID=groupID;
+      numReplicasList++;
+      break;
+    }
+  }
+
+  // Find if we need to initialize the list
+  if (ListToUse->numNodes == 0) {
+    //printf("--- Runtime ---:Initialize list of groupID %d \n", groupID);
+    ListToUse->nodes = (ReplicationNode *)malloc(sizeof(ReplicationNode) *
+                                                 (ListToUse->numNodesSize));
+    for (int i = 0; i < ListToUse->numNodesSize; i++) {
+      ListToUse->nodes[i] = {nullptr, nullptr, FALSE};
+    }
+  }
+  // Increment the list size if it is not enough
+  else if (ListToUse->numNodes >= ListToUse->numNodesSize) {
+    //printf("--- Runtime ---:Increment list of groupID %d \n", groupID);
+    int oldSize = ListToUse->numNodesSize;
+    ListToUse->numNodesSize = ListToUse->numNodesSize * 2;
+    ListToUse->nodes = (ReplicationNode *)realloc(
+        ListToUse->nodes, sizeof(ReplicationNode) * (ListToUse->numNodesSize));
+    for (int i = oldSize; i < ListToUse->numNodesSize; i++) {
+      ListToUse->nodes[i] = {nullptr, nullptr, FALSE};
+    }
+  }
+  // Save node and increment the number of nodes
+  ListToUse->nodes[ListToUse->numNodes] = {task, data, FALSE};
+  ListToUse->numNodes = ListToUse->numNodes + 1;
+  //printf("--- Runtime ---:Node saved! \n");
+
+  // Save groupID inside the task member
+  KMP_TASK_TO_TASKDATA(task)->groupID = groupID;
+
+  __kmp_release_futex_lock(&replicationsLock, gtid);
+}
+
+bool checkIfListIsFinished(ReplicationList *list) {
+  bool allFinished = TRUE;
+  for (int j = 0; j < list->numNodesSize; j++) {
+    if (list->nodes[j].task == nullptr)
+      break;
+
+    if (list->nodes[j].finished == FALSE) {
+      allFinished = FALSE;
+      break;
+    }
+  }
+  return allFinished;
+}
+
+void executeCallbackAndFreeList(ReplicationList *list) {
+
+  // Call function comparing with the data of the original
+  for (int i = 1; i < list->numNodes; i++) {
+    ((void (*)(void *, void *))list->functionToCall)(list->nodes[0].data,
+                                                     list->nodes[i].data);
+  }
+  // Reset list and nodes
+  list->callbackExecuted= TRUE;
+  list->numNodes = 0;
+  list->functionToCall = nullptr;
+  list->groupID = -1;
+  for (int j = 0; j < list->numNodesSize; j++) {
+    list->nodes[j].task = nullptr;
+    list->nodes[j].data = nullptr;
+    list->nodes[j].finished = FALSE;
+  }
+}
+
+// If we are in taskgraph, we dont free the data
+void disableReplicatedNode(kmp_task *task, int groupID, kmp_int32 gtid) {
+  __kmp_acquire_futex_lock(&replicationsLock, gtid);
+  // First, look for the list of the group
+  for (int i = 0; i < numReplicasListSize; i++) {
+    if (listsOfReplicas[i].groupID == groupID) {
+      //printf("--- Runtime ---:Found list of GroupID %d to free \n", groupID);
+      // Now find the node and set finished to true
+      for (int j = 0; j < listsOfReplicas[i].numNodesSize; j++) {
+        if (listsOfReplicas[i].nodes[j].task == task) {
+          //printf("--- Runtime ---:Found task to free in the list \n");
+          listsOfReplicas[i].nodes[j].finished = TRUE;
+        }
+      }
+      // Now check if all nodes of the list has finished
+      bool executeCallback = checkIfListIsFinished(&listsOfReplicas[i]);
+      //printf("Debo ejecutar callback) %d \n", executeCallback);
+      if (executeCallback && listsOfReplicas[i].functionToCall != nullptr) {
+        //printf("--- Runtime ---:Executing callback normal TDG! \n");
+        // Call function comparing with the data of the original
+        for (int z = 1; z < listsOfReplicas[i].numNodes; z++) {
+          ((void (*)(void *, void *))listsOfReplicas[i].functionToCall)(
+              listsOfReplicas[i].nodes[0].data,
+              listsOfReplicas[i].nodes[z].data);
+        }
+        // Only reset status
+        for (int j = 0; j < listsOfReplicas[i].numNodesSize; j++) {
+          listsOfReplicas[i].nodes[j].finished = FALSE;
+        }
+      }
+      break;
+    }
+  }
+  __kmp_release_futex_lock(&replicationsLock, gtid);
+}
+
+// When not in taskgraph, we free the data
+void freeReplicatedNode(kmp_task *task, int groupID, kmp_int32 gtid) {
+
+  __kmp_acquire_futex_lock(&replicationsLock, gtid);
+
+  // First, look for the list of the group
+  for (int i = 0; i < numReplicasListSize; i++) {
+    if (listsOfReplicas[i].groupID == groupID) {
+      //printf("--- Runtime ---:Found list of GroupID %d to free \n", groupID);
+      // Now find the node and set finished to true
+      for (int j = 0; j < listsOfReplicas[i].numNodesSize; j++) {
+        if (listsOfReplicas[i].nodes[j].task == task) {
+          //printf("--- Runtime ---:Found task to free in the list \n");
+          listsOfReplicas[i].nodes[j].finished = TRUE;
+        }
+      }
+      // Now check if all nodes of the list has finished
+      bool executeCallback = checkIfListIsFinished(&listsOfReplicas[i]);
+
+      if (executeCallback && listsOfReplicas[i].functionToCall != nullptr) {
+        //printf("--- Runtime ---:Executing callback normal! \n");
+        executeCallbackAndFreeList(&listsOfReplicas[i]);
+      }
+      break;
+    }
+  }
+  __kmp_release_futex_lock(&replicationsLock, gtid);
+}
+
+// TODO: async or sync?
+void __kmpc_replication_callback(ident_t *loc_ref, void *callbackFunction,
+                                 kmp_int32 groupID, kmp_int32 gtid) {
+  __kmp_acquire_futex_lock(&replicationsLock, gtid);
+  for (int i = 0; i < numReplicasListSize; i++) {
+    // Figure out if a list with the GroupID is already created
+    if (listsOfReplicas[i].groupID == groupID) {
+      listsOfReplicas[i].functionToCall = callbackFunction;
+
+      // Now check if all nodes of the list has finished
+      bool executeCallback = checkIfListIsFinished(&listsOfReplicas[i]);
+
+      if (executeCallback) {
+        //printf("--- Runtime ---:Executing callback from callback! \n");
+        executeCallbackAndFreeList(&listsOfReplicas[i]);
+      }
+    }
+  }
+
+  __kmp_release_futex_lock(&replicationsLock, gtid);
 }
 #endif
 

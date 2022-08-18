@@ -1924,6 +1924,19 @@ public:
                                                  LParenLoc, EndLoc);
   }
 
+   /// Build a new OpenMP 'replicated' clause.
+  ///
+  /// By default, performs semantic analysis to build the new OpenMP clause.
+  /// Subclasses may override this routine to provide different behavior.
+  OMPClause *RebuildOMPReplicatedClause(Expr *NumReplications,
+                                        Expr *Var,
+                                        Expr *Func,
+                                        SourceLocation StartLoc,
+                                        SourceLocation LParenLoc,
+                                        SourceLocation EndLoc) {
+    return getSema().ActOnOpenMPReplicatedClause(NumReplications, Var, Func, StartLoc, LParenLoc, EndLoc);
+  }
+
   /// Build a new OpenMP 'schedule' clause.
   ///
   /// By default, performs semantic analysis to build the new OpenMP clause.
@@ -9686,6 +9699,19 @@ TreeTransform<Derived>::TransformOMPNumPreallocsClause(OMPNumPreallocsClause *C)
     return nullptr;
   return getDerived().RebuildOMPNumPreallocsClause(
       NumPreallocs.get(), C->getBeginLoc(), C->getLParenLoc(), C->getEndLoc());
+}
+
+
+template <typename Derived>
+OMPClause *
+TreeTransform<Derived>::TransformOMPReplicatedClause(OMPReplicatedClause *C) {
+  ExprResult NumReplications = getDerived().TransformExpr(C->getNumReplications());
+  ExprResult Var = getDerived().TransformExpr(C->getVar());
+  ExprResult Func = getDerived().TransformExpr(C->getFunc());
+  if (NumReplications.isInvalid() || Var.isInvalid() || Func.isInvalid())
+    return nullptr;
+  return getDerived().RebuildOMPReplicatedClause(
+      NumReplications.get(), Var.get(), Func.get(), C->getBeginLoc(), C->getLParenLoc(), C->getEndLoc());
 }
 
 template <typename Derived>

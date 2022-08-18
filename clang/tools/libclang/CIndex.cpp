@@ -2259,6 +2259,13 @@ void OMPClauseEnqueue::VisitOMPNumPreallocsClause(const OMPNumPreallocsClause *C
   Visitor->AddStmt(C->getNumPreallocs());
 }
 
+void OMPClauseEnqueue::VisitOMPReplicatedClause(const OMPReplicatedClause *C) {
+  VisitOMPClauseWithPreInit(C);
+  Visitor->AddStmt(C->getNumReplications());
+  Visitor->AddStmt(C->getVar());
+  Visitor->AddStmt(C->getFunc());
+}
+
 void OMPClauseEnqueue::VisitOMPScheduleClause(const OMPScheduleClause *C) {
   VisitOMPClauseWithPreInit(C);
   Visitor->AddStmt(C->getChunkSize());

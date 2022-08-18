@@ -1455,6 +1455,106 @@ public:
   }
 };
 
+/// This represents 'replicated' clause in the '#pragma omp task'
+/// directive.
+///
+/// \code
+/// #pragma omp task replicated(2, a, func)
+/// \endcode
+/// In this example directive '#pragma omp task' has simple 'replicated'
+/// clause with number of 2 replications of variable "a" and check function "func".
+class OMPReplicatedClause : public OMPClause, public OMPClauseWithPreInit {
+  friend class OMPClauseReader;
+  /// Location of '('.
+  SourceLocation LParenLoc;
+
+  /// Condition of the 'replicated' clause.
+  Stmt *NumReplications = nullptr;
+
+  // Variable to replicate and check
+  Stmt *Var = nullptr;
+
+  // Function to check correctness
+  Stmt *Func = nullptr;
+
+  SmallVector<Expr *, 4> DummyVars;
+  /// Set conditions.
+  void setNumReplications(Expr *NReplications) {
+    NumReplications = NReplications;
+  }
+
+  void setVar(Expr *NVar) { Var = NVar; }
+
+  void setFunc(Expr *NFunc) { Func = NFunc; }
+
+public:
+  /// Build 'replicated' clause
+  ///
+  /// \param NumReplications Number of replications for the construct.
+  /// \param Var Variable replicated for the construct.
+  /// \param Func Function to check.
+  /// \param HelperReplications Helper replications for the construct.
+  /// \param CaptureRegion Innermost OpenMP region where expressions in this
+  /// clause must be captured.
+  /// \param StartLoc Starting location of the clause.
+  /// \param LParenLoc Location of '('.
+  /// \param EndLoc Ending location of the clause.
+  OMPReplicatedClause(Expr *NumReplications, Expr *Var, Expr *Func,
+                      Stmt *HelperReplications,
+                      OpenMPDirectiveKind CaptureRegion,
+                      SourceLocation StartLoc, SourceLocation LParenLoc,
+                      SourceLocation EndLoc)
+      : OMPClause(llvm::omp::OMPC_replicated, StartLoc, EndLoc),
+        OMPClauseWithPreInit(this), LParenLoc(LParenLoc),
+        NumReplications(NumReplications), Var(Var), Func(Func) {
+    setPreInitStmt(HelperReplications, CaptureRegion);
+  }
+
+  /// Build an empty clause.
+  OMPReplicatedClause()
+      : OMPClause(llvm::omp::OMPC_replicated, SourceLocation(),
+                  SourceLocation()),
+        OMPClauseWithPreInit(this) {}
+  /// Sets the location of '('.
+  void setLParenLoc(SourceLocation Loc) { LParenLoc = Loc; }
+
+  /// Returns the location of '('.
+  SourceLocation getLParenLoc() const { return LParenLoc; }
+
+  /// Returns number of threads.
+  Expr *getNumReplications() const {
+    return cast_or_null<Expr>(NumReplications);
+  }
+
+  void addDummyVar(Expr *e) { DummyVars.push_back(e); }
+
+  void cleanDummyVars() { DummyVars.clear(); }
+
+  ArrayRef<Expr *> getDummyVars() const { return DummyVars; }
+
+  Expr *getVar() const { return cast_or_null<Expr>(Var); }
+
+  Expr *getFunc() const { return cast_or_null<Expr>(Func); }
+
+  child_range children() {
+    return child_range(&NumReplications, &NumReplications + 1);
+  }
+
+  const_child_range children() const {
+    return const_child_range(&NumReplications, &NumReplications + 1);
+  }
+
+  child_range used_children() {
+    return child_range(child_iterator(), child_iterator());
+  }
+  const_child_range used_children() const {
+    return const_child_range(const_child_iterator(), const_child_iterator());
+  }
+
+  static bool classof(const OMPClause *T) {
+    return T->getClauseKind() == llvm::omp::OMPC_replicated;
+  }
+};
 
 /// This represents 'unified_address' clause in the '#pragma omp requires'
 /// directive.

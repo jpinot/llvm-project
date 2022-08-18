@@ -6261,6 +6261,14 @@ void OMPClauseWriter::VisitOMPNumPreallocsClause(OMPNumPreallocsClause *C) {
   Record.AddSourceLocation(C->getLParenLoc());
 }
 
+void OMPClauseWriter::VisitOMPReplicatedClause(OMPReplicatedClause *C) {
+  VisitOMPClauseWithPreInit(C);
+  Record.AddStmt(C->getNumReplications());
+  Record.AddStmt(C->getVar());
+  Record.AddStmt(C->getFunc());
+  Record.AddSourceLocation(C->getLParenLoc());
+}
+
 void OMPClauseWriter::VisitOMPScheduleClause(OMPScheduleClause *C) {
   VisitOMPClauseWithPreInit(C);
   Record.push_back(C->getScheduleKind());

@@ -11193,6 +11193,15 @@ public:
                                          SourceLocation StartLoc,
                                          SourceLocation LParenLoc,
                                          SourceLocation EndLoc);
+
+  /// Called on well-formed 'replicated' clause.
+  OMPClause *ActOnOpenMPReplicatedClause(Expr *NumReplications,
+                                         Expr *Var,
+                                         Expr *Func,
+                                         SourceLocation StartLoc,
+                                         SourceLocation LParenLoc,
+                                         SourceLocation EndLoc);
+
   /// Called on well-formed 'order' clause.
   OMPClause *ActOnOpenMPOrderClause(OpenMPOrderClauseKind Kind,
                                     SourceLocation KindLoc,

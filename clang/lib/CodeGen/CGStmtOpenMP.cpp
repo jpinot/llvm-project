@@ -4476,8 +4476,16 @@ void CodeGenFunction::EmitOMPTaskBasedDirective(
       *this, S.getBeginLoc(), LHSs, RHSs, Data);
   // Build list of dependences.
   for (const auto *C : S.getClausesOfKind<OMPDependClause>()) {
+    OpenMPDependClauseKind Kind = C->getDependencyKind();
+
+    // Task replicas must maintain input dependencies while discarding outputs
+    if (Kind == OMPC_DEPEND_out && Data.IsReplica)
+      continue;
+    else if (Kind == OMPC_DEPEND_inout && Data.IsReplica)
+      Kind = OMPC_DEPEND_in;
+
     OMPTaskDataTy::DependData &DD =
-        Data.Dependences.emplace_back(C->getDependencyKind(), C->getModifier());
+        Data.Dependences.emplace_back(Kind, C->getModifier());
     DD.DepExprs.append(C->varlist_begin(), C->varlist_end());
   }
   // Get list of local vars for untied tasks.
@@ -4934,7 +4942,27 @@ void CodeGenFunction::EmitOMPTaskDirective(const OMPTaskDirective &S) {
     }
   }
 
+  int NumReplicas = 0;
+  Expr *VarToReplicate = nullptr;
+  Expr *FuncToCall = nullptr;
+  llvm::Value *OriginalVarPointer = nullptr;
+  llvm::Value *OriginalVarValue = nullptr;
+  llvm::Value *GroupID = nullptr;
+  ArrayRef<Expr *> DummyVars;
+  if (const auto *C = S.getSingleClause<OMPReplicatedClause>()) {
+    GroupID = CGM.getOpenMPRuntime().emitGetNewGroupID(*this, S.getBeginLoc());
+    NumReplicas = (C->getNumReplications())
+                      ->getIntegerConstantExpr(getContext())
+                      ->getZExtValue();
+    VarToReplicate = C->getVar();
+    FuncToCall = C->getFunc();
+    DummyVars = C->getDummyVars();
+    OriginalVarValue = EmitScalarExpr(VarToReplicate);
+    OriginalVarPointer = EmitLValue(VarToReplicate).getPointer(*this);
+  }
+
   OMPTaskDataTy Data;
+  Data.GroupID = GroupID;
   // Check if we should emit tied or untied task.
   Data.Tied = !S.getSingleClause<OMPUntiedClause>();
   auto &&BodyGen = [CS](CodeGenFunction &CGF, PrePostActionTy &) {
@@ -4950,6 +4978,131 @@ void CodeGenFunction::EmitOMPTaskDirective(const OMPTaskDirective &S) {
   auto LPCRegion =
       CGOpenMPRuntime::LastprivateConditionalRAII::disable(*this, S);
   EmitOMPTaskBasedDirective(S, OMPD_task, BodyGen, TaskGen, Data);
+
+  //Data for syncronization task
+  OMPTaskDataTy ArtificialTaskData;
+  ArtificialTaskData.IsLastReplicaNode = true;
+
+  if (NumReplicas) {
+    // Generate multiple tasks
+    for (int i = 0; i < NumReplicas; i++) {
+
+      std::string VarName = "VariableReplicated_" +
+                            std::to_string(S.getID(getContext())) + "_" +
+                            std::to_string(i);
+
+      Address CapturedStructCopy = GeneratePrivateCopyCapturedStmtArgument(
+          *CS, VarToReplicate, OriginalVarValue, VarName);
+
+      auto &&TaskGen = [&S, SharedsTy, CapturedStruct, IfCond,
+                        CapturedStructCopy, VarToReplicate, OriginalVarValue,
+                        OriginalVarPointer](CodeGenFunction &CGF,
+                                            llvm::Function *OutlinedFn,
+                                            const OMPTaskDataTy &Data) {
+        llvm::GlobalVariable *VariableExists =
+            CGF.CGM.getModule().getNamedGlobal(Data.ReplicatedVarName);
+        // If the global replica does not exist means that the original variable
+        // has not been captured in the task region. Reasons are that the
+        // original variable is global or that the original variable is not used
+        // inside the task.
+        if (!VariableExists) {
+          // Create and initialize global replica, emit task call code and
+          // replace original global variable uses with the replica
+          CGF.CGM.getModule().getOrInsertGlobal(Data.ReplicatedVarName,
+                                                OriginalVarValue->getType());
+          llvm::GlobalVariable *VariableReplicated =
+              CGF.CGM.getModule().getNamedGlobal(Data.ReplicatedVarName);
+
+          VariableReplicated->setLinkage(llvm::GlobalValue::CommonLinkage);
+          VariableReplicated->setAlignment(llvm::MaybeAlign(4));
+          llvm::ConstantAggregateZero *ZeroInit =
+              llvm::ConstantAggregateZero::get(OriginalVarValue->getType());
+          VariableReplicated->setInitializer(ZeroInit);
+
+          CharUnits Align =
+              CGF.getContext().getTypeAlignInChars(VarToReplicate->getType());
+          CGF.Builder.CreateStore(
+              OriginalVarValue, Address(VariableReplicated,
+                                        VariableReplicated->getType(), Align));
+
+          CGF.CGM.getOpenMPRuntime().emitTaskCall(
+              CGF, S.getBeginLoc(), S, OutlinedFn, SharedsTy,
+              CapturedStructCopy, IfCond, Data);
+
+          // Replace users of the global value  with the replicated variable
+          // inside the outlined function
+          OriginalVarPointer->replaceUsesWithIf(
+              VariableReplicated, [OutlinedFn](llvm::Use &U) {
+                llvm::Instruction *I = dyn_cast<llvm::Instruction>(U.getUser());
+                return I && I->getFunction() == OutlinedFn;
+              });
+
+          // Replace GEPs users of the global variable, since GEPOperations are
+          // not instructions
+          for (llvm::User *GVarUser : OriginalVarPointer->users()) {
+            if (llvm::GEPOperator *IUser =
+                    dyn_cast<llvm::GEPOperator>(GVarUser)) {
+              if (IUser->getPointerOperand() == OriginalVarPointer) {
+                SmallVector<llvm::Value *> Indices;
+
+                for (auto *It = IUser->indices().begin();
+                     It != IUser->indices().end(); ++It) {
+                  Indices.push_back(*It);
+                }
+                llvm::Value *NewGEP =
+                    llvm::ConstantExpr::getInBoundsGetElementPtr(
+                        OriginalVarValue->getType(), VariableReplicated,
+                        Indices);
+
+                IUser->replaceUsesWithIf(NewGEP, [OutlinedFn](llvm::Use &U) {
+                  llvm::Instruction *I =
+                      dyn_cast<llvm::Instruction>(U.getUser());
+                  return I && I->getFunction() == OutlinedFn;
+                });
+              }
+            }
+          }
+        } else
+          CGF.CGM.getOpenMPRuntime().emitTaskCall(
+              CGF, S.getBeginLoc(), S, OutlinedFn, SharedsTy,
+              CapturedStructCopy, IfCond, Data);
+      };
+
+      OMPTaskDataTy NewData;
+
+      NewData.ReplicatedVarName = VarName;
+      NewData.Tied = !S.getSingleClause<OMPUntiedClause>();
+      NewData.IsReplica = true;
+      NewData.GroupID = GroupID;
+
+      // Add fake out dependency on replicas
+      OMPTaskDataTy::DependData &DD =
+          NewData.Dependences.emplace_back(OMPC_DEPEND_out, nullptr);
+      DD.DepExprs.push_back(DummyVars[i]);
+
+      // Add fake in dependency on last replica
+      OMPTaskDataTy::DependData &DDArt =
+          ArtificialTaskData.Dependences.emplace_back(OMPC_DEPEND_in, nullptr);
+      DDArt.DepExprs.push_back(DummyVars[i]);
+
+      EmitOMPTaskBasedDirective(S, OMPD_task, BodyGen, TaskGen, NewData);
+    }
+
+    //Add fake in dependency on last replica
+    OMPTaskDataTy::DependData &DDArt =
+        ArtificialTaskData.Dependences.emplace_back(OMPC_DEPEND_in, nullptr);
+    DDArt.DepExprs.push_back(VarToReplicate);
+
+    //Generate last replica with empy body and fake dependencies
+    auto &&EmptyBodyGen = [CS](CodeGenFunction &CGF, PrePostActionTy &) {};
+
+    EmitOMPTaskBasedDirective(S, OMPD_task, EmptyBodyGen, TaskGen,
+                              ArtificialTaskData);
+
+    //Emit callback
+    CGM.getOpenMPRuntime().emitTaskReplicasCallback(
+        *this, S.getBeginLoc(), S, FuncToCall, OriginalVarValue, GroupID);
+  }
 }
 
 void CodeGenFunction::EmitOMPTaskyieldDirective(
@@ -6133,6 +6286,7 @@ static void emitOMPAtomicExpr(CodeGenFunction &CGF, OpenMPClauseKind Kind,
   case OMPC_align:
   case OMPC_num_preallocs:
   case OMPC_tdg_type:
+  case OMPC_replicated:
     llvm_unreachable("Clause is not allowed in 'omp atomic'.");
   }
 }

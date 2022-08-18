@@ -15386,6 +15386,36 @@ OMPClause *Sema::ActOnOpenMPNumPreallocsClause(Expr *NumPreallocs,
       ValExpr, HelperValStmt, CaptureRegion, StartLoc, LParenLoc, EndLoc);
 }
 
+OMPClause *Sema::ActOnOpenMPReplicatedClause(Expr *NumReplications, Expr *Var,
+                                             Expr *Func,
+                                             SourceLocation StartLoc,
+                                             SourceLocation LParenLoc,
+                                             SourceLocation EndLoc) {
+  Expr *ValExpr = NumReplications;
+  Stmt *HelperValStmt = nullptr;
+  int NumOfReplicas = ValExpr->getIntegerConstantExpr(Context)->getZExtValue();
+  if (!isNonNegativeIntegerValue(ValExpr, *this, OMPC_replicated,
+                                 /*StrictlyPositive=*/true))
+    return nullptr;
+  OpenMPDirectiveKind DKind = DSAStack->getCurrentDirective();
+  OpenMPDirectiveKind CaptureRegion =
+      getOpenMPCaptureRegionForClause(DKind, OMPC_replicated, LangOpts.OpenMP);
+
+  OMPReplicatedClause *Clause = new (Context)
+      OMPReplicatedClause(ValExpr, Var, Func, HelperValStmt, CaptureRegion,
+                          StartLoc, LParenLoc, EndLoc);
+
+  for (int i = 0; i < NumOfReplicas; i++) {
+    VarDecl *VDInit =
+        buildVarDecl(*this, ValExpr->getExprLoc(), ValExpr->getType(), "dummy");
+    Expr *VDInitRefExpr = buildDeclRefExpr(*this, VDInit, ValExpr->getType(),
+                                           ValExpr->getExprLoc());
+    Clause->addDummyVar(VDInitRefExpr);
+  }
+
+  return Clause;
+}
+
 OMPClause *Sema::ActOnOpenMPAtomicDefaultMemOrderClause(
     OpenMPAtomicDefaultMemOrderClauseKind Kind, SourceLocation KindKwLoc,
     SourceLocation StartLoc, SourceLocation LParenLoc, SourceLocation EndLoc) {

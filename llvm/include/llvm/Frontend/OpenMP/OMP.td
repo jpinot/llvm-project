@@ -137,6 +137,11 @@ def OMPC_NumPreallocs : Clause<"num_preallocs"> {
   let flangClass = "ScalarIntExpr";
 }
 
+def OMPC_Replicated : Clause<"replicated"> {
+  let clangClass = "OMPReplicatedClause";
+  let flangClass = "ScalarIntExpr";
+}
+
 // static and auto are C++ keywords so need a capital to disambiguate.
 def OMP_SCHEDULE_Static : ClauseVal<"Static", 2, 1> {}
 def OMP_SCHEDULE_Dynamic : ClauseVal<"Dynamic", 3, 1> {}
@@ -427,7 +432,8 @@ def OMP_Task : Directive<"task"> {
     VersionedClause<OMPC_Default>,
     VersionedClause<OMPC_If>,
     VersionedClause<OMPC_Final>,
-    VersionedClause<OMPC_Priority>
+    VersionedClause<OMPC_Priority>,
+    VersionedClause<OMPC_Replicated>
   ];
 }
 def OMP_Simd : Directive<"simd"> {

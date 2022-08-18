@@ -11733,6 +11733,9 @@ OMPClause *OMPClauseReader::readClause() {
   case llvm::omp::OMPC_num_preallocs:
     C = new (Context) OMPNumPreallocsClause();
     break;
+  case llvm::omp::OMPC_replicated:
+    C = new (Context) OMPReplicatedClause();
+    break;
   case llvm::omp::OMPC_safelen:
     C = new (Context) OMPSafelenClause();
     break;
@@ -12113,6 +12116,14 @@ void OMPClauseReader::VisitOMPTdgTypeClause(OMPTdgTypeClause *C) {
 void OMPClauseReader::VisitOMPNumPreallocsClause(OMPNumPreallocsClause *C) {
   VisitOMPClauseWithPreInit(C);
   C->setNumPreallocs(Record.readSubExpr());
+  C->setLParenLoc(Record.readSourceLocation());
+}
+
+void OMPClauseReader::VisitOMPReplicatedClause(OMPReplicatedClause *C) {
+  VisitOMPClauseWithPreInit(C);
+  C->setNumReplications(Record.readSubExpr());
+  C->setVar(Record.readSubExpr());
+  C->setFunc(Record.readSubExpr());
   C->setLParenLoc(Record.readSourceLocation());
 }
 

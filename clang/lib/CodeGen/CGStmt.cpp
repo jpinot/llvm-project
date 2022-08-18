@@ -2802,6 +2802,54 @@ Address CodeGenFunction::GenerateCapturedStmtArgument(const CapturedStmt &S) {
   return CapStruct.getAddress(*this);
 }
 
+Address CodeGenFunction::GeneratePrivateCopyCapturedStmtArgument(
+    const CapturedStmt &S, Expr *VarToReplicate, llvm::Value *OriginalVarValue,
+    std::string ReplicaName) {
+  const RecordDecl *RD = S.getCapturedRecordDecl();
+  QualType RecordTy = getContext().getRecordType(RD);
+
+  // Initialize the captured struct.
+  LValue SlotLV =
+      MakeAddrLValue(CreateMemTemp(RecordTy, "agg.captured"), RecordTy);
+
+  RecordDecl::field_iterator CurField = RD->field_begin();
+  for (CapturedStmt::const_capture_init_iterator I = S.capture_init_begin(),
+                                                 E = S.capture_init_end();
+       I != E; ++I, ++CurField) {
+    LValue LV = EmitLValueForFieldInitialization(SlotLV, *CurField);
+    if (CurField->hasCapturedVLAType()) {
+      EmitLambdaVLACapture(CurField->getCapturedVLAType(), LV);
+    } else {
+      const auto *DRE1 = cast<DeclRefExpr>(*I);
+      const auto *DRE2 = cast<DeclRefExpr>(VarToReplicate);
+      if (DRE1->getDecl() == DRE2->getDecl()) {
+
+        llvm::Value *OriginalVarEmitted = EmitScalarExpr((*I));
+        llvm::Type *OriginalVarType = OriginalVarEmitted->getType();
+
+        CGM.getModule().getOrInsertGlobal(ReplicaName, OriginalVarType);
+
+        llvm::GlobalVariable *VariableReplicated =
+            CGM.getModule().getNamedGlobal(ReplicaName);
+        VariableReplicated->setLinkage(llvm::GlobalValue::CommonLinkage);
+        VariableReplicated->setAlignment(llvm::MaybeAlign(4));
+        llvm::ConstantAggregateZero *ZeroInit =
+            llvm::ConstantAggregateZero::get(OriginalVarValue->getType());
+        VariableReplicated->setInitializer(ZeroInit);
+
+        CharUnits Align = getContext().getTypeAlignInChars((*I)->getType());
+        Builder.CreateStore(
+            OriginalVarValue,
+            Address(VariableReplicated, VariableReplicated->getType(), Align));
+        Builder.CreateStore(VariableReplicated, LV.getAddress(*this));
+      } else {
+        EmitInitializerForField(*CurField, LV, *I);
+      }
+    }
+  }
+  return SlotLV.getAddress(*this);
+}
+
 /// Creates the outlined function for a CapturedStmt.
 llvm::Function *
 CodeGenFunction::GenerateCapturedStmtFunction(const CapturedStmt &S) {

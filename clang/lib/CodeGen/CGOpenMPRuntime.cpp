@@ -5199,6 +5199,51 @@ void CGOpenMPRuntime::emitUpdateClause(CodeGenFunction &CGF, LValue DepobjLVal,
   CGF.EmitBlock(DoneBB, /*IsFinished=*/true);
 }
 
+llvm::Value *CGOpenMPRuntime::emitGetNewGroupID(CodeGenFunction &CGF,
+                                                SourceLocation Loc) {
+  llvm::Value *UpLoc = emitUpdateLocation(CGF, Loc);
+  return CGF.EmitRuntimeCall(OMPBuilder.getOrCreateRuntimeFunction(
+                                 CGM.getModule(), OMPRTL___kmpc_getNewGroupID),
+                             {UpLoc});
+}
+
+void CGOpenMPRuntime::emitTaskReplicasCallback(
+    CodeGenFunction &CGF, SourceLocation Loc, const OMPExecutableDirective &D,
+    Expr *FuncToCall, llvm::Value *OriginalVar, llvm::Value *GroupID) {
+
+  if (!CGF.HaveInsertPoint())
+    return;
+
+  llvm::Value *ThreadID = getThreadID(CGF, Loc);
+  llvm::Value *UpLoc = emitUpdateLocation(CGF, Loc);
+  llvm::Function *Func =
+      dyn_cast<llvm::Function>(CGF.EmitLValue(FuncToCall).getPointer(CGF));
+
+  // Check that the function is well formed.
+  if ((int)Func->arg_size() != 2) {
+    unsigned DiagID = CGM.getDiags().getCustomDiagID(
+        DiagnosticsEngine::Error, "provided replicas function callback for "
+                                  "replicas must have two arguments. The "
+                                  "funcion always compares pairs of data.");
+    CGM.getDiags().Report(Loc, DiagID);
+  }
+  llvm::Type *Arg1Type = Func->getArg(0)->getType();
+  llvm::Type *Arg2Type = Func->getArg(1)->getType();
+  if (!Arg1Type->isPointerTy() || !Arg2Type->isPointerTy()) {
+    unsigned DiagID = CGM.getDiags().getCustomDiagID(
+        DiagnosticsEngine::Error, "provided replicas function callback "
+                                  "arguments must be data pointers. The user "
+                                  "must access the data through pointers");
+    CGM.getDiags().Report(Loc, DiagID);
+  }
+
+  llvm::Value *CallbackArgs[] = {UpLoc, Func, GroupID, ThreadID};
+
+  CGF.EmitRuntimeCall(OMPBuilder.getOrCreateRuntimeFunction(
+                          CGM.getModule(), OMPRTL___kmpc_replication_callback),
+                      CallbackArgs);
+}
+
 void CGOpenMPRuntime::emitTaskCall(CodeGenFunction &CGF, SourceLocation Loc,
                                    const OMPExecutableDirective &D,
                                    llvm::Function *TaskFunction,
@@ -5241,12 +5286,49 @@ void CGOpenMPRuntime::emitTaskCall(CodeGenFunction &CGF, SourceLocation Loc,
     DepTaskArgs[6] = llvm::ConstantPointerNull::get(CGF.VoidPtrTy);
   }
   auto &&ThenCodeGen = [this, &Data, TDBase, KmpTaskTQTyRD, &TaskArgs,
-                        &DepTaskArgs](CodeGenFunction &CGF, PrePostActionTy &) {
+                        &DepTaskArgs, Shareds, NewTask, &D, TaskFunction, ThreadID, Loc](CodeGenFunction &CGF, PrePostActionTy &) {
     if (!Data.Tied) {
       auto PartIdFI = std::next(KmpTaskTQTyRD->field_begin(), KmpTaskTPartId);
       LValue PartIdLVal = CGF.EmitLValueForField(TDBase, *PartIdFI);
       CGF.EmitStoreOfScalar(CGF.Builder.getInt32(0), PartIdLVal);
     }
+
+    // For replicas, find replicated variable and call kmpc_prepare_taskwait
+    if (D.getSingleClause<OMPReplicatedClause>() && !Data.IsLastReplicaNode) {
+
+      llvm::Value *ReplicatedVar = nullptr;
+      // Original task does not need to look for the replicated var
+      if (!Data.IsReplica) {
+        Expr *VarToReplicate =
+            D.getSingleClause<OMPReplicatedClause>()->getVar();
+        llvm::Value *OriginalVarPointer =
+            CGF.EmitLValue(VarToReplicate).getPointer(CGF);
+
+        ReplicatedVar = OriginalVarPointer;
+      } else {
+        //Replicas are generated as global variables
+        if (!Data.ReplicatedVarName.empty()) {
+          ReplicatedVar = CGF.CGM.getModule().getNamedGlobal(
+              StringRef(Data.ReplicatedVarName));
+        }
+      }
+      if (!ReplicatedVar) {
+        unsigned DiagID = CGM.getDiags().getCustomDiagID(
+            DiagnosticsEngine::Error,
+            "Original or replicated variables for tasks and replicas are not "
+            "found when creating "
+            "__kmpc_prepare_taskwait call.");
+        CGM.getDiags().Report(Loc, DiagID);
+      }
+
+      // Generate kmpc_prepare_taskwait call
+      llvm::Value *PrepareTaskwaitArgs[] = {NewTask, ReplicatedVar,
+                                            Data.GroupID, ThreadID};
+      CGF.EmitRuntimeCall(OMPBuilder.getOrCreateRuntimeFunction(
+                              CGM.getModule(), OMPRTL___kmpc_prepare_taskwait),
+                          PrepareTaskwaitArgs);
+    }
+
     if (!Data.Dependences.empty()) {
       CGF.EmitRuntimeCall(
           OMPBuilder.getOrCreateRuntimeFunction(
@@ -13208,6 +13290,17 @@ void CGOpenMPSIMDRuntime::emitTaskCall(CodeGenFunction &CGF, SourceLocation Loc,
                                        QualType SharedsTy, Address Shareds,
                                        const Expr *IfCond,
                                        const OMPTaskDataTy &Data) {
+  llvm_unreachable("Not supported in SIMD-only mode");
+}
+
+void CGOpenMPSIMDRuntime::emitTaskReplicasCallback(
+    CodeGenFunction &CGF, SourceLocation Loc, const OMPExecutableDirective &D,
+    Expr *FuncToCall, llvm::Value *OriginalVar, llvm::Value *GroupID) {
+  llvm_unreachable("Not supported in SIMD-only mode");
+}
+
+llvm::Value *CGOpenMPSIMDRuntime::emitGetNewGroupID(CodeGenFunction &CGF,
+                                                    SourceLocation Loc) {
   llvm_unreachable("Not supported in SIMD-only mode");
 }
 

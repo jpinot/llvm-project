@@ -2577,8 +2577,12 @@ struct kmp_taskdata { /* aligned during dynamic allocation       */
   ompt_task_info_t ompt_task_info;
 #endif
 #if LIBOMP_TASKGRAPH
+  //Used to know if the task is created inside a taskgraph
   int is_taskgraph = 0;
+  //Used for preallocation mechanism
   struct kmp_space_indexer_node *indexer_node;
+  //Used for replicas
+  int groupID = 0;
 #endif
 }; // struct kmp_taskdata
 
@@ -4008,6 +4012,9 @@ KMP_EXPORT void __kmpc_prealloc_tasks(
     kmp_space_indexer_node *preallocated_nodes, kmp_uint32 n_task_constructs,
     kmp_uint32 max_concurrent_tasks, kmp_uint32 task_size);
 KMP_EXPORT void __kmpc_set_task_static_id(kmp_task_t *task, int staticID);
+KMP_EXPORT kmp_int32 __kmpc_getNewGroupID(ident_t *loc_ref);
+KMP_EXPORT void __kmpc_prepare_taskwait(void *task, void *data, kmp_int32 groupID, kmp_int32 gtid);
+KMP_EXPORT void __kmpc_replication_callback(ident_t *loc_ref, void *callbackFunction, kmp_int32 groupID, kmp_int32 threadID);
 #endif
 KMP_EXPORT kmp_int32 __kmpc_dynamic_variant(kmp_int32 *traits, int numVariants, kmp_int32 *user_conditions);
 KMP_EXPORT kmp_int32 __kmpc_omp_taskyield(ident_t *loc_ref, kmp_int32 gtid,

@@ -3504,6 +3504,7 @@ public:
 
   llvm::Function *GenerateCapturedStmtFunction(const CapturedStmt &S);
   Address GenerateCapturedStmtArgument(const CapturedStmt &S);
+  Address GeneratePrivateCopyCapturedStmtArgument(const CapturedStmt &S, Expr *VarToReplicate, llvm::Value *OriginalVarValue, std::string ReplicaName);
   llvm::Function *GenerateOpenMPCapturedStmtFunction(const CapturedStmt &S,
                                                      SourceLocation Loc);
   void GenerateOpenMPCapturedVars(const CapturedStmt &S,
