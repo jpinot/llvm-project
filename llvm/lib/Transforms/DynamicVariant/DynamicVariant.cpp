@@ -17,6 +17,7 @@
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
@@ -106,7 +107,10 @@ struct DynamicVariant {
               SmallVector<Value *, 2> UserConditions;
               Instruction *Start = I.getPrevNode();
               while (Start) {
-                if (Start->getMetadata("annotation")) {
+                if (dyn_cast<CallInst>(Start) &&
+                    !dyn_cast<IntrinsicInst>(Start))
+                  break;
+                else if (Start->getMetadata("annotation")) {
                   UserConditions.insert(UserConditions.begin(), Start);
                 }
                 Start = Start->getPrevNode();
