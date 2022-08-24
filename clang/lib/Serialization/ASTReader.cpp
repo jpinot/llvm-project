@@ -12120,7 +12120,6 @@ void OMPClauseReader::VisitOMPNumPreallocsClause(OMPNumPreallocsClause *C) {
 }
 
 void OMPClauseReader::VisitOMPReplicatedClause(OMPReplicatedClause *C) {
-  VisitOMPClauseWithPreInit(C);
   C->setNumReplications(Record.readSubExpr());
   C->setVar(Record.readSubExpr());
   C->setFunc(Record.readSubExpr());

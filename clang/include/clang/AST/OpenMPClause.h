@@ -1463,7 +1463,7 @@ public:
 /// \endcode
 /// In this example directive '#pragma omp task' has simple 'replicated'
 /// clause with number of 2 replications of variable "a" and check function "func".
-class OMPReplicatedClause : public OMPClause, public OMPClauseWithPreInit {
+class OMPReplicatedClause : public OMPClause{
   friend class OMPClauseReader;
   /// Location of '('.
   SourceLocation LParenLoc;
@@ -1500,21 +1500,14 @@ public:
   /// \param LParenLoc Location of '('.
   /// \param EndLoc Ending location of the clause.
   OMPReplicatedClause(Expr *NumReplications, Expr *Var, Expr *Func,
-                      Stmt *HelperReplications,
-                      OpenMPDirectiveKind CaptureRegion,
                       SourceLocation StartLoc, SourceLocation LParenLoc,
                       SourceLocation EndLoc)
-      : OMPClause(llvm::omp::OMPC_replicated, StartLoc, EndLoc),
-        OMPClauseWithPreInit(this), LParenLoc(LParenLoc),
-        NumReplications(NumReplications), Var(Var), Func(Func) {
-    setPreInitStmt(HelperReplications, CaptureRegion);
-  }
+      : OMPClause(llvm::omp::OMPC_replicated, StartLoc, EndLoc), LParenLoc(LParenLoc), NumReplications(NumReplications), Var(Var), Func(Func) {}
 
   /// Build an empty clause.
   OMPReplicatedClause()
       : OMPClause(llvm::omp::OMPC_replicated, SourceLocation(),
-                  SourceLocation()),
-        OMPClauseWithPreInit(this) {}
+                  SourceLocation()) {}
   /// Sets the location of '('.
   void setLParenLoc(SourceLocation Loc) { LParenLoc = Loc; }
 

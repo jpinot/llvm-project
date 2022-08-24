@@ -6262,7 +6262,6 @@ void OMPClauseWriter::VisitOMPNumPreallocsClause(OMPNumPreallocsClause *C) {
 }
 
 void OMPClauseWriter::VisitOMPReplicatedClause(OMPReplicatedClause *C) {
-  VisitOMPClauseWithPreInit(C);
   Record.AddStmt(C->getNumReplications());
   Record.AddStmt(C->getVar());
   Record.AddStmt(C->getFunc());

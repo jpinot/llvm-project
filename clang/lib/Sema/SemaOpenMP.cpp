@@ -15392,17 +15392,13 @@ OMPClause *Sema::ActOnOpenMPReplicatedClause(Expr *NumReplications, Expr *Var,
                                              SourceLocation LParenLoc,
                                              SourceLocation EndLoc) {
   Expr *ValExpr = NumReplications;
-  Stmt *HelperValStmt = nullptr;
   int NumOfReplicas = ValExpr->getIntegerConstantExpr(Context)->getZExtValue();
   if (!isNonNegativeIntegerValue(ValExpr, *this, OMPC_replicated,
                                  /*StrictlyPositive=*/true))
     return nullptr;
-  OpenMPDirectiveKind DKind = DSAStack->getCurrentDirective();
-  OpenMPDirectiveKind CaptureRegion =
-      getOpenMPCaptureRegionForClause(DKind, OMPC_replicated, LangOpts.OpenMP);
 
   OMPReplicatedClause *Clause = new (Context)
-      OMPReplicatedClause(ValExpr, Var, Func, HelperValStmt, CaptureRegion,
+      OMPReplicatedClause(ValExpr, Var, Func,
                           StartLoc, LParenLoc, EndLoc);
 
   for (int i = 0; i < NumOfReplicas; i++) {

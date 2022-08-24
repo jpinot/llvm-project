@@ -521,7 +521,6 @@ void OMPClauseProfiler::VisitOMPNumPreallocsClause(const OMPNumPreallocsClause *
 }
 
 void OMPClauseProfiler::VisitOMPReplicatedClause(const OMPReplicatedClause *C) {
-  VistOMPClauseWithPreInit(C);
   if (C->getNumReplications())
     Profiler->VisitStmt(C->getNumReplications());
   if(C->getVar())

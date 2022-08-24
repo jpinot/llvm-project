@@ -2260,7 +2260,6 @@ void OMPClauseEnqueue::VisitOMPNumPreallocsClause(const OMPNumPreallocsClause *C
 }
 
 void OMPClauseEnqueue::VisitOMPReplicatedClause(const OMPReplicatedClause *C) {
-  VisitOMPClauseWithPreInit(C);
   Visitor->AddStmt(C->getNumReplications());
   Visitor->AddStmt(C->getVar());
   Visitor->AddStmt(C->getFunc());

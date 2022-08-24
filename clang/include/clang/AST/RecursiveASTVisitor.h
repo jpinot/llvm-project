@@ -3203,7 +3203,6 @@ bool RecursiveASTVisitor<Derived>::VisitOMPNumPreallocsClause(
 template <typename Derived>
 bool RecursiveASTVisitor<Derived>::VisitOMPReplicatedClause(
     OMPReplicatedClause *C) {
-  TRY_TO(VisitOMPClauseWithPreInit(C));
   TRY_TO(TraverseStmt(C->getNumReplications()));
   TRY_TO(TraverseStmt(C->getVar()));
   TRY_TO(TraverseStmt(C->getFunc()));
