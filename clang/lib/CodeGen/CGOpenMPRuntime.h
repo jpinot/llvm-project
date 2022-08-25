@@ -128,7 +128,7 @@ struct OMPTaskDataTy final {
   //String to store the name of the global variable replicated for replicas
   std::string ReplicatedVarName;
   //Value to store the groupID of the task with replicas from the runtime call
-  llvm::Value *GroupID = 0;
+  llvm::Value *GroupID = nullptr;
 };
 
 /// Class intended to support codegen of all kind of the reduction clauses.

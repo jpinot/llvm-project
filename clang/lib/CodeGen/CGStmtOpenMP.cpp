@@ -4477,13 +4477,21 @@ void CodeGenFunction::EmitOMPTaskBasedDirective(
   // Build list of dependences.
   for (const auto *C : S.getClausesOfKind<OMPDependClause>()) {
     OpenMPDependClauseKind Kind = C->getDependencyKind();
-
-    // Task replicas must maintain input dependencies while discarding outputs
-    if (Kind == OMPC_DEPEND_out && Data.IsReplica)
-      continue;
-    else if (Kind == OMPC_DEPEND_inout && Data.IsReplica)
-      Kind = OMPC_DEPEND_in;
-
+    if (S.getSingleClause<OMPReplicatedClause>()) {
+      // Task and replicas must discard some dependencies
+      if (Kind == OMPC_DEPEND_out && Data.IsReplica)
+        continue;
+      else if (Kind == OMPC_DEPEND_inout && Data.IsReplica)
+        Kind = OMPC_DEPEND_in;
+      else if (Kind == OMPC_DEPEND_in && Data.IsLastReplicaNode)
+        continue;
+      else if (Kind == OMPC_DEPEND_inout && Data.IsLastReplicaNode)
+        Kind = OMPC_DEPEND_out;
+      else if (Kind == OMPC_DEPEND_out && !Data.IsReplica && !Data.IsLastReplicaNode)
+        continue;
+      else if (Kind == OMPC_DEPEND_inout && !Data.IsReplica && !Data.IsLastReplicaNode)
+        Kind = OMPC_DEPEND_in;
+    }
     OMPTaskDataTy::DependData &DD =
         Data.Dependences.emplace_back(Kind, C->getModifier());
     DD.DepExprs.append(C->varlist_begin(), C->varlist_end());
@@ -4963,6 +4971,22 @@ void CodeGenFunction::EmitOMPTaskDirective(const OMPTaskDirective &S) {
 
   OMPTaskDataTy Data;
   Data.GroupID = GroupID;
+
+  //Data for syncronization task
+  OMPTaskDataTy ArtificialTaskData;
+  ArtificialTaskData.IsLastReplicaNode = true;
+
+  if (NumReplicas) {
+    // Add fake dummy out dep
+    OMPTaskDataTy::DependData &DD =
+        Data.Dependences.emplace_back(OMPC_DEPEND_out, nullptr);
+    DD.DepExprs.push_back(DummyVars[0]);
+
+    // Add fake in dependency on last replica
+    OMPTaskDataTy::DependData &DDArt =
+        ArtificialTaskData.Dependences.emplace_back(OMPC_DEPEND_in, nullptr);
+    DDArt.DepExprs.push_back(DummyVars[0]);
+  }
   // Check if we should emit tied or untied task.
   Data.Tied = !S.getSingleClause<OMPUntiedClause>();
   auto &&BodyGen = [CS](CodeGenFunction &CGF, PrePostActionTy &) {
@@ -4978,10 +5002,6 @@ void CodeGenFunction::EmitOMPTaskDirective(const OMPTaskDirective &S) {
   auto LPCRegion =
       CGOpenMPRuntime::LastprivateConditionalRAII::disable(*this, S);
   EmitOMPTaskBasedDirective(S, OMPD_task, BodyGen, TaskGen, Data);
-
-  //Data for syncronization task
-  OMPTaskDataTy ArtificialTaskData;
-  ArtificialTaskData.IsLastReplicaNode = true;
 
   if (NumReplicas) {
     // Generate multiple tasks
@@ -5078,12 +5098,12 @@ void CodeGenFunction::EmitOMPTaskDirective(const OMPTaskDirective &S) {
       // Add fake out dependency on replicas
       OMPTaskDataTy::DependData &DD =
           NewData.Dependences.emplace_back(OMPC_DEPEND_out, nullptr);
-      DD.DepExprs.push_back(DummyVars[i]);
+      DD.DepExprs.push_back(DummyVars[i+1]);
 
       // Add fake in dependency on last replica
       OMPTaskDataTy::DependData &DDArt =
           ArtificialTaskData.Dependences.emplace_back(OMPC_DEPEND_in, nullptr);
-      DDArt.DepExprs.push_back(DummyVars[i]);
+      DDArt.DepExprs.push_back(DummyVars[i+1]);
 
       EmitOMPTaskBasedDirective(S, OMPD_task, BodyGen, TaskGen, NewData);
     }

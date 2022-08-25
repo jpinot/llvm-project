@@ -15398,10 +15398,9 @@ OMPClause *Sema::ActOnOpenMPReplicatedClause(Expr *NumReplications, Expr *Var,
     return nullptr;
 
   OMPReplicatedClause *Clause = new (Context)
-      OMPReplicatedClause(ValExpr, Var, Func,
-                          StartLoc, LParenLoc, EndLoc);
+      OMPReplicatedClause(ValExpr, Var, Func, StartLoc, LParenLoc, EndLoc);
 
-  for (int i = 0; i < NumOfReplicas; i++) {
+  for (int i = 0; i < NumOfReplicas + 1; i++) {
     VarDecl *VDInit =
         buildVarDecl(*this, ValExpr->getExprLoc(), ValExpr->getType(), "dummy");
     Expr *VDInitRefExpr = buildDeclRefExpr(*this, VDInit, ValExpr->getType(),
