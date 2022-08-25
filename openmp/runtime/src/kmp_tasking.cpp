@@ -62,7 +62,7 @@ struct ReplicationList{
 struct ReplicationList *listsOfReplicas;
 int numReplicasList = 0;
 int numReplicasListSize = 0;
-int initalNumOfLists = 100;
+int initalNumOfLists = 20;
 
 //Predeclaration
 void freeReplicatedNode(kmp_task *task, int groupID, int gtid);
@@ -1554,7 +1554,7 @@ void __kmpc_prepare_taskwait(void *task, void *data, kmp_int32 groupID,
   if (!numReplicasListSize) {
     //printf("--- Runtime ---:Initialize list of lists \n");
     listsOfReplicas =
-        (ReplicationList *)malloc(sizeof(ReplicationList) * initalNumOfLists);
+        (ReplicationList *)__kmp_allocate(sizeof(ReplicationList) * initalNumOfLists);
     numReplicasListSize = initalNumOfLists;
     for (int i = 0; i < initalNumOfLists; i++) {
       listsOfReplicas[i] = {-1, 0, 0, nullptr, nullptr, FALSE};
@@ -1564,9 +1564,12 @@ void __kmpc_prepare_taskwait(void *task, void *data, kmp_int32 groupID,
   else if (numReplicasList >= numReplicasListSize) {
     //printf("--- Runtime ---:Increment list of lists size %d \n", numReplicasListSize * 2);
     int oldSize = numReplicasListSize;
+    ReplicationList *OldReplicationList = listsOfReplicas;
     numReplicasListSize = numReplicasListSize * 2;
-    listsOfReplicas = (ReplicationList *)realloc(
-        listsOfReplicas, sizeof(ReplicationList) * numReplicasListSize);
+    listsOfReplicas = (ReplicationList *)__kmp_allocate(sizeof(ReplicationList) * numReplicasListSize);
+
+    KMP_MEMCPY((void *)listsOfReplicas,(void *)OldReplicationList, sizeof(ReplicationList) * oldSize);
+
     for (int i = oldSize; i < numReplicasListSize; i++) {
       listsOfReplicas[i] = {-1, 0, 0, nullptr, nullptr, FALSE};
     }
@@ -1596,8 +1599,7 @@ void __kmpc_prepare_taskwait(void *task, void *data, kmp_int32 groupID,
   // Find if we need to initialize the list
   if (!ListToUse->numNodesSize) {
     //printf("--- Runtime ---:Initialize list of groupID %d \n", groupID);
-    ListToUse->nodes = (ReplicationNode *)malloc(sizeof(ReplicationNode) *
-                                                 initalNumOfLists);
+    ListToUse->nodes = (ReplicationNode *)__kmp_allocate(sizeof(ReplicationNode) * initalNumOfLists);
     ListToUse->numNodesSize = initalNumOfLists;
     for (int i = 0; i < ListToUse->numNodesSize; i++) {
       ListToUse->nodes[i] = {nullptr, nullptr, FALSE};
@@ -1607,9 +1609,13 @@ void __kmpc_prepare_taskwait(void *task, void *data, kmp_int32 groupID,
   else if (ListToUse->numNodes >= ListToUse->numNodesSize) {
     //printf("--- Runtime ---:Increment list of groupID %d \n", groupID);
     int oldSize = ListToUse->numNodesSize;
+    ReplicationNode *oldNodeList = ListToUse->nodes;
+
     ListToUse->numNodesSize = ListToUse->numNodesSize * 2;
-    ListToUse->nodes = (ReplicationNode *)realloc(
-        ListToUse->nodes, sizeof(ReplicationNode) * (ListToUse->numNodesSize));
+    ListToUse->nodes = (ReplicationNode *)__kmp_allocate(sizeof(ReplicationNode) * (ListToUse->numNodesSize));
+
+    KMP_MEMCPY((void *)ListToUse->nodes, (void *)oldNodeList, sizeof(ReplicationNode) * oldSize);
+
     for (int i = oldSize; i < ListToUse->numNodesSize; i++) {
       ListToUse->nodes[i] = {nullptr, nullptr, FALSE};
     }
