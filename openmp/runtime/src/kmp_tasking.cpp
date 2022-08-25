@@ -1570,6 +1570,8 @@ void __kmpc_prepare_taskwait(void *task, void *data, kmp_int32 groupID,
 
     KMP_MEMCPY((void *)listsOfReplicas,(void *)OldReplicationList, sizeof(ReplicationList) * oldSize);
 
+    __kmp_free(OldReplicationList);
+
     for (int i = oldSize; i < numReplicasListSize; i++) {
       listsOfReplicas[i] = {-1, 0, 0, nullptr, nullptr, FALSE};
     }
@@ -1615,6 +1617,8 @@ void __kmpc_prepare_taskwait(void *task, void *data, kmp_int32 groupID,
     ListToUse->nodes = (ReplicationNode *)__kmp_allocate(sizeof(ReplicationNode) * (ListToUse->numNodesSize));
 
     KMP_MEMCPY((void *)ListToUse->nodes, (void *)oldNodeList, sizeof(ReplicationNode) * oldSize);
+
+    __kmp_free(oldNodeList);
 
     for (int i = oldSize; i < ListToUse->numNodesSize; i++) {
       ListToUse->nodes[i] = {nullptr, nullptr, FALSE};
