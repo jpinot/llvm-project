@@ -62,7 +62,7 @@ struct ReplicationList{
 struct ReplicationList *listsOfReplicas;
 int numReplicasList = 0;
 int numReplicasListSize = 0;
-int initalNumOfLists = 2;
+int initalNumOfLists = 100;
 
 //Predeclaration
 void freeReplicatedNode(kmp_task *task, int groupID, int gtid);
@@ -1557,18 +1557,18 @@ void __kmpc_prepare_taskwait(void *task, void *data, kmp_int32 groupID,
         (ReplicationList *)malloc(sizeof(ReplicationList) * initalNumOfLists);
     numReplicasListSize = initalNumOfLists;
     for (int i = 0; i < initalNumOfLists; i++) {
-      listsOfReplicas[i] = {-1, 0, initalNumOfLists, nullptr, nullptr, FALSE};
+      listsOfReplicas[i] = {-1, 0, 0, nullptr, nullptr, FALSE};
     }
   }
   // Increment the list size if it is not enough
   else if (numReplicasList >= numReplicasListSize) {
-    //printf("--- Runtime ---:Increment list of lists size \n");
+    //printf("--- Runtime ---:Increment list of lists size %d \n", numReplicasListSize * 2);
     int oldSize = numReplicasListSize;
     numReplicasListSize = numReplicasListSize * 2;
     listsOfReplicas = (ReplicationList *)realloc(
         listsOfReplicas, sizeof(ReplicationList) * numReplicasListSize);
     for (int i = oldSize; i < numReplicasListSize; i++) {
-      listsOfReplicas[i] = {-1, 0, initalNumOfLists, nullptr, nullptr, FALSE};
+      listsOfReplicas[i] = {-1, 0, 0, nullptr, nullptr, FALSE};
     }
   }
 
@@ -1594,10 +1594,11 @@ void __kmpc_prepare_taskwait(void *task, void *data, kmp_int32 groupID,
   }
 
   // Find if we need to initialize the list
-  if (ListToUse->numNodes == 0) {
+  if (!ListToUse->numNodesSize) {
     //printf("--- Runtime ---:Initialize list of groupID %d \n", groupID);
     ListToUse->nodes = (ReplicationNode *)malloc(sizeof(ReplicationNode) *
-                                                 (ListToUse->numNodesSize));
+                                                 initalNumOfLists);
+    ListToUse->numNodesSize = initalNumOfLists;
     for (int i = 0; i < ListToUse->numNodesSize; i++) {
       ListToUse->nodes[i] = {nullptr, nullptr, FALSE};
     }
@@ -1650,6 +1651,7 @@ void executeCallbackAndFreeList(ReplicationList *list) {
   list->numNodes = 0;
   list->functionToCall = nullptr;
   list->groupID = -1;
+  numReplicasList--;
   for (int j = 0; j < list->numNodesSize; j++) {
     list->nodes[j].task = nullptr;
     list->nodes[j].data = nullptr;
