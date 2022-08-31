@@ -4427,16 +4427,9 @@ CGOpenMPRuntime::emitTaskInit(CodeGenFunction &CGF, SourceLocation Loc,
     // Taskgraph support: obtain the static id.
     llvm::Value *TaskID = emitGetNewTaskID(CGF, Loc);
 
-    CharUnits Align = CharUnits::fromQuantity(
-        CGF.CGM.getDataLayout().getABITypeAlignment(CGF.Int32Ty));
-
-    llvm::Value *TaskIDValue = CGF.Builder.CreateLoad(Address(TaskID, Align));
-    llvm::Value *TaskIDAdded =
-        CGF.Builder.CreateAdd(TaskIDValue, CGF.Builder.getInt32(1));
-    CGF.Builder.CreateStore(TaskIDAdded, Address(TaskID, Align));
     CGF.EmitRuntimeCall(OMPBuilder.getOrCreateRuntimeFunction(
                             CGM.getModule(), OMPRTL___kmpc_set_task_static_id),
-                        {NewTask, TaskIDValue});
+                        {NewTask, TaskID});
   }
 
   // Emit detach clause initialization.
