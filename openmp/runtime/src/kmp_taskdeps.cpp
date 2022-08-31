@@ -72,6 +72,10 @@ extern size_t __kmp_round_up_to_val(size_t size, size_t val);
 kmp_task_t *kmp_init_lazy_task(int static_id, kmp_task_t *current_task,
                                kmp_int32 gtid);
 void kmp_insert_task_in_indexer(kmp_task_t *task);
+
+//Counter to manage taskIDs generation
+extern kmp_int32 taskIdCounter;
+
 #endif // LIBOMP_TASKGRAPH
 
 #ifdef KMP_SUPPORT_GRAPH_OUTPUT
@@ -1157,7 +1161,7 @@ kmp_int32 __kmpc_record(ident_t *loc_ref, kmp_int32 gtid, void (*entry)(void *),
 
 void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid, void (*entry)(void *),
                       void *args, kmp_int32 tdg_type) {
-
+  taskIdCounter = 0;
   for (int i = 0; i < ntdgs; i++) {
     if (dynamic_tdgs[i].loc == loc_ref->psource) {
        //printf("Executing!  \n");

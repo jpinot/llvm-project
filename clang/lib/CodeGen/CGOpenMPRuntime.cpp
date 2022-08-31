@@ -4246,20 +4246,11 @@ static void getKmpAffinityType(ASTContext &C, QualType &KmpTaskAffinityInfoTy) {
   }
 }
 
-llvm::GlobalVariable *getOrInsertTaskID(CodeGenFunction &CGF) {
-  llvm::GlobalVariable *TaskID;
-  TaskID = CGF.CGM.getModule().getNamedGlobal("__staticTaskID");
-  if (TaskID)
-    return TaskID;
-  else {
-    TaskID = llvm::cast<llvm::GlobalVariable>(
-        CGF.CGM.getModule().getOrInsertGlobal("__staticTaskID", CGF.Int32Ty));
-    // gvar->setDSOLocal(true);
-    TaskID->setLinkage(llvm::GlobalValue::CommonLinkage);
-    TaskID->setAlignment(llvm::MaybeAlign(4));
-    TaskID->setInitializer(CGF.Builder.getInt32(0));
-    return TaskID;
-  }
+llvm::Value *CGOpenMPRuntime::emitGetNewTaskID(CodeGenFunction &CGF, SourceLocation Loc) {
+  llvm::Value *UpLoc = emitUpdateLocation(CGF, Loc);
+  return CGF.EmitRuntimeCall(OMPBuilder.getOrCreateRuntimeFunction(
+                                 CGM.getModule(), OMPRTL___kmpc_getNewTaskID),
+                             {UpLoc});
 }
 
 CGOpenMPRuntime::TaskResultTy
@@ -4433,8 +4424,8 @@ CGOpenMPRuntime::emitTaskInit(CodeGenFunction &CGF, SourceLocation Loc,
                             AllocArgs);
   }
   if (CGF.CGM.getLangOpts().OpenMPTaskGraph) {
-    // Taskgraph support: compute the static id.
-    llvm::GlobalVariable *TaskID = getOrInsertTaskID(CGF);
+    // Taskgraph support: obtain the static id.
+    llvm::Value *TaskID = emitGetNewTaskID(CGF, Loc);
 
     CharUnits Align = CharUnits::fromQuantity(
         CGF.CGM.getDataLayout().getABITypeAlignment(CGF.Int32Ty));
@@ -6545,19 +6536,6 @@ void CGOpenMPRuntime::emitTaskgraphCall(CodeGenFunction &CGF,
   CGF.EmitRuntimeCall(OMPBuilder.getOrCreateRuntimeFunction(
                           CGM.getModule(), OMPRTL___kmpc_taskgraph),
                       Args);
-
-  //TODO: Move to BodyGen
-  auto InsertP = CGF.Builder.saveIP();
-  CGF.Builder.SetInsertPoint(
-      FnT->getEntryBlock().getFirstNonPHI());
-
-  llvm::GlobalVariable *TaskID = getOrInsertTaskID(CGF);
-
-  CharUnits Align = CharUnits::fromQuantity(
-      CGF.CGM.getDataLayout().getABITypeAlignment(CGF.Int32Ty));
-  CGF.Builder.CreateStore(CGF.Builder.getInt32(0), Address(TaskID, Align));
-  CGF.Builder.restoreIP(InsertP);
-
 }
 
 void CGOpenMPRuntime::emitInlinedDirective(CodeGenFunction &CGF,
@@ -13300,6 +13278,11 @@ void CGOpenMPSIMDRuntime::emitTaskReplicasCallback(
 }
 
 llvm::Value *CGOpenMPSIMDRuntime::emitGetNewGroupID(CodeGenFunction &CGF,
+                                                    SourceLocation Loc) {
+  llvm_unreachable("Not supported in SIMD-only mode");
+}
+
+llvm::Value *CGOpenMPSIMDRuntime::emitGetNewTaskID(CodeGenFunction &CGF,
                                                     SourceLocation Loc) {
   llvm_unreachable("Not supported in SIMD-only mode");
 }

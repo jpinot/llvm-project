@@ -1373,6 +1373,9 @@ public:
 
   virtual llvm::Value *
   emitGetNewGroupID(CodeGenFunction &CGF, SourceLocation Loc);
+
+  virtual llvm::Value *
+  emitGetNewTaskID(CodeGenFunction &CGF, SourceLocation Loc);
   /// Emit task region for the taskloop directive. The taskloop region is
   /// emitted in several steps:
   /// 1. Emit a call to kmp_task_t *__kmpc_omp_task_alloc(ident_t *, kmp_int32
@@ -2262,6 +2265,8 @@ public:
                                 llvm::Value *GroupID) override;
 
   llvm::Value *emitGetNewGroupID(CodeGenFunction &CGF, SourceLocation Loc) override;
+
+  llvm::Value *emitGetNewTaskID(CodeGenFunction &CGF, SourceLocation Loc) override;
   /// Emit task region for the taskloop directive. The taskloop region is
   /// emitted in several steps:
   /// 1. Emit a call to kmp_task_t *__kmpc_omp_task_alloc(ident_t *, kmp_int32

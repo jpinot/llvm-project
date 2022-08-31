@@ -74,6 +74,8 @@ kmp_futex_lock_t replicationsLock =  KMP_FUTEX_LOCK_INITIALIZER(replicationsLock
 //Atomic counter to manage groupIDs generation
 std::atomic<kmp_int32> groupIdCounter = ATOMIC_VAR_INIT(1);
 
+//Counter to manage taskIDs generation
+kmp_int32 taskIdCounter =0;
 #endif
 
 /* forward declaration */
@@ -1546,6 +1548,11 @@ kmp_int32 __kmpc_getNewGroupID(ident_t *loc_ref){
     int id= KMP_ATOMIC_INC(&groupIdCounter);
     return id;
 }
+
+kmp_int32 __kmpc_getNewTaskID(ident_t *loc_ref){
+    return taskIdCounter++;
+}
+
 void __kmpc_prepare_taskwait(void *task, void *data, kmp_int32 groupID,
                              kmp_int32 gtid) {
   __kmp_acquire_futex_lock(&replicationsLock, gtid);
