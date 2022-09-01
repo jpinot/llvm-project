@@ -2488,18 +2488,25 @@ struct kmp_record_info {
   kmp_record_info *next_waiting_tdg;
 };
 
+#define INIT_MAPSIZE 50
+#define NUM_TDG_LIMIT 50
+
+struct ident_task {
+  const char *td_ident;
+};
+
 struct dynamic_tdg_info {
   const char *loc;
+  kmp_uint mapSize;
+  kmp_uint numRoots;
+  kmp_uint *rootTasks;
   kmp_record_info *RecordMap;
+  ident_task *taskIdent;
 };
 
 struct ident_color {
   const char *td_ident;
   const char *color;
-};
-
-struct ident_task {
-  const char *td_ident;
 };
 
 struct kmp_space_indexer_node {

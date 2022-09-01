@@ -127,7 +127,7 @@ static inline void __kmp_release_deps(kmp_int32 gtid, kmp_taskdata_t *task) {
             __kmp_omp_task(gtid, NextTask, false);
         }
       } else {
-        if (successor->task != nullptr && !npredecessors) {
+        if (successor->task != nullptr && npredecessors==0) {
           // printf("  [OpenMP] Successor ready, executing \n");
           __kmp_omp_task(gtid, successor->task, false);
 

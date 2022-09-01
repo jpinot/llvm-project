@@ -34,7 +34,7 @@
 extern int recording;
 extern int fill_data;
 extern int prealloc;
-extern int MapSize;
+extern kmp_uint MapSize;
 extern int SuccessorsSize;
 extern ident_task *TaskIdentMap;
 extern struct kmp_task_alloc_info *task_static_table;
@@ -330,7 +330,7 @@ static bool __kmp_task_is_allowed(int gtid, const kmp_int32 is_constrained,
   }
   // Check mutexinoutset dependencies, acquire locks
   kmp_depnode_t *node = tasknew->td_depnode;
-  if (UNLIKELY(node && (node->dn.mtx_num_locks > 0))) {
+  if (!tasknew->is_taskgraph && UNLIKELY(node && (node->dn.mtx_num_locks > 0))) {
     for (int i = 0; i < node->dn.mtx_num_locks; ++i) {
       KMP_DEBUG_ASSERT(node->dn.mtx_locks[i] != NULL);
       if (__kmp_test_lock(node->dn.mtx_locks[i], gtid))
@@ -2161,15 +2161,20 @@ kmp_int32 __kmp_omp_task(kmp_int32 gtid, kmp_task_t *new_task,
   if (recording) {
     // Extend Map Size if needed
     if (new_taskdata->td_task_id >= MapSize) {
-      int OldSize = MapSize;
+      kmp_uint OldSize = MapSize;
       MapSize = MapSize * 2;
-      RecordMap = (kmp_record_info *)realloc(RecordMap,
-                                             MapSize * sizeof(kmp_record_info));
+
+      kmp_record_info *oldRecord = RecordMap;
+      kmp_record_info *newRecord = (kmp_record_info *) malloc(MapSize * sizeof(kmp_record_info));
+      KMP_MEMCPY(newRecord, RecordMap, OldSize * sizeof(kmp_record_info));
+
+      RecordMap = newRecord;
+      free(oldRecord);
 
       TaskIdentMap =
           (ident_task *)realloc(TaskIdentMap, MapSize * sizeof(ident_task));
 
-      for (int i = OldSize; i < MapSize; i++) {
+      for (kmp_uint i = OldSize; i < MapSize; i++) {
         kmp_int32 *successorsList =
             (kmp_int32 *)malloc(SuccessorsSize * sizeof(kmp_int32));
         RecordMap[i].static_id = 0;
