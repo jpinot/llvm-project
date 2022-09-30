@@ -531,7 +531,8 @@ def OMP_TaskWait : Directive<"taskwait"> {
 def OMP_TaskGraph : Directive<"taskgraph"> {
   let allowedClauses = [
     VersionedClause<OMPC_TdgType>,
-    VersionedClause<OMPC_NumPreallocs>
+    VersionedClause<OMPC_NumPreallocs>,
+    VersionedClause<OMPC_If>
   ];
 }
 def OMP_TaskGroup : Directive<"taskgroup"> {

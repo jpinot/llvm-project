@@ -42,12 +42,13 @@ extern kmp_task_t *kmp_get_free_task_from_indexer();
 extern void kmp_insert_task_in_indexer(kmp_task_t *task);
 bool disable_stealing = false;
 extern bool staticSchedule;
-
+extern int __replication_architecture __attribute__((weak));
 
 struct ReplicationNode{
-  void *task;
+  kmp_task_t *task;
   void *data;
   bool finished;
+  bool canceled;
 };
 
 struct ReplicationList{
@@ -65,8 +66,8 @@ int numReplicasListSize = 0;
 int initalNumOfLists = 20;
 
 //Predeclaration
-void freeReplicatedNode(kmp_task *task, int groupID, int gtid);
-void disableReplicatedNode(kmp_task *task, int groupID, int gtid);
+void freeReplicatedNode(kmp_task_t *task, int groupID, int gtid);
+void disableReplicatedNode(kmp_task_t *task, int groupID, int gtid);
 
 //Lock for managing redudants
 kmp_futex_lock_t replicationsLock =  KMP_FUTEX_LOCK_INITIALIZER(replicationsLock);
@@ -76,6 +77,14 @@ std::atomic<kmp_int32> groupIdCounter = ATOMIC_VAR_INIT(1);
 
 //Counter to manage taskIDs generation
 kmp_int32 taskIdCounter =0;
+
+//Replication arquitecture
+enum kmp_replication_architecture {
+  none = 0,
+  arch2o3,
+  arch3o4
+};
+
 #endif
 
 /* forward declaration */
@@ -789,7 +798,7 @@ static void __kmp_free_task(kmp_int32 gtid, kmp_taskdata_t *taskdata,
   taskdata->td_flags.freed = 1;
 // deallocate the taskdata and shared variable blocks associated with this task
 #if LIBOMP_TASKGRAPH
-  kmp_task *task = KMP_TASKDATA_TO_TASK(taskdata);
+  kmp_task_t *task = KMP_TASKDATA_TO_TASK(taskdata);
   if (!taskdata->is_taskgraph) {
 #endif // LIBOMP_TASKGRAPH
     // only free tasks created outside taskgraph
@@ -1553,7 +1562,7 @@ kmp_int32 __kmpc_getNewTaskID(ident_t *loc_ref){
     return taskIdCounter++;
 }
 
-void __kmpc_prepare_taskwait(void *task, void *data, kmp_int32 groupID,
+void __kmpc_prepare_taskwait(kmp_task_t *task, void *data, kmp_int32 groupID,
                              kmp_int32 gtid) {
   __kmp_acquire_futex_lock(&replicationsLock, gtid);
 
@@ -1611,7 +1620,7 @@ void __kmpc_prepare_taskwait(void *task, void *data, kmp_int32 groupID,
     ListToUse->nodes = (ReplicationNode *)__kmp_allocate(sizeof(ReplicationNode) * initalNumOfLists);
     ListToUse->numNodesSize = initalNumOfLists;
     for (int i = 0; i < ListToUse->numNodesSize; i++) {
-      ListToUse->nodes[i] = {nullptr, nullptr, FALSE};
+      ListToUse->nodes[i] = {nullptr, nullptr, FALSE, FALSE};
     }
   }
   // Increment the list size if it is not enough
@@ -1642,24 +1651,55 @@ void __kmpc_prepare_taskwait(void *task, void *data, kmp_int32 groupID,
   __kmp_release_futex_lock(&replicationsLock, gtid);
 }
 
-bool checkIfListIsFinished(ReplicationList *list) {
-  bool allFinished = TRUE;
-  for (int j = 0; j < list->numNodesSize; j++) {
-    if (list->nodes[j].task == nullptr)
-      break;
-
-    if (list->nodes[j].finished == FALSE) {
-      allFinished = FALSE;
-      break;
+// Check if the suficient number of tasks has finished depending on the current
+// architecture, and stop the rest if necessary.
+bool checkIfListIsFinished(int gtid, ReplicationList *list) {
+  int numFinishedTasks = 0;
+  bool originalFinished = false;
+  kmp_task_t *unfinishedTasks[list->numNodes];
+  int unfinishedTasksPosition[list->numNodes];
+  int numUnfinishedTasks = 0;
+  for (int j = 0; j < list->numNodes; j++) {
+    if (list->nodes[j].finished == TRUE) {
+      numFinishedTasks++;
+      if (j == 0)
+        originalFinished = TRUE;
+    } else {
+      if (list->nodes[j].canceled != TRUE) {
+        unfinishedTasks[numUnfinishedTasks] = list->nodes[j].task;
+        unfinishedTasksPosition[numUnfinishedTasks] = j;
+        numUnfinishedTasks++;
+      }
     }
   }
-  return allFinished;
+  bool stopUnfinishedTasks = false;
+  switch (__replication_architecture) {
+  case none:
+    return numFinishedTasks == list->numNodes;
+  case arch2o3:
+    stopUnfinishedTasks = (numFinishedTasks >= 2 && originalFinished);
+    break;
+  default:
+    return false;
+  }
+
+  if (stopUnfinishedTasks) {
+    for (int i = 0; i < numUnfinishedTasks; i++) {
+      // Set groupID to -1 to prevent them from execution
+      list->nodes[unfinishedTasksPosition[i]].canceled = TRUE;
+      KMP_TASK_TO_TASKDATA(unfinishedTasks[i])->groupID = -1;
+    }
+    return true;
+  }
+  return false;
 }
 
 void executeCallbackAndFreeList(ReplicationList *list) {
 
   // Call function comparing with the data of the original
   for (int i = 1; i < list->numNodes; i++) {
+     if(list->nodes[i].canceled == TRUE)
+      continue;
     ((void (*)(void *, void *))list->functionToCall)(list->nodes[0].data,
                                                      list->nodes[i].data);
   }
@@ -1673,11 +1713,12 @@ void executeCallbackAndFreeList(ReplicationList *list) {
     list->nodes[j].task = nullptr;
     list->nodes[j].data = nullptr;
     list->nodes[j].finished = FALSE;
+    list->nodes[j].canceled = FALSE;
   }
 }
 
 // If we are in taskgraph, we dont free the data
-void disableReplicatedNode(kmp_task *task, int groupID, kmp_int32 gtid) {
+void disableReplicatedNode(kmp_task_t *task, int groupID, kmp_int32 gtid) {
   __kmp_acquire_futex_lock(&replicationsLock, gtid);
   // First, look for the list of the group
   for (int i = 0; i < numReplicasListSize; i++) {
@@ -1691,12 +1732,14 @@ void disableReplicatedNode(kmp_task *task, int groupID, kmp_int32 gtid) {
         }
       }
       // Now check if all nodes of the list has finished
-      bool executeCallback = checkIfListIsFinished(&listsOfReplicas[i]);
+      bool executeCallback = checkIfListIsFinished(gtid, &listsOfReplicas[i]);
       //printf("Debo ejecutar callback) %d \n", executeCallback);
       if (executeCallback && listsOfReplicas[i].functionToCall != nullptr) {
         //printf("--- Runtime ---:Executing callback normal TDG! \n");
         // Call function comparing with the data of the original
         for (int z = 1; z < listsOfReplicas[i].numNodes; z++) {
+          if(listsOfReplicas->nodes[z].canceled == TRUE)
+            continue;
           ((void (*)(void *, void *))listsOfReplicas[i].functionToCall)(
               listsOfReplicas[i].nodes[0].data,
               listsOfReplicas[i].nodes[z].data);
@@ -1704,6 +1747,7 @@ void disableReplicatedNode(kmp_task *task, int groupID, kmp_int32 gtid) {
         // Only reset status
         for (int j = 0; j < listsOfReplicas[i].numNodesSize; j++) {
           listsOfReplicas[i].nodes[j].finished = FALSE;
+          listsOfReplicas[i].nodes[j].canceled = FALSE;
         }
       }
       break;
@@ -1713,7 +1757,7 @@ void disableReplicatedNode(kmp_task *task, int groupID, kmp_int32 gtid) {
 }
 
 // When not in taskgraph, we free the data
-void freeReplicatedNode(kmp_task *task, int groupID, kmp_int32 gtid) {
+void freeReplicatedNode(kmp_task_t *task, int groupID, kmp_int32 gtid) {
 
   __kmp_acquire_futex_lock(&replicationsLock, gtid);
 
@@ -1729,7 +1773,7 @@ void freeReplicatedNode(kmp_task *task, int groupID, kmp_int32 gtid) {
         }
       }
       // Now check if all nodes of the list has finished
-      bool executeCallback = checkIfListIsFinished(&listsOfReplicas[i]);
+      bool executeCallback = checkIfListIsFinished(gtid, &listsOfReplicas[i]);
 
       if (executeCallback && listsOfReplicas[i].functionToCall != nullptr) {
         //printf("--- Runtime ---:Executing callback normal! \n");
@@ -1751,7 +1795,7 @@ void __kmpc_replication_callback(ident_t *loc_ref, void *callbackFunction,
       listsOfReplicas[i].functionToCall = callbackFunction;
 
       // Now check if all nodes of the list has finished
-      bool executeCallback = checkIfListIsFinished(&listsOfReplicas[i]);
+      bool executeCallback = checkIfListIsFinished(gtid, &listsOfReplicas[i]);
 
       if (executeCallback) {
         //printf("--- Runtime ---:Executing callback from callback! \n");
@@ -2040,7 +2084,7 @@ static void __kmp_invoke_task(kmp_int32 gtid, kmp_task_t *task,
     KMP_FSYNC_ACQUIRED(taskdata); // acquired self (new task)
 #endif
 
-    if (task->routine != NULL) {
+    if (task->routine != NULL && taskdata->groupID!=-1) {
 #ifdef KMP_GOMP_COMPAT
       if (taskdata->td_flags.native) {
         ((void (*)(void *))(*(task->routine)))(task->shareds);

@@ -4253,6 +4253,33 @@ llvm::Value *CGOpenMPRuntime::emitGetNewTaskID(CodeGenFunction &CGF, SourceLocat
                              {UpLoc});
 }
 
+llvm::Value *CGOpenMPRuntime::emitGetNewGroupID(CodeGenFunction &CGF,
+                                                SourceLocation Loc) {
+  llvm::Value *UpLoc = emitUpdateLocation(CGF, Loc);
+  return CGF.EmitRuntimeCall(OMPBuilder.getOrCreateRuntimeFunction(
+                                 CGM.getModule(), OMPRTL___kmpc_getNewGroupID),
+                             {UpLoc});
+}
+
+void emitReplicationArchitecture(CodeGenFunction &CGF) {
+  llvm::GlobalVariable *RepArch =
+      CGF.CGM.getModule().getNamedGlobal("__replication_architecture");
+  if (!RepArch) {
+    RepArch =
+        llvm::cast<llvm::GlobalVariable>(CGF.CGM.getModule().getOrInsertGlobal(
+            "__replication_architecture", CGF.Int32Ty));
+
+    int archID = 0;
+    if (CGF.CGM.getLangOpts().OpenMP2o3Replication) {
+      archID = 1;
+    }
+    RepArch->setLinkage(llvm::GlobalValue::ExternalLinkage);
+    RepArch->setAlignment(llvm::MaybeAlign(4));
+    RepArch->setInitializer(CGF.Builder.getInt32(archID));
+    RepArch->setConstant(true);
+  }
+}
+
 CGOpenMPRuntime::TaskResultTy
 CGOpenMPRuntime::emitTaskInit(CodeGenFunction &CGF, SourceLocation Loc,
                               const OMPExecutableDirective &D,
@@ -4431,6 +4458,8 @@ CGOpenMPRuntime::emitTaskInit(CodeGenFunction &CGF, SourceLocation Loc,
                             CGM.getModule(), OMPRTL___kmpc_set_task_static_id),
                         {NewTask, TaskID});
   }
+
+  emitReplicationArchitecture(CGF);
 
   // Emit detach clause initialization.
   // evt = (typeof(evt))__kmpc_task_allow_completion_event(loc, tid,
@@ -5181,14 +5210,6 @@ void CGOpenMPRuntime::emitUpdateClause(CodeGenFunction &CGF, LValue DepobjLVal,
   CGF.Builder.CreateCondBr(IsEmpty, DoneBB, BodyBB);
   // Done.
   CGF.EmitBlock(DoneBB, /*IsFinished=*/true);
-}
-
-llvm::Value *CGOpenMPRuntime::emitGetNewGroupID(CodeGenFunction &CGF,
-                                                SourceLocation Loc) {
-  llvm::Value *UpLoc = emitUpdateLocation(CGF, Loc);
-  return CGF.EmitRuntimeCall(OMPBuilder.getOrCreateRuntimeFunction(
-                                 CGM.getModule(), OMPRTL___kmpc_getNewGroupID),
-                             {UpLoc});
 }
 
 void CGOpenMPRuntime::emitTaskReplicasCallback(

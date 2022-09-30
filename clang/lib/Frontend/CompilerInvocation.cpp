@@ -3487,6 +3487,9 @@ void CompilerInvocation::GenerateLangArgs(const LangOptions &Opts,
 
     if (Opts.OpenMPDynamicVariant)
       GenerateArg(Args, OPT_dynamic_variant, SA);
+
+    if (Opts.OpenMP2o3Replication)
+      GenerateArg(Args, OPT_fopenmp_2o3_replication, SA);
   }
 
   if (Opts.OpenMPSimd) {
@@ -3892,6 +3895,8 @@ bool CompilerInvocation::ParseLangArgs(LangOptions &Opts, ArgList &Args,
       Opts.OpenMP && Args.hasArg(options::OPT_prealloc_tdg);
   Opts.OpenMPDynamicVariant =
       Opts.OpenMP && Args.hasArg(options::OPT_dynamic_variant);
+   Opts.OpenMP2o3Replication =
+      Opts.OpenMP && Args.hasArg(options::OPT_fopenmp_2o3_replication);
   bool IsTargetSpecified =
       Opts.OpenMPIsDevice || Args.hasArg(options::OPT_fopenmp_targets_EQ);
 

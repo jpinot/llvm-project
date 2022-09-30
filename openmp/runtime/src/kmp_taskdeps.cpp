@@ -36,16 +36,16 @@ int recording = false;
 int fill_data = false;
 int prealloc = false;
 kmp_int32 ntdgs = 0;
-kmp_uint numRoots = 0;
+kmp_int32 numRoots = 0;
 
 // Pointers
 dynamic_tdg_info dynamic_tdgs[NUM_TDG_LIMIT];
 kmp_record_info *RecordMap;
-kmp_uint *rootTasks;
+kmp_int32 *rootTasks;
 
 // Sizes
 kmp_int32 MaxNesting = 4;
-kmp_uint MapSize = 50;
+kmp_int32 MapSize = 50;
 kmp_int32 SuccessorsSize = 10;
 kmp_int32 SuccessorsIncrement = 5;
 kmp_int32 ColorMapSize = 20;
@@ -689,7 +689,7 @@ kmp_int32 __kmpc_omp_task_with_deps(ident_t *loc_ref, kmp_int32 gtid,
   if (recording) {
     // Extend Map Size if needed
     if (new_taskdata->td_task_id >= (int) MapSize) {
-      kmp_uint OldSize = MapSize;
+      kmp_int32 OldSize = MapSize;
       MapSize = MapSize *2;
 
       kmp_record_info *oldRecord = RecordMap;
@@ -702,7 +702,7 @@ kmp_int32 __kmpc_omp_task_with_deps(ident_t *loc_ref, kmp_int32 gtid,
       TaskIdentMap =
           (ident_task *)realloc(TaskIdentMap, MapSize * sizeof(ident_task));
 
-      for (kmp_uint i = OldSize; i < MapSize; i++) {
+      for (kmp_int32 i = OldSize; i < MapSize; i++) {
         kmp_int32 *successorsList =
             (kmp_int32 *)malloc(SuccessorsSize * sizeof(kmp_int32));
 
@@ -883,7 +883,7 @@ void __ompt_taskwait_dep_finish(kmp_taskdata_t *current_task,
 
 #if LIBOMP_TASKGRAPH
 void print_tdg() {
-  for (kmp_uint i = 0; i < MapSize; i++) {
+  for (kmp_int32 i = 0; i < MapSize; i++) {
     if (RecordMap[i].task == nullptr)
       break;
     printf("TASK: %d Successors: ", RecordMap[i].static_id);
@@ -924,7 +924,7 @@ void traverse_node(kmp_int32 *edges_to_check, kmp_int32 *num_edges,
 }
 
 void erase_transitive_edges() {
-  for (kmp_uint i = 0; i < MapSize; i++) {
+  for (kmp_int32 i = 0; i < MapSize; i++) {
 
     if (RecordMap[i].task == nullptr)
       break;
@@ -971,7 +971,7 @@ void print_tdg_to_dot(void) {
   fprintf(f, "   subgraph cluster_0 {\n");
   fprintf(f, "      label=TDG_%d\n", ntdgs);
 
-  for (kmp_uint i = 0; i < MapSize; i++) {
+  for (kmp_int32 i = 0; i < MapSize; i++) {
 
     if (RecordMap[i].task == nullptr)
       break;
@@ -1020,7 +1020,7 @@ void print_tdg_to_dot(void) {
     }
   }
   fprintf(f, "   }\n");
-  for (kmp_uint i = 0; i < MapSize; i++) {
+  for (kmp_int32 i = 0; i < MapSize; i++) {
 
     if (RecordMap[i].task == nullptr)
       break;
@@ -1065,7 +1065,7 @@ void __kmpc_execute_tdg(ident_t *loc_ref, kmp_int32 gtid) {
       rootTasks = dynamic_tdgs[i].rootTasks;
       TaskIdentMap = dynamic_tdgs[i].taskIdent;
 
-      for (kmp_uint j = 0; j < MapSize; j++) {
+      for (kmp_int32 j = 0; j < MapSize; j++) {
 
         if (RecordMap[j].parent_task == nullptr)
           continue;
@@ -1084,7 +1084,8 @@ void __kmpc_execute_tdg(ident_t *loc_ref, kmp_int32 gtid) {
       break;
     }
   }
-  for (kmp_uint j = 0; j < numRoots; j++) {
+
+  for (kmp_int32 j = 0; j < numRoots; j++) {
     if (prealloc) {
       kmp_info_t *thread = __kmp_threads[gtid];
       kmp_taskdata_t *parent_task = thread->th.th_current_task;
@@ -1100,6 +1101,7 @@ void __kmpc_execute_tdg(ident_t *loc_ref, kmp_int32 gtid) {
 	__kmp_omp_task(gtid, RecordMap[rootTasks[j]].task, true);
     }
   }
+
   __kmpc_omp_taskwait(loc_ref, gtid);
 }
 
@@ -1119,9 +1121,9 @@ void __kmpc_set_tdg(struct kmp_record_info *tdg, kmp_int32 ntasks,
     return;
   // printf("TDG set! \n");
   RecordMap = tdg;
-  MapSize = (kmp_uint)ntasks;
-  rootTasks = (kmp_uint *)roots;
-  numRoots = (kmp_uint)nroots;
+  MapSize = (kmp_int32)ntasks;
+  rootTasks = (kmp_int32 *)roots;
+  numRoots = (kmp_int32)nroots;
   dynamic_tdgs[ntdgs++] = {"static", MapSize, numRoots, rootTasks, tdg, nullptr};
 }
 
@@ -1134,7 +1136,7 @@ kmp_int32 __kmpc_record(ident_t *loc_ref, kmp_int32 gtid, void (*entry)(void *),
   ColorMap = (ident_color *)malloc(ColorMapSize * sizeof(ident_color));
   TaskIdentMap = (ident_task *)malloc(MapSize * sizeof(ident_task));
 
-  for (kmp_uint i = 0; i < MapSize; i++) {
+  for (kmp_int32 i = 0; i < MapSize; i++) {
     TaskIdentMap[i] = {nullptr};
     kmp_int32 *successorsList =
         (kmp_int32 *)malloc(SuccessorsSize * sizeof(kmp_int32));
@@ -1156,9 +1158,9 @@ kmp_int32 __kmpc_record(ident_t *loc_ref, kmp_int32 gtid, void (*entry)(void *),
   entry(args);
 
   // Store roots
-  rootTasks = (kmp_uint *)malloc(MapSize * sizeof(kmp_uint));
+  rootTasks = (kmp_int32 *)malloc(MapSize * sizeof(kmp_int32));
   numRoots=0;
-  for (kmp_uint i = 0; i < MapSize; i++) {
+  for (kmp_int32 i = 0; i < MapSize; i++) {
     if (RecordMap[i].task != nullptr && RecordMap[i].npredecessors == 0) {
       rootTasks[numRoots++] = i;
     }
@@ -1183,7 +1185,7 @@ kmp_int32 __kmpc_record(ident_t *loc_ref, kmp_int32 gtid, void (*entry)(void *),
 	 thread->th.th_current_task->td_dephash = NULL;
   }
 
-  for (kmp_uint i = 0; i < MapSize; i++) {
+  for (kmp_int32 i = 0; i < MapSize; i++) {
     if (RecordMap[i].task != nullptr)
       KMP_ATOMIC_ST_RLX(&RecordMap[i].npredecessors_counter, RecordMap[i].npredecessors);
   }
@@ -1217,7 +1219,7 @@ void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid, void (*entry)(void *),
     if(prealloc){
       kmp_info_t *thread = __kmp_threads[gtid];
       kmp_taskdata_t *parent_task = thread->th.th_current_task;
-      for(kmp_uint i = 0; i< MapSize; i++){
+      for(kmp_int32 i = 0; i< MapSize; i++){
 
         RecordMap[i].parent_task = parent_task;
         int Pragma = RecordMap[i].pragma_id;

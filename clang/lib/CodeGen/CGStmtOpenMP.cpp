@@ -4959,7 +4959,11 @@ void CodeGenFunction::EmitOMPTaskDirective(const OMPTaskDirective &S) {
   ArrayRef<Expr *> DummyVars;
   if (const auto *C = S.getSingleClause<OMPReplicatedClause>()) {
     GroupID = CGM.getOpenMPRuntime().emitGetNewGroupID(*this, S.getBeginLoc());
-    NumReplicas = (C->getNumReplications())
+
+    if(getLangOpts().OpenMP2o3Replication)
+      NumReplicas = 3;
+    else
+      NumReplicas = (C->getNumReplications())
                       ->getIntegerConstantExpr(getContext())
                       ->getZExtValue();
     VarToReplicate = C->getVar();
