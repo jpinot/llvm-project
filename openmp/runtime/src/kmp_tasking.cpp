@@ -358,7 +358,7 @@ static bool __kmp_task_is_allowed(int gtid, const kmp_int32 is_constrained,
   }
 #if LIBOMP_TASKGRAPH
   //Check if the spatial constraint is satisfied when using redundancy
-  if(true && tasknew->groupID!= 0){
+  if(tasknew->groupID!= 0){
     return checkRedundantTaskSpatialConstraint(tasknew->groupID, gtid);
   }
 
@@ -1692,8 +1692,10 @@ void __kmpc_prepare_taskwait(kmp_task_t *task, void *data, kmp_int32 groupID,
   ListToUse->nodes[ListToUse->numNodes] = {task, data, FALSE};
   ListToUse->numNodes = ListToUse->numNodes + 1;
   //printf("--- Runtime ---:Node saved! \n");
-  if(spatialConstraint && __kmp_threads[gtid]->th.th_task_team->tt.tt_nproc <= ListToUse->numNodes)
-        printf("WARNING: Number of replicas is higher than the number of threads, execution may stall due to the spatial constraint \n");
+  if(spatialConstraint && __kmp_threads[gtid]->th.th_task_team->tt.tt_nproc <= ListToUse->numNodes){
+        ListToUse->spatialConstraint = FALSE;
+        printf("WARNING: Number of replicas is higher than the number of threads, spatial constraint will not be satisfied \n");
+  }
 
 
   // Save groupID inside the task member
