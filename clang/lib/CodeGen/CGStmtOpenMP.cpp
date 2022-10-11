@@ -4957,6 +4957,8 @@ void CodeGenFunction::EmitOMPTaskDirective(const OMPTaskDirective &S) {
   llvm::Value *OriginalVarValue = nullptr;
   llvm::Value *GroupID = nullptr;
   ArrayRef<Expr *> DummyVars;
+  OpenMPRedundancyConstraint Constraint = OMPC_REDUNDANCY_CONSTRAINT_none;
+
   if (const auto *C = S.getSingleClause<OMPReplicatedClause>()) {
     GroupID = CGM.getOpenMPRuntime().emitGetNewGroupID(*this, S.getBeginLoc());
 
@@ -4969,6 +4971,7 @@ void CodeGenFunction::EmitOMPTaskDirective(const OMPTaskDirective &S) {
     VarToReplicate = C->getVar();
     FuncToCall = C->getFunc();
     DummyVars = C->getDummyVars();
+    Constraint = C->getRedundancyConstraint();
     OriginalVarValue = EmitScalarExpr(VarToReplicate);
     OriginalVarPointer = EmitLValue(VarToReplicate).getPointer(*this);
   }
@@ -5099,15 +5102,22 @@ void CodeGenFunction::EmitOMPTaskDirective(const OMPTaskDirective &S) {
       NewData.IsReplica = true;
       NewData.GroupID = GroupID;
 
+      int dummyNumber = i + 1;
+
+      //When temporal constraint is activated all the replicas use the same dummy var as an out dependency, in order to sequence the execution
+      if (Constraint == OMPC_REDUNDANCY_CONSTRAINT_temporal || Constraint == OMPC_REDUNDANCY_CONSTRAINT_spatial_temporal)
+        dummyNumber = 0;
       // Add fake out dependency on replicas
       OMPTaskDataTy::DependData &DD =
           NewData.Dependences.emplace_back(OMPC_DEPEND_out, nullptr);
-      DD.DepExprs.push_back(DummyVars[i+1]);
+      DD.DepExprs.push_back(DummyVars[dummyNumber]);
 
-      // Add fake in dependency on last replica
-      OMPTaskDataTy::DependData &DDArt =
-          ArtificialTaskData.Dependences.emplace_back(OMPC_DEPEND_in, nullptr);
-      DDArt.DepExprs.push_back(DummyVars[i+1]);
+      // Add fake in dependency on last replica. If they are sequential it is not needed.
+      if(dummyNumber!=0){
+        OMPTaskDataTy::DependData &DDArt =
+            ArtificialTaskData.Dependences.emplace_back(OMPC_DEPEND_in, nullptr);
+        DDArt.DepExprs.push_back(DummyVars[dummyNumber]);
+      }
 
       EmitOMPTaskBasedDirective(S, OMPD_task, BodyGen, TaskGen, NewData);
     }

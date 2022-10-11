@@ -1931,10 +1931,11 @@ public:
   OMPClause *RebuildOMPReplicatedClause(Expr *NumReplications,
                                         Expr *Var,
                                         Expr *Func,
+                                        OpenMPRedundancyConstraint Constraint,
                                         SourceLocation StartLoc,
                                         SourceLocation LParenLoc,
                                         SourceLocation EndLoc) {
-    return getSema().ActOnOpenMPReplicatedClause(NumReplications, Var, Func, StartLoc, LParenLoc, EndLoc);
+    return getSema().ActOnOpenMPReplicatedClause(NumReplications, Var, Func, Constraint, StartLoc, LParenLoc, EndLoc);
   }
 
   /// Build a new OpenMP 'schedule' clause.
@@ -9708,10 +9709,11 @@ TreeTransform<Derived>::TransformOMPReplicatedClause(OMPReplicatedClause *C) {
   ExprResult NumReplications = getDerived().TransformExpr(C->getNumReplications());
   ExprResult Var = getDerived().TransformExpr(C->getVar());
   ExprResult Func = getDerived().TransformExpr(C->getFunc());
+  OpenMPRedundancyConstraint Constraint = C->getRedundancyConstraint();
   if (NumReplications.isInvalid() || Var.isInvalid() || Func.isInvalid())
     return nullptr;
   return getDerived().RebuildOMPReplicatedClause(
-      NumReplications.get(), Var.get(), Func.get(), C->getBeginLoc(), C->getLParenLoc(), C->getEndLoc());
+      NumReplications.get(), Var.get(), Func.get(), Constraint,  C->getBeginLoc(), C->getLParenLoc(), C->getEndLoc());
 }
 
 template <typename Derived>

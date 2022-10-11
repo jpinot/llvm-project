@@ -5327,8 +5327,21 @@ void CGOpenMPRuntime::emitTaskCall(CodeGenFunction &CGF, SourceLocation Loc,
       }
 
       // Generate kmpc_prepare_taskwait call
+
+      const auto *replicatedClause = D.getSingleClause<OMPReplicatedClause>();
+
+      llvm::Value *ConstraintValue = nullptr;
+      OpenMPRedundancyConstraint constraint = replicatedClause->getRedundancyConstraint();
+      if(constraint == OMPC_REDUNDANCY_CONSTRAINT_spatial || constraint == OMPC_REDUNDANCY_CONSTRAINT_spatial_temporal){
+          ConstraintValue = CGF.Builder.getInt32(1);
+      }
+      else{
+          ConstraintValue = CGF.Builder.getInt32(0);
+      }
+
       llvm::Value *PrepareTaskwaitArgs[] = {NewTask, ReplicatedVar,
-                                            Data.GroupID, ThreadID};
+                                            Data.GroupID, ThreadID, ConstraintValue};
+
       CGF.EmitRuntimeCall(OMPBuilder.getOrCreateRuntimeFunction(
                               CGM.getModule(), OMPRTL___kmpc_prepare_taskwait),
                           PrepareTaskwaitArgs);

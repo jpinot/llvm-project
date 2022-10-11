@@ -6266,6 +6266,7 @@ void OMPClauseWriter::VisitOMPReplicatedClause(OMPReplicatedClause *C) {
   Record.AddStmt(C->getVar());
   Record.AddStmt(C->getFunc());
   Record.AddSourceLocation(C->getLParenLoc());
+  Record.push_back(C->getRedundancyConstraint());
 }
 
 void OMPClauseWriter::VisitOMPScheduleClause(OMPScheduleClause *C) {

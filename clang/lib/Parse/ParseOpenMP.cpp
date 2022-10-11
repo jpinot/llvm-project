@@ -4113,12 +4113,19 @@ OMPClause *Parser::ParseReplicatedClause(OpenMPDirectiveKind DKind,
                          getOpenMPClauseName(Kind).data()))
     return nullptr;
 
+  OpenMPRedundancyConstraint Constraint = OMPC_REDUNDANCY_CONSTRAINT_none;
   SmallVector<Expr *, 3> Vars;
   int NumVars = 0;
   while ((Tok.isNot(tok::r_paren) && Tok.isNot(tok::colon) &&
           Tok.isNot(tok::annot_pragma_openmp_end))) {
     ParseScope OMPListScope(this, Scope::OpenMPDirectiveScope);
     ColonProtectionRAIIObject ColonRAII(*this, false);
+
+    if (Tok.is(tok::identifier) && NumVars == 3){
+      Constraint = static_cast<OpenMPRedundancyConstraint>(getOpenMPSimpleClauseType(Kind, PP.getSpelling(Tok), getLangOpts()));
+      ConsumeToken();
+    }
+    else{
     // Parse variable
     ExprResult VarExpr =
         Actions.CorrectDelayedTyposInExpr(ParseAssignmentExpression());
@@ -4150,6 +4157,7 @@ OMPClause *Parser::ParseReplicatedClause(OpenMPDirectiveKind DKind,
       SkipUntil(tok::comma, tok::r_paren, tok::annot_pragma_openmp_end,
                 StopBeforeMatch);
     }
+    }
     // Skip ',' if any
     bool IsComma = Tok.is(tok::comma);
     if (IsComma)
@@ -4163,8 +4171,9 @@ OMPClause *Parser::ParseReplicatedClause(OpenMPDirectiveKind DKind,
     RLoc = T.getCloseLocation();
 
   if (Vars.size() == 3) {
-    return Actions.ActOnOpenMPReplicatedClause(Vars[0], Vars[1], Vars[2], Loc,
-                                               LLoc, RLoc);
+    return Actions.ActOnOpenMPReplicatedClause(
+        Vars[0], Vars[1], Vars[2], Constraint, Loc,
+        LLoc, RLoc);
   } else {
     Diag(Tok.getLocation(), diag::err_expected)
         << "three arguments for replicated clause";

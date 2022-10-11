@@ -11198,6 +11198,7 @@ public:
   OMPClause *ActOnOpenMPReplicatedClause(Expr *NumReplications,
                                          Expr *Var,
                                          Expr *Func,
+                                         OpenMPRedundancyConstraint Constraint,
                                          SourceLocation StartLoc,
                                          SourceLocation LParenLoc,
                                          SourceLocation EndLoc);

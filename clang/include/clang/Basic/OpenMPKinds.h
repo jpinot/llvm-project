@@ -160,6 +160,13 @@ enum OpenMPTdgTypeClauseKind {
   OMPC_TDG_TYPE_unknown,
 };
 
+/// OpenMP attributes for redundancy constraints.
+enum OpenMPRedundancyConstraint {
+#define OPENMP_REDUNDANCY_CONSTRAINT(Name) OMPC_REDUNDANCY_CONSTRAINT_##Name,
+#include "clang/Basic/OpenMPKinds.def"
+  OMPC_REDUNDANCY_CONSTRAINT_unknown,
+};
+
 /// Scheduling data for loop-based OpenMP directives.
 struct OpenMPScheduleTy final {
   OpenMPScheduleClauseKind Schedule = OMPC_SCHEDULE_unknown;

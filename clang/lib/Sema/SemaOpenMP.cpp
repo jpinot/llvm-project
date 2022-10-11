@@ -15388,9 +15388,19 @@ OMPClause *Sema::ActOnOpenMPNumPreallocsClause(Expr *NumPreallocs,
 
 OMPClause *Sema::ActOnOpenMPReplicatedClause(Expr *NumReplications, Expr *Var,
                                              Expr *Func,
+                                             OpenMPRedundancyConstraint Constraint,
                                              SourceLocation StartLoc,
                                              SourceLocation LParenLoc,
                                              SourceLocation EndLoc) {
+
+  if (Constraint == OMPC_REDUNDANCY_CONSTRAINT_unknown) {
+    Diag(EndLoc, diag::err_omp_unexpected_clause_value)
+        << getListOfPossibleValues(OMPC_replicated, /*First=*/0,
+                                   /*Last=*/OMPC_REDUNDANCY_CONSTRAINT_unknown)
+        << getOpenMPClauseName(OMPC_replicated);
+    return nullptr;
+  }
+
   Expr *ValExpr = NumReplications;
   int NumOfReplicas;
 
@@ -15403,7 +15413,7 @@ OMPClause *Sema::ActOnOpenMPReplicatedClause(Expr *NumReplications, Expr *Var,
     return nullptr;
 
   OMPReplicatedClause *Clause = new (Context)
-      OMPReplicatedClause(ValExpr, Var, Func, StartLoc, LParenLoc, EndLoc);
+      OMPReplicatedClause(ValExpr, Var, Func, Constraint, StartLoc, LParenLoc, EndLoc);
 
   for (int i = 0; i < NumOfReplicas + 1; i++) {
     VarDecl *VDInit =

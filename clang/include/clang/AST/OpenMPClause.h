@@ -1477,6 +1477,9 @@ class OMPReplicatedClause : public OMPClause{
   // Function to check correctness
   Stmt *Func = nullptr;
 
+  // Redundancy constraint
+  OpenMPRedundancyConstraint Constraint = OMPC_REDUNDANCY_CONSTRAINT_none;
+
   SmallVector<Expr *, 4> DummyVars;
   /// Set conditions.
   void setNumReplications(Expr *NReplications) {
@@ -1487,6 +1490,7 @@ class OMPReplicatedClause : public OMPClause{
 
   void setFunc(Expr *NFunc) { Func = NFunc; }
 
+  void setRedundancyConstraint(OpenMPRedundancyConstraint C) { Constraint = C;}
 public:
   /// Build 'replicated' clause
   ///
@@ -1500,9 +1504,11 @@ public:
   /// \param LParenLoc Location of '('.
   /// \param EndLoc Ending location of the clause.
   OMPReplicatedClause(Expr *NumReplications, Expr *Var, Expr *Func,
-                      SourceLocation StartLoc, SourceLocation LParenLoc,
-                      SourceLocation EndLoc)
-      : OMPClause(llvm::omp::OMPC_replicated, StartLoc, EndLoc), LParenLoc(LParenLoc), NumReplications(NumReplications), Var(Var), Func(Func) {}
+                      OpenMPRedundancyConstraint C, SourceLocation StartLoc,
+                      SourceLocation LParenLoc, SourceLocation EndLoc)
+      : OMPClause(llvm::omp::OMPC_replicated, StartLoc, EndLoc),
+        LParenLoc(LParenLoc), NumReplications(NumReplications), Var(Var),
+        Func(Func), Constraint(C) {}
 
   /// Build an empty clause.
   OMPReplicatedClause()
@@ -1528,6 +1534,8 @@ public:
   Expr *getVar() const { return cast_or_null<Expr>(Var); }
 
   Expr *getFunc() const { return cast_or_null<Expr>(Func); }
+
+  OpenMPRedundancyConstraint getRedundancyConstraint() const { return Constraint;}
 
   child_range children() {
     return child_range(&NumReplications, &NumReplications + 1);

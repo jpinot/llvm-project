@@ -4021,7 +4021,7 @@ KMP_EXPORT void __kmpc_prealloc_tasks(
 KMP_EXPORT void __kmpc_set_task_static_id(kmp_task_t *task, int staticID);
 KMP_EXPORT kmp_int32 __kmpc_getNewGroupID(ident_t *loc_ref);
 KMP_EXPORT kmp_int32 __kmpc_getNewTaskID(ident_t *loc_ref);
-KMP_EXPORT void __kmpc_prepare_taskwait(kmp_task_t *task, void *data, kmp_int32 groupID, kmp_int32 gtid);
+KMP_EXPORT void __kmpc_prepare_taskwait(kmp_task_t *task, void *data, kmp_int32 groupID, kmp_int32 gtid, bool spatialConstraint);
 KMP_EXPORT void __kmpc_replication_callback(ident_t *loc_ref, void *callbackFunction, kmp_int32 groupID, kmp_int32 threadID);
 #endif
 KMP_EXPORT kmp_int32 __kmpc_dynamic_variant(kmp_int32 *traits, int numVariants, kmp_int32 *user_conditions);

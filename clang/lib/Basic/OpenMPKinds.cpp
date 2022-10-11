@@ -130,6 +130,11 @@ unsigned clang::getOpenMPSimpleClauseType(OpenMPClauseKind Kind, StringRef Str,
 #define OPENMP_TDG_TYPE_KIND(Name) .Case(#Name, OMPC_TDG_TYPE_##Name)
 #include "clang/Basic/OpenMPKinds.def"
         .Default(OMPC_TDG_TYPE_unknown);
+  case OMPC_replicated:
+    return llvm::StringSwitch<OpenMPRedundancyConstraint>(Str)
+#define OPENMP_REDUNDANCY_CONSTRAINT(Name) .Case(#Name, OMPC_REDUNDANCY_CONSTRAINT_##Name)
+#include "clang/Basic/OpenMPKinds.def"
+        .Default(OMPC_REDUNDANCY_CONSTRAINT_unknown);
   case OMPC_adjust_args:
     return llvm::StringSwitch<OpenMPAdjustArgsOpKind>(Str)
 #define OPENMP_ADJUST_ARGS_KIND(Name) .Case(#Name, OMPC_ADJUST_ARGS_##Name)
@@ -240,6 +245,16 @@ const char *clang::getOpenMPSimpleClauseTypeName(OpenMPClauseKind Kind,
 #include "clang/Basic/OpenMPKinds.def"
     }
     llvm_unreachable("Invalid OpenMP 'tdg_type' clause type");
+  case OMPC_replicated:
+    switch (Type) {
+    case OMPC_REDUNDANCY_CONSTRAINT_unknown:
+      return "unknown";
+#define OPENMP_REDUNDANCY_CONSTRAINT(Name)                                     \
+  case OMPC_REDUNDANCY_CONSTRAINT_##Name:                                      \
+    return #Name;
+#include "clang/Basic/OpenMPKinds.def"
+    }
+    llvm_unreachable("Invalid OpenMP 'replicated' constraint type");
   case OMPC_schedule:
     switch (Type) {
     case OMPC_SCHEDULE_unknown:

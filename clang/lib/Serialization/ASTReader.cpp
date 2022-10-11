@@ -12124,6 +12124,8 @@ void OMPClauseReader::VisitOMPReplicatedClause(OMPReplicatedClause *C) {
   C->setVar(Record.readSubExpr());
   C->setFunc(Record.readSubExpr());
   C->setLParenLoc(Record.readSourceLocation());
+  C->setRedundancyConstraint(
+       static_cast<OpenMPRedundancyConstraint>(Record.readInt()));
 }
 
 void OMPClauseReader::VisitOMPScheduleClause(OMPScheduleClause *C) {
