@@ -959,7 +959,9 @@ void erase_transitive_edges() {
 
 void print_tdg_to_dot(void) {
 
-  FILE *f = fopen("tdg.dot", "w");
+  char FileName[10];
+  sprintf(FileName, "tdg_%d.dot", ntdgs);
+  FILE *f = fopen(FileName, "w");
 
   if (f == NULL) {
     printf("Error opening file!\n");
