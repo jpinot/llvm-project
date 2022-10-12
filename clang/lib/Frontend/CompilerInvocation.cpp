@@ -3488,8 +3488,8 @@ void CompilerInvocation::GenerateLangArgs(const LangOptions &Opts,
     if (Opts.OpenMPDynamicVariant)
       GenerateArg(Args, OPT_dynamic_variant, SA);
 
-    if (Opts.OpenMP2o3Replication)
-      GenerateArg(Args, OPT_fopenmp_2o3_replication, SA);
+    if (Opts.OpenMPReplicationArch)
+      GenerateArg(Args, OPT_fopenmp_replication_arch, Twine(Opts.OpenMPReplicationArch), SA);
   }
 
   if (Opts.OpenMPSimd) {
@@ -3895,8 +3895,30 @@ bool CompilerInvocation::ParseLangArgs(LangOptions &Opts, ArgList &Args,
       Opts.OpenMP && Args.hasArg(options::OPT_prealloc_tdg);
   Opts.OpenMPDynamicVariant =
       Opts.OpenMP && Args.hasArg(options::OPT_dynamic_variant);
-   Opts.OpenMP2o3Replication =
-      Opts.OpenMP && Args.hasArg(options::OPT_fopenmp_2o3_replication);
+  if (Opts.OpenMP) {
+
+    Opts.OpenMPReplicationArch =
+        Opts.OpenMP && Args.hasArg(options::OPT_fopenmp_replication_arch);
+
+    if (Args.hasArg(options::OPT_fopenmp_replication_arch)) {
+      StringRef ArchString =
+          Args.getLastArg(options::OPT_fopenmp_replication_arch)->getValue();
+
+      if (ArchString.size() != 4 || ArchString.substr(1, 2) != "oo")
+        Diags.Report(diag::err_drv_invalid_replication_arch) << ArchString;
+      else {
+        unsigned int minimum, maximum;
+        ArchString.substr(0, 1).getAsInteger(10, minimum);
+        ArchString.substr(3, 1).getAsInteger(10, maximum);
+        if (minimum > maximum)
+          Diags.Report(diag::err_drv_invalid_replication_arch) << ArchString;
+
+        Opts.OpenMPReplicationMinimum = minimum;
+        Opts.OpenMPReplicationMaximum = maximum;
+      }
+    }
+  }
+
   bool IsTargetSpecified =
       Opts.OpenMPIsDevice || Args.hasArg(options::OPT_fopenmp_targets_EQ);
 

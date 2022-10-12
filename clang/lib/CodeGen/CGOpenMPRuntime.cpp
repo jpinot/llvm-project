@@ -4263,19 +4263,19 @@ llvm::Value *CGOpenMPRuntime::emitGetNewGroupID(CodeGenFunction &CGF,
 
 void emitReplicationArchitecture(CodeGenFunction &CGF) {
   llvm::GlobalVariable *RepArch =
-      CGF.CGM.getModule().getNamedGlobal("__replication_architecture");
+      CGF.CGM.getModule().getNamedGlobal("__replication_architecture_minimum");
   if (!RepArch) {
     RepArch =
         llvm::cast<llvm::GlobalVariable>(CGF.CGM.getModule().getOrInsertGlobal(
-            "__replication_architecture", CGF.Int32Ty));
+            "__replication_architecture_minimum", CGF.Int32Ty));
 
-    int archID = 0;
-    if (CGF.CGM.getLangOpts().OpenMP2o3Replication) {
-      archID = 1;
+    int archMinimum = -1;
+    if (CGF.CGM.getLangOpts().OpenMPReplicationArch) {
+      archMinimum = CGF.CGM.getLangOpts().OpenMPReplicationMinimum;
     }
     RepArch->setLinkage(llvm::GlobalValue::ExternalLinkage);
     RepArch->setAlignment(llvm::MaybeAlign(4));
-    RepArch->setInitializer(CGF.Builder.getInt32(archID));
+    RepArch->setInitializer(CGF.Builder.getInt32(archMinimum));
     RepArch->setConstant(true);
   }
 }

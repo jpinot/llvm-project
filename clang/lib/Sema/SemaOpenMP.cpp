@@ -15404,8 +15404,8 @@ OMPClause *Sema::ActOnOpenMPReplicatedClause(Expr *NumReplications, Expr *Var,
   Expr *ValExpr = NumReplications;
   int NumOfReplicas;
 
-  if(getLangOpts().OpenMP2o3Replication)
-    NumOfReplicas = 3;
+  if(getLangOpts().OpenMPReplicationArch)
+    NumOfReplicas = getLangOpts().OpenMPReplicationMaximum;
   else
     NumOfReplicas = ValExpr->getIntegerConstantExpr(Context)->getZExtValue();
   if (!isNonNegativeIntegerValue(ValExpr, *this, OMPC_replicated,

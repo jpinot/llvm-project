@@ -27,6 +27,8 @@ def err_drv_unknown_stdin_type_clang_cl : Error<
 def err_drv_unknown_language : Error<"language not recognized: '%0'">;
 def err_drv_invalid_arch_name : Error<
   "invalid arch name '%0'">;
+def err_drv_invalid_replication_arch : Error<
+  "invalid replication arch '%0'">;
 def err_drv_invalid_riscv_arch_name : Error<
   "invalid arch name '%0', %1">;
 def err_drv_invalid_riscv_ext_arch_name : Error<

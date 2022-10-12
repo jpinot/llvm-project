@@ -5962,7 +5962,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
       Args.AddAllArgs(CmdArgs, options::OPT_static_tdg);
       Args.AddAllArgs(CmdArgs, options::OPT_prealloc_tdg);
       Args.AddAllArgs(CmdArgs, options::OPT_dynamic_variant);
-      Args.AddAllArgs(CmdArgs, options::OPT_fopenmp_2o3_replication);
+      Args.AddAllArgs(CmdArgs, options::OPT_fopenmp_replication_arch);
 
       // When in OpenMP offloading mode, forward assumptions information about
       // thread and team counts in the device.

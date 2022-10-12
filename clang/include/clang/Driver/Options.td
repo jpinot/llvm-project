@@ -2487,8 +2487,8 @@ def fopenmp_taskgraph : Flag<["-"], "fopenmp-taskgraph">, Group<f_Group>,
 def static_tdg : Flag<["-"], "static-tdg">, Group<f_Group>,
   Flags<[CC1Option, NoArgumentUnused, HelpHidden]>,
   HelpText<"Enable support for static taskgraphs.">;
-def fopenmp_2o3_replication : Flag<["-"], "fopenmp-2o3-replication">, Group<f_Group>,
-  Flags<[CC1Option, NoArgumentUnused, HelpHidden]>,
+def fopenmp_replication_arch : Joined<["-"], "fopenmp-replication-arch=">, Group<f_Group>,
+  Flags<[CC1Option, HelpHidden]>,
   HelpText<"Enable tasking 2o3 architecture for replication.">;
 def prealloc_tdg : Flag<["-"], "prealloc">, Group<f_Group>,
   Flags<[CC1Option, NoArgumentUnused, HelpHidden]>,

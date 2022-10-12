@@ -42,7 +42,7 @@ extern kmp_task_t *kmp_get_free_task_from_indexer();
 extern void kmp_insert_task_in_indexer(kmp_task_t *task);
 bool disable_stealing = false;
 extern bool staticSchedule;
-extern int __replication_architecture __attribute__((weak));
+extern int __replication_architecture_minimum __attribute__((weak));
 
 struct ReplicationNode{
   kmp_task_t *task;
@@ -1726,15 +1726,13 @@ bool checkIfListIsFinished(int gtid, ReplicationList *list) {
     }
   }
   bool stopUnfinishedTasks = false;
-  switch (__replication_architecture) {
-  case none:
+
+  if (__replication_architecture_minimum == -1)
     return numFinishedTasks == list->numNodes;
-  case arch2o3:
-    stopUnfinishedTasks = (numFinishedTasks >= 2 && originalFinished);
-    break;
-  default:
-    return false;
-  }
+  else
+    stopUnfinishedTasks =
+        (numFinishedTasks >= __replication_architecture_minimum &&
+         originalFinished);
 
   if (stopUnfinishedTasks) {
     for (int i = 0; i < numUnfinishedTasks; i++) {

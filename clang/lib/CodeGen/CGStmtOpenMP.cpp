@@ -4962,8 +4962,8 @@ void CodeGenFunction::EmitOMPTaskDirective(const OMPTaskDirective &S) {
   if (const auto *C = S.getSingleClause<OMPReplicatedClause>()) {
     GroupID = CGM.getOpenMPRuntime().emitGetNewGroupID(*this, S.getBeginLoc());
 
-    if(getLangOpts().OpenMP2o3Replication)
-      NumReplicas = 3;
+    if(getLangOpts().OpenMPReplicationArch)
+      NumReplicas = getLangOpts().OpenMPReplicationMaximum;
     else
       NumReplicas = (C->getNumReplications())
                       ->getIntegerConstantExpr(getContext())
