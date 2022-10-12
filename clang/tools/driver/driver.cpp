@@ -488,6 +488,7 @@ int main(int Argc, const char **Argv) {
   }
 
   // FIXME: Initial workaround, look for a more elegant solution
+  bool isDynamicTdg = false;
   bool isStaticTdg = false;
   bool isOffloading = false;
   for (int i = 1; i < (int)Args.size(); i++) {
@@ -495,10 +496,17 @@ int main(int Argc, const char **Argv) {
       isStaticTdg = true;
     else if (!strncmp(Args[i], "-fopenmp-targets",16))
       isOffloading = true;
+    else if (!strcmp(Args[i], "-fopenmp-taskgraph"))
+      isDynamicTdg = true;
   }
   //Add -O2 flag to force loop unrolling when using static tdgs
   if(isStaticTdg){
     Args.push_back("-O2");
+  }
+
+  //Add -g flag to force generate debug names, for dynamic tdgs
+  if(isDynamicTdg || isStaticTdg){
+    Args.push_back("-g");
   }
 
   //Remove -o and fopenmp-target flag when using static tdgs
