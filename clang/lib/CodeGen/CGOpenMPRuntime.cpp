@@ -4273,7 +4273,7 @@ void emitReplicationArchitecture(CodeGenFunction &CGF) {
     if (CGF.CGM.getLangOpts().OpenMPReplicationArch) {
       archMinimum = CGF.CGM.getLangOpts().OpenMPReplicationMinimum;
     }
-    RepArch->setLinkage(llvm::GlobalValue::ExternalLinkage);
+    RepArch->setLinkage(llvm::GlobalValue::WeakAnyLinkage);
     RepArch->setAlignment(llvm::MaybeAlign(4));
     RepArch->setInitializer(CGF.Builder.getInt32(archMinimum));
     RepArch->setConstant(true);
