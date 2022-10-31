@@ -25,23 +25,31 @@
 #if LIBOMP_TASKGRAPH
 #include <new>
 #include <sys/sysinfo.h>
+
+//Values for dynamic variants support
 #define LOW_MEMORY 45
 #define LOW_CPU_USAGE 46
 #define USER_CONDITION 49
 
 
-// Taskgraph
-extern int recording;
-extern int fill_data;
-extern int prealloc;
-extern kmp_uint MapSize;
+// Global inital value
 extern int SuccessorsSize;
-extern ident_task *TaskIdentMap;
+
+//Structures for data preallocation
 extern struct kmp_task_alloc_info *task_static_table;
 extern kmp_task_t *kmp_get_free_task_from_indexer();
 extern void kmp_insert_task_in_indexer(kmp_task_t *task);
+
+//Variables to enable static mapping/scheduling
 bool disable_stealing = false;
-extern bool staticSchedule;
+extern bool StaticSchedule;
+
+
+//To manage simulatenous taskIDs generation
+extern kmp_tdg_creation_info *TdgCreationInfo;
+extern kmp_int32 TdgCreationInfoSize;
+
+//To manage task replication with groupID and callbacks
 extern int __replication_architecture_minimum __attribute__((weak));
 
 struct ReplicationNode{
@@ -50,6 +58,7 @@ struct ReplicationNode{
   bool finished;
   bool canceled;
   int thread;
+  int correctResult;
 };
 
 struct ReplicationList{
@@ -63,9 +72,9 @@ struct ReplicationList{
 };
 
 struct ReplicationList *listsOfReplicas;
-int numReplicasList = 0;
-int numReplicasListSize = 0;
-int initalNumOfLists = 20;
+int NumReplicasList = 0;
+int NumReplicasListSize = 0;
+int InitalNumOfLists = 20;
 
 //Predeclaration
 void freeReplicatedNode(kmp_task_t *task, int groupID, int gtid);
@@ -74,20 +83,11 @@ void setRedundantTaskThreadNum(kmp_task_t *task, kmp_int32 groupID,
                                kmp_int32 gtid);
 bool checkRedundantTaskSpatialConstraint(kmp_int32 groupID, kmp_int32 gtid);
 //Lock for managing redudants
-kmp_futex_lock_t replicationsLock =  KMP_FUTEX_LOCK_INITIALIZER(replicationsLock);
+kmp_futex_lock_t ReplicationsLock =  KMP_FUTEX_LOCK_INITIALIZER(ReplicationsLock);
 
 //Atomic counter to manage groupIDs generation
-std::atomic<kmp_int32> groupIdCounter = ATOMIC_VAR_INIT(1);
-
-//Counter to manage taskIDs generation
-kmp_int32 taskIdCounter =0;
-
-//Replication arquitecture
-enum kmp_replication_architecture {
-  none = 0,
-  arch2o3,
-  arch3o4
-};
+std::atomic<kmp_int32> GroupIdCounter = ATOMIC_VAR_INIT(1);
+std::atomic<kmp_int32> FakeAddrCounter = ATOMIC_VAR_INIT(1000);
 
 #endif
 
@@ -811,13 +811,13 @@ static void __kmp_free_task(kmp_int32 gtid, kmp_taskdata_t *taskdata,
 #if LIBOMP_TASKGRAPH
   kmp_task_t *task = KMP_TASKDATA_TO_TASK(taskdata);
   if (!taskdata->is_taskgraph) {
-#endif // LIBOMP_TASKGRAPH
     // only free tasks created outside taskgraph
     if(taskdata->groupID!=0){
       //Restart grouoID to 0, just in case this task structure is reused
       setRedundantTaskThreadNum(task, taskdata->groupID, gtid);
       taskdata->groupID=0;
     }
+#endif // LIBOMP_TASKGRAPH
 #if USE_FAST_MEMORY
     __kmp_fast_free(thread, taskdata);
 #else /* ! USE_FAST_MEMORY */
@@ -826,13 +826,13 @@ static void __kmp_free_task(kmp_int32 gtid, kmp_taskdata_t *taskdata,
     KA_TRACE(20, ("__kmp_free_task: T#%d freed task %p\n", gtid, taskdata));
 #if LIBOMP_TASKGRAPH
   } else {
-    if (prealloc) {
+    if (taskdata->tdg->tdgStatus == TDG_PREALLOC) {
       kmp_insert_task_in_indexer(task);
       if (check_waiting_tdg()) {
-        kmp_record_info *Next = get_from_waiting_tdg();
+        kmp_node_info *Next = get_from_waiting_tdg();
         if(Next!=NULL) {
           kmp_task_t *NextTask = kmp_init_lazy_task(
-            Next->static_id, KMP_TASKDATA_TO_TASK(taskdata->td_parent), gtid);
+            Next->static_id, KMP_TASKDATA_TO_TASK(taskdata->td_parent), gtid, taskdata->tdg->RecordMap, taskdata->tdg->tdgId);
           __kmp_omp_task(gtid, NextTask, false);
         }
       }
@@ -853,6 +853,10 @@ static void __kmp_free_task(kmp_int32 gtid, kmp_taskdata_t *taskdata,
       // start at one because counts current task and children
       KMP_ATOMIC_ST_RLX(&taskdata->td_allocated_child_tasks, 1);
       
+    }
+    //If we are inside taskgraph and not recording, we must decrement the remaining tasks for the tdg. While recording this is not necessary because recording has an explicit taskwait
+    if(!(taskdata->tdg->tdgStatus== TDG_RECORDING)){
+      KMP_ATOMIC_DEC(&taskdata->tdg->remainingTasks);
     }
   }
 #endif
@@ -970,7 +974,8 @@ static void __kmp_task_finish(kmp_int32 gtid, kmp_task_t *task,
   KMP_DEBUG_ASSERT(taskdata->td_flags.tasktype == TASK_EXPLICIT);
 
   // Free redundant node here, to avoid execute the callback after the taskwait
-  if (taskdata->groupID != 0) {
+  // Canceled tasks do not execute the free
+  if (taskdata->groupID > 0) {
     if (!taskdata->is_taskgraph) {
       freeReplicatedNode(task, taskdata->groupID, gtid);
     } else {
@@ -1068,6 +1073,7 @@ static void __kmp_task_finish(kmp_int32 gtid, kmp_task_t *task,
       children = -1 +
 #endif
           KMP_ATOMIC_DEC(&taskdata->td_parent->td_incomplete_child_tasks);
+
       KMP_DEBUG_ASSERT(children >= 0);
       if (taskdata->td_taskgroup)
         KMP_ATOMIC_DEC(&taskdata->td_taskgroup->count);
@@ -1518,11 +1524,6 @@ kmp_task_t *__kmp_task_alloc(ident_t *loc_ref, kmp_int32 gtid,
   // Initialize counter to 1 event, the task finish event
   taskdata->td_allow_completion_event.pending_events_count = 1;
   taskdata->td_allow_completion_event.ed.task = task;
-#if LIBOMP_TASKGRAPH
-  // When filling data, we only need to create empty tasks
-  if (fill_data)
-    return task;
-#endif
 
 #if OMPT_SUPPORT
   if (UNLIKELY(ompt_enabled.enabled))
@@ -1556,25 +1557,32 @@ kmp_task_t *__kmp_task_alloc(ident_t *loc_ref, kmp_int32 gtid,
 // Mark tasks created inside a taskgraph, to differenciate
 // them, this is used to decide if task should be freed and also when task ends
 // and we look por successors.
-void __kmpc_set_task_static_id(kmp_task_t *task, kmp_int32 staticID) {
+void __kmpc_set_task_static_id(kmp_int32 gtid, kmp_task_t *task) {
   kmp_taskdata_t *taskdata = KMP_TASK_TO_TASKDATA(task);
-  if (recording || fill_data) {
-    taskdata->td_task_id = staticID;
-    taskdata->is_taskgraph = 1;
+  for (int i = 0; i < TdgCreationInfoSize; i++) {
+    if (TdgCreationInfo[i].gtid == gtid) {
+      taskdata->is_taskgraph = 1;
+      taskdata->tdg = TdgCreationInfo[i].tdg;
+      taskdata->td_task_id = TdgCreationInfo[i].currentTaskGenID;
+      TdgCreationInfo[i].currentTaskGenID++;
+      break;
+    }
   }
 }
-kmp_int32 __kmpc_getNewGroupID(ident_t *loc_ref){
-    int id= KMP_ATOMIC_INC(&groupIdCounter);
-    return id;
+
+kmp_int32 __kmpc_getNewGroupID(ident_t *loc_ref) {
+  int id = KMP_ATOMIC_INC(&GroupIdCounter);
+  return id;
 }
 
-kmp_int32 __kmpc_getNewTaskID(ident_t *loc_ref){
-    return taskIdCounter++;
+kmp_int32 __kmpc_getFakeAddrGroupID(ident_t *loc_ref) {
+  int id = KMP_ATOMIC_ADD(&FakeAddrCounter, 4);
+  return id;
 }
 
 void setRedundantTaskThreadNum(kmp_task_t *task, kmp_int32 groupID,
                                kmp_int32 gtid) {
-  for (int i = 0; i < numReplicasListSize; i++) {
+  for (int i = 0; i < NumReplicasListSize; i++) {
     if (listsOfReplicas[i].groupID == groupID) {
       for (int j = 0; j < listsOfReplicas[i].numNodesSize; j++) {
         if (listsOfReplicas[i].nodes[j].task == task) {
@@ -1591,10 +1599,10 @@ void setRedundantTaskThreadNum(kmp_task_t *task, kmp_int32 groupID,
 // spatial constraint on redundancy. Returns true if valid, otherwise returns
 // false
 bool checkRedundantTaskSpatialConstraint(kmp_int32 groupID, kmp_int32 gtid) {
-  for (int i = 0; i < numReplicasListSize; i++) {
+  for (int i = 0; i < NumReplicasListSize; i++) {
     if (listsOfReplicas[i].groupID == groupID) {
-      //Check if the spatial constraint is activated for this group
-      if(!listsOfReplicas[i].spatialConstraint)
+      // Check if the spatial constraint is activated for this group
+      if (!listsOfReplicas[i].spatialConstraint)
         break;
 
       for (int j = 0; j < listsOfReplicas[i].numNodesSize; j++) {
@@ -1611,99 +1619,154 @@ bool checkRedundantTaskSpatialConstraint(kmp_int32 groupID, kmp_int32 gtid) {
 void __kmpc_prepare_taskwait(kmp_task_t *task, void *data, kmp_int32 groupID,
                              kmp_int32 gtid, bool spatialConstraint) {
 
-  __kmp_acquire_futex_lock(&replicationsLock, gtid);
-
+  __kmp_acquire_futex_lock(&ReplicationsLock, gtid);
 
   // Initialize the list if it is not created
-  if (!numReplicasListSize) {
-    //printf("--- Runtime ---:Initialize list of lists \n");
-    listsOfReplicas =
-        (ReplicationList *)__kmp_allocate(sizeof(ReplicationList) * initalNumOfLists);
-    numReplicasListSize = initalNumOfLists;
-    for (int i = 0; i < initalNumOfLists; i++) {
-      listsOfReplicas[i] = {-1, 0, 0, nullptr, nullptr, FALSE, spatialConstraint};
+  if (!NumReplicasListSize) {
+    // printf("--- Runtime ---:Initialize list of lists \n");
+    listsOfReplicas = (ReplicationList *)__kmp_allocate(
+        sizeof(ReplicationList) * InitalNumOfLists);
+    NumReplicasListSize = InitalNumOfLists;
+    for (int i = 0; i < InitalNumOfLists; i++) {
+      listsOfReplicas[i] = {
+          -1, 0, 0, nullptr, nullptr, FALSE, spatialConstraint};
     }
   }
   // Increment the list size if it is not enough
-  else if (numReplicasList >= numReplicasListSize) {
-    //printf("--- Runtime ---:Increment list of lists size %d \n", numReplicasListSize * 2);
-    int oldSize = numReplicasListSize;
+  else if (NumReplicasList >= NumReplicasListSize) {
+    // printf("--- Runtime ---:Increment list of lists size %d \n",
+    // NumReplicasListSize * 2);
+    int oldSize = NumReplicasListSize;
     ReplicationList *OldReplicationList = listsOfReplicas;
-    numReplicasListSize = numReplicasListSize * 2;
-    listsOfReplicas = (ReplicationList *)__kmp_allocate(sizeof(ReplicationList) * numReplicasListSize);
+    NumReplicasListSize = NumReplicasListSize * 2;
+    listsOfReplicas = (ReplicationList *)__kmp_allocate(
+        sizeof(ReplicationList) * NumReplicasListSize);
 
-    KMP_MEMCPY((void *)listsOfReplicas,(void *)OldReplicationList, sizeof(ReplicationList) * oldSize);
+    KMP_MEMCPY((void *)listsOfReplicas, (void *)OldReplicationList,
+               sizeof(ReplicationList) * oldSize);
 
     __kmp_free(OldReplicationList);
 
-    for (int i = oldSize; i < numReplicasListSize; i++) {
+    for (int i = oldSize; i < NumReplicasListSize; i++) {
       listsOfReplicas[i] = {-1, 0, 0, nullptr, nullptr, FALSE};
     }
   }
 
   // Find an empty list
   struct ReplicationList *ListToUse = nullptr;
-  for (int i = 0; i < numReplicasListSize; i++) {
+  for (int i = 0; i < NumReplicasListSize; i++) {
     // Figure out if a list with the GroupID is already created
     if (listsOfReplicas[i].groupID == groupID) {
       ListToUse = &(listsOfReplicas[i]);
-      //printf("--- Runtime ---:List of same groupID %d found \n", groupID);
+      // printf("--- Runtime ---:List of same groupID %d found \n", groupID);
     }
   }
-  if(ListToUse==nullptr)
-  for (int i = 0; i < numReplicasListSize; i++) {
-    if (listsOfReplicas[i].groupID == -1) {
-      ListToUse = &(listsOfReplicas[i]);
-      //printf("--- Runtime ---:Created list of groupID %d \n", groupID);
-      // Increment by 1 the number of lists used
-      ListToUse->groupID=groupID;
-      numReplicasList++;
-      break;
+  if (ListToUse == nullptr)
+    for (int i = 0; i < NumReplicasListSize; i++) {
+      if (listsOfReplicas[i].groupID == -1) {
+        ListToUse = &(listsOfReplicas[i]);
+        // printf("--- Runtime ---:Created list of groupID %d \n", groupID);
+        //  Increment by 1 the number of lists used
+        ListToUse->groupID = groupID;
+        NumReplicasList++;
+        break;
+      }
     }
-  }
 
   // Find if we need to initialize the list
   if (!ListToUse->numNodesSize) {
-    //printf("--- Runtime ---:Initialize list of groupID %d \n", groupID);
-    ListToUse->nodes = (ReplicationNode *)__kmp_allocate(sizeof(ReplicationNode) * initalNumOfLists);
-    ListToUse->numNodesSize = initalNumOfLists;
+    // printf("--- Runtime ---:Initialize list of groupID %d \n", groupID);
+    ListToUse->nodes = (ReplicationNode *)__kmp_allocate(
+        sizeof(ReplicationNode) * InitalNumOfLists);
+    ListToUse->numNodesSize = InitalNumOfLists;
     for (int i = 0; i < ListToUse->numNodesSize; i++) {
-      ListToUse->nodes[i] = {nullptr, nullptr, FALSE, FALSE, -1};
+      ListToUse->nodes[i] = {nullptr, nullptr, FALSE, FALSE, -1, -1};
     }
   }
   // Increment the list size if it is not enough
   else if (ListToUse->numNodes >= ListToUse->numNodesSize) {
-    //printf("--- Runtime ---:Increment list of groupID %d \n", groupID);
+    // printf("--- Runtime ---:Increment list of groupID %d \n", groupID);
     int oldSize = ListToUse->numNodesSize;
     ReplicationNode *oldNodeList = ListToUse->nodes;
 
     ListToUse->numNodesSize = ListToUse->numNodesSize * 2;
-    ListToUse->nodes = (ReplicationNode *)__kmp_allocate(sizeof(ReplicationNode) * (ListToUse->numNodesSize));
+    ListToUse->nodes = (ReplicationNode *)__kmp_allocate(
+        sizeof(ReplicationNode) * (ListToUse->numNodesSize));
 
-    KMP_MEMCPY((void *)ListToUse->nodes, (void *)oldNodeList, sizeof(ReplicationNode) * oldSize);
+    KMP_MEMCPY((void *)ListToUse->nodes, (void *)oldNodeList,
+               sizeof(ReplicationNode) * oldSize);
 
     __kmp_free(oldNodeList);
 
     for (int i = oldSize; i < ListToUse->numNodesSize; i++) {
-      ListToUse->nodes[i] = {nullptr, nullptr, FALSE};
+      ListToUse->nodes[i] = {nullptr, nullptr, FALSE, FALSE, -1, -1};
     }
   }
   // Save node and increment the number of nodes
-  ListToUse->nodes[ListToUse->numNodes] = {task, data, FALSE};
+  ListToUse->nodes[ListToUse->numNodes] = {task, data, FALSE, FALSE, -1, -1};
   ListToUse->numNodes = ListToUse->numNodes + 1;
-  //printf("--- Runtime ---:Node saved! \n");
-  if(spatialConstraint && __kmp_threads[gtid]->th.th_task_team->tt.tt_nproc <= ListToUse->numNodes){
-        ListToUse->spatialConstraint = FALSE;
-        printf("WARNING: Number of replicas is higher than the number of threads, spatial constraint will not be satisfied \n");
+  // printf("--- Runtime ---:Node saved! \n");
+  if (spatialConstraint && __kmp_threads[gtid]->th.th_task_team->tt.tt_nproc <=
+                               ListToUse->numNodes) {
+    ListToUse->spatialConstraint = FALSE;
+    printf("WARNING: Number of replicas is higher than the number of threads, "
+           "spatial constraint will not be satisfied \n");
   }
-
 
   // Save groupID inside the task member
   KMP_TASK_TO_TASKDATA(task)->groupID = groupID;
 
-  __kmp_release_futex_lock(&replicationsLock, gtid);
+  __kmp_release_futex_lock(&ReplicationsLock, gtid);
 }
 
+// Check if the result of a replica matches the result of the original acording
+// to the user function. Returns 1 if the node result is correct, original task
+// is not counted. If the result has not been checked before we check it.
+int finishedWithCorrectResult(ReplicationList *list, int nodeID) {
+
+  if (list->nodes[nodeID].correctResult != -1)
+    return list->nodes[nodeID].correctResult;
+
+  bool originalFinished = list->nodes[0].finished;
+  // If original task already finished and node is a replica, then call the user
+  // function and return if the result is correct
+  if (originalFinished && nodeID != 0) {
+    int result = ((int (*)(void *, void *))list->functionToCall)(
+        list->nodes[0].data, list->nodes[nodeID].data);
+
+    // If the return value of the user function does not match true or false,
+    // then force it to be false, since no other option is supported
+    if (result != 0 && result != 1)
+      result = 0;
+
+    list->nodes[nodeID].correctResult = result;
+
+    return result;
+  } else if (!originalFinished && nodeID != 0) {
+    // If the original task is not finished and node is a replica, return a 0
+    // because we can not check the result yet
+    return 0;
+  } else if (nodeID == 0) {
+    // If the node is the original task, check the result for replicas that
+    // already finished before, updating their result, and return a 0 since
+    // original task is not counted
+    list->nodes[nodeID].correctResult = 0;
+    for (int j = 1; j < list->numNodes; j++) {
+      if (list->nodes[j].finished == TRUE &&
+          list->nodes[j].correctResult == -1) {
+        int result = ((int (*)(void *, void *))list->functionToCall)(
+            list->nodes[0].data, list->nodes[j].data);
+        // If the return value of the user function does not match true or
+        // false, then force it to be false, since no other option is supported
+        if (result != 0 && result != 1)
+          result = 0;
+
+        list->nodes[j].correctResult = result;
+      }
+    }
+  }
+  return 0;
+}
 // Check if the suficient number of tasks has finished depending on the current
 // architecture, and stop the rest if necessary.
 bool checkIfListIsFinished(int gtid, ReplicationList *list) {
@@ -1712,9 +1775,13 @@ bool checkIfListIsFinished(int gtid, ReplicationList *list) {
   kmp_task_t *unfinishedTasks[list->numNodes];
   int unfinishedTasksPosition[list->numNodes];
   int numUnfinishedTasks = 0;
+
   for (int j = 0; j < list->numNodes; j++) {
     if (list->nodes[j].finished == TRUE) {
-      numFinishedTasks++;
+      if (__replication_architecture_minimum != -1)
+        numFinishedTasks += finishedWithCorrectResult(list, j);
+      else
+        numFinishedTasks++;
       if (j == 0)
         originalFinished = TRUE;
     } else {
@@ -1725,6 +1792,7 @@ bool checkIfListIsFinished(int gtid, ReplicationList *list) {
       }
     }
   }
+
   bool stopUnfinishedTasks = false;
 
   if (__replication_architecture_minimum == -1)
@@ -1749,50 +1817,53 @@ void executeCallbackAndFreeList(ReplicationList *list) {
 
   // Call function comparing with the data of the original
   for (int i = 1; i < list->numNodes; i++) {
-     if(list->nodes[i].canceled == TRUE)
+    if (list->nodes[i].canceled == TRUE || list->nodes[i].correctResult != -1)
       continue;
     ((void (*)(void *, void *))list->functionToCall)(list->nodes[0].data,
                                                      list->nodes[i].data);
   }
   // Reset list and nodes
-  list->callbackExecuted= TRUE;
+  list->callbackExecuted = TRUE;
   list->numNodes = 0;
   list->functionToCall = nullptr;
   list->groupID = -1;
   list->spatialConstraint = FALSE;
-  numReplicasList--;
+  NumReplicasList--;
   for (int j = 0; j < list->numNodesSize; j++) {
     list->nodes[j].task = nullptr;
     list->nodes[j].data = nullptr;
     list->nodes[j].finished = FALSE;
     list->nodes[j].canceled = FALSE;
     list->nodes[j].thread = -1;
+    list->nodes[j].correctResult = -1;
   }
 }
 
 // If we are in taskgraph, we dont free the data
 void disableReplicatedNode(kmp_task_t *task, int groupID, kmp_int32 gtid) {
-  __kmp_acquire_futex_lock(&replicationsLock, gtid);
+
+  __kmp_acquire_futex_lock(&ReplicationsLock, gtid);
   // First, look for the list of the group
-  for (int i = 0; i < numReplicasListSize; i++) {
+  for (int i = 0; i < NumReplicasListSize; i++) {
     if (listsOfReplicas[i].groupID == groupID) {
-      //printf("--- Runtime ---:Found list of GroupID %d to free \n", groupID);
-      // Now find the node and set finished to true
+      // printf("--- Runtime ---:Found list of GroupID %d to free \n", groupID);
+      //  Now find the node and set finished to true
       for (int j = 0; j < listsOfReplicas[i].numNodesSize; j++) {
         if (listsOfReplicas[i].nodes[j].task == task) {
-          //printf("--- Runtime ---:Found task to free in the list \n");
+          // printf("--- Runtime ---:Found task to free in the list \n");
           listsOfReplicas[i].nodes[j].finished = TRUE;
           break;
         }
       }
       // Now check if all nodes of the list has finished
       bool executeCallback = checkIfListIsFinished(gtid, &listsOfReplicas[i]);
-      //printf("Debo ejecutar callback) %d \n", executeCallback);
+      // printf("Debo ejecutar callback) %d \n", executeCallback);
       if (executeCallback && listsOfReplicas[i].functionToCall != nullptr) {
-        //printf("--- Runtime ---:Executing callback normal TDG! \n");
-        // Call function comparing with the data of the original
+        // printf("--- Runtime ---:Executing callback normal TDG! \n");
+        //  Call function comparing with the data of the original
         for (int z = 1; z < listsOfReplicas[i].numNodes; z++) {
-          if(listsOfReplicas->nodes[z].canceled == TRUE)
+          if (listsOfReplicas->nodes[z].canceled == TRUE ||
+              listsOfReplicas->nodes[z].correctResult != -1)
             continue;
           ((void (*)(void *, void *))listsOfReplicas[i].functionToCall)(
               listsOfReplicas[i].nodes[0].data,
@@ -1803,27 +1874,27 @@ void disableReplicatedNode(kmp_task_t *task, int groupID, kmp_int32 gtid) {
           listsOfReplicas[i].nodes[j].finished = FALSE;
           listsOfReplicas[i].nodes[j].canceled = FALSE;
           listsOfReplicas[i].nodes[j].thread = -1;
+          listsOfReplicas[i].nodes[j].correctResult = -1;
         }
       }
       break;
     }
   }
-  __kmp_release_futex_lock(&replicationsLock, gtid);
+  __kmp_release_futex_lock(&ReplicationsLock, gtid);
 }
 
 // When not in taskgraph, we free the data
 void freeReplicatedNode(kmp_task_t *task, int groupID, kmp_int32 gtid) {
-
-  __kmp_acquire_futex_lock(&replicationsLock, gtid);
+  __kmp_acquire_futex_lock(&ReplicationsLock, gtid);
 
   // First, look for the list of the group
-  for (int i = 0; i < numReplicasListSize; i++) {
+  for (int i = 0; i < NumReplicasListSize; i++) {
     if (listsOfReplicas[i].groupID == groupID) {
-      //printf("--- Runtime ---:Found list of GroupID %d to free \n", groupID);
-      // Now find the node and set finished to true
+      // printf("--- Runtime ---:Found list of GroupID %d to free \n", groupID);
+      //  Now find the node and set finished to true
       for (int j = 0; j < listsOfReplicas[i].numNodesSize; j++) {
         if (listsOfReplicas[i].nodes[j].task == task) {
-          //printf("--- Runtime ---:Found task to free in the list \n");
+          // printf("--- Runtime ---:Found task to free in the list \n");
           listsOfReplicas[i].nodes[j].finished = TRUE;
         }
       }
@@ -1831,20 +1902,20 @@ void freeReplicatedNode(kmp_task_t *task, int groupID, kmp_int32 gtid) {
       bool executeCallback = checkIfListIsFinished(gtid, &listsOfReplicas[i]);
 
       if (executeCallback && listsOfReplicas[i].functionToCall != nullptr) {
-        //printf("--- Runtime ---:Executing callback normal! \n");
+        // printf("--- Runtime ---:Executing callback normal! \n");
         executeCallbackAndFreeList(&listsOfReplicas[i]);
       }
       break;
     }
   }
-  __kmp_release_futex_lock(&replicationsLock, gtid);
+  __kmp_release_futex_lock(&ReplicationsLock, gtid);
 }
 
 // TODO: async or sync?
 void __kmpc_replication_callback(ident_t *loc_ref, void *callbackFunction,
                                  kmp_int32 groupID, kmp_int32 gtid) {
-  __kmp_acquire_futex_lock(&replicationsLock, gtid);
-  for (int i = 0; i < numReplicasListSize; i++) {
+  __kmp_acquire_futex_lock(&ReplicationsLock, gtid);
+  for (int i = 0; i < NumReplicasListSize; i++) {
     // Figure out if a list with the GroupID is already created
     if (listsOfReplicas[i].groupID == groupID) {
       listsOfReplicas[i].functionToCall = callbackFunction;
@@ -1853,13 +1924,13 @@ void __kmpc_replication_callback(ident_t *loc_ref, void *callbackFunction,
       bool executeCallback = checkIfListIsFinished(gtid, &listsOfReplicas[i]);
 
       if (executeCallback) {
-        //printf("--- Runtime ---:Executing callback from callback! \n");
+        // printf("--- Runtime ---:Executing callback from callback! \n");
         executeCallbackAndFreeList(&listsOfReplicas[i]);
       }
     }
   }
 
-  __kmp_release_futex_lock(&replicationsLock, gtid);
+  __kmp_release_futex_lock(&ReplicationsLock, gtid);
 }
 #endif
 
@@ -1962,13 +2033,8 @@ kmp_task_t *__kmpc_omp_target_task_alloc(ident_t *loc_ref, kmp_int32 gtid,
   // target task is untied defined in the specification
   input_flags.tiedness = TASK_UNTIED;
 
-#if LIBOMP_TASKGRAPH
-  if (__kmp_enable_hidden_helper && !fill_data)
-    input_flags.hidden_helper = TRUE;
-#else
   if (__kmp_enable_hidden_helper)
     input_flags.hidden_helper = TRUE;
-#endif
 
   return __kmpc_omp_task_alloc(loc_ref, gtid, flags, sizeof_kmp_task_t,
                                sizeof_shareds, task_entry);
@@ -2257,51 +2323,62 @@ kmp_int32 __kmp_omp_task(kmp_int32 gtid, kmp_task_t *new_task,
   kmp_taskdata_t *new_taskdata = KMP_TASK_TO_TASKDATA(new_task);
 
 #if LIBOMP_TASKGRAPH
-  if (recording) {
+  if (new_taskdata->is_taskgraph && new_taskdata->tdg->tdgStatus == TDG_RECORDING) {
     // Extend Map Size if needed
-    if (new_taskdata->td_task_id >= MapSize) {
-      kmp_uint OldSize = MapSize;
-      MapSize = MapSize * 2;
+    if (new_taskdata->td_task_id >= new_taskdata->tdg->mapSize) {
+      kmp_uint OldSize = new_taskdata->tdg->mapSize;
+      new_taskdata->tdg->mapSize = new_taskdata->tdg->mapSize * 2;
 
-      kmp_record_info *oldRecord = RecordMap;
-      kmp_record_info *newRecord = (kmp_record_info *) malloc(MapSize * sizeof(kmp_record_info));
-      KMP_MEMCPY(newRecord, RecordMap, OldSize * sizeof(kmp_record_info));
+      kmp_node_info *oldRecord = new_taskdata->tdg->RecordMap;
+      kmp_node_info *newRecord = (kmp_node_info *) malloc(new_taskdata->tdg->mapSize * sizeof(kmp_node_info));
+      KMP_MEMCPY(newRecord, new_taskdata->tdg->RecordMap, OldSize * sizeof(kmp_node_info));
 
-      RecordMap = newRecord;
+      new_taskdata->tdg->RecordMap = newRecord;
       free(oldRecord);
 
-      TaskIdentMap =
-          (ident_task *)realloc(TaskIdentMap, MapSize * sizeof(ident_task));
+      new_taskdata->tdg->taskIdent =
+          (kmp_ident_task *)realloc(new_taskdata->tdg->taskIdent, new_taskdata->tdg->mapSize * sizeof(kmp_ident_task));
 
-      for (kmp_uint i = OldSize; i < MapSize; i++) {
+      for (kmp_int i = OldSize; i < new_taskdata->tdg->mapSize; i++) {
         kmp_int32 *successorsList =
             (kmp_int32 *)malloc(SuccessorsSize * sizeof(kmp_int32));
-        RecordMap[i].static_id = 0;
-        RecordMap[i].task = nullptr;
-        RecordMap[i].successors = successorsList;
-        RecordMap[i].nsuccessors = 0;
-        RecordMap[i].npredecessors = 0;
-        RecordMap[i].successors_size = SuccessorsSize;
-        RecordMap[i].static_thread = -1;
-        void * pCounters = (void *) &RecordMap[i].npredecessors_counter;
+        new_taskdata->tdg->RecordMap[i].static_id = 0;
+        new_taskdata->tdg->RecordMap[i].task = nullptr;
+        new_taskdata->tdg->RecordMap[i].successors = successorsList;
+        new_taskdata->tdg->RecordMap[i].nsuccessors = 0;
+        new_taskdata->tdg->RecordMap[i].npredecessors = 0;
+        new_taskdata->tdg->RecordMap[i].successors_size = SuccessorsSize;
+        new_taskdata->tdg->RecordMap[i].static_thread = -1;
+        void * pCounters = (void *) &new_taskdata->tdg->RecordMap[i].npredecessors_counter;
         new (pCounters) std::atomic<kmp_int32>(0);
       }
     }
 
-    if (RecordMap[new_taskdata->td_task_id].task == nullptr) {
-      TaskIdentMap[new_taskdata->td_task_id].td_ident =
+    if (new_taskdata->tdg->RecordMap[new_taskdata->td_task_id].task == nullptr) {
+      new_taskdata->tdg->taskIdent[new_taskdata->td_task_id].td_ident =
           new_taskdata->td_ident->psource;
-      RecordMap[new_taskdata->td_task_id].static_id = new_taskdata->td_task_id;
-      RecordMap[new_taskdata->td_task_id].task = new_task;
-      RecordMap[new_taskdata->td_task_id].parent_task = new_taskdata->td_parent;
+      new_taskdata->tdg->RecordMap[new_taskdata->td_task_id].static_id = new_taskdata->td_task_id;
+      new_taskdata->tdg->RecordMap[new_taskdata->td_task_id].task = new_task;
+      new_taskdata->tdg->RecordMap[new_taskdata->td_task_id].parent_task = new_taskdata->td_parent;
+      new_taskdata->tdg->numTasks++;
     }
   }
-  if (fill_data) {
-    RecordMap[new_taskdata->td_task_id].task = new_task;
-    kmp_record_info *TaskInfo = &(RecordMap[new_taskdata->td_task_id]);
+  if (new_taskdata->is_taskgraph && new_taskdata->tdg->tdgStatus == TDG_FILL_DATA) {
+    new_taskdata->tdg->RecordMap[new_taskdata->td_task_id].task = new_task;
+    kmp_node_info *TaskInfo = &(new_taskdata->tdg->RecordMap[new_taskdata->td_task_id]);
 
     TaskInfo->task = new_task;
     TaskInfo->parent_task = new_taskdata->td_parent;
+
+    //Reduce task counters, since task is not executed
+    KMP_ATOMIC_DEC(&new_taskdata->td_parent->td_incomplete_child_tasks);
+    if (new_taskdata->td_parent->td_taskgroup)
+      KMP_ATOMIC_DEC(&new_taskdata->td_parent->td_taskgroup->count);
+    // Only need to keep track of allocated child tasks for explicit tasks since
+    // implicit not deallocated
+    if (new_taskdata->td_parent->td_flags.tasktype == TASK_EXPLICIT) {
+      KMP_ATOMIC_DEC(&new_taskdata->td_parent->td_allocated_child_tasks);
+    }
     /*
     if (prealloc) {
       size_t sizeOfPrivates =
@@ -2315,9 +2392,8 @@ kmp_int32 __kmp_omp_task(kmp_int32 gtid, kmp_task_t *new_task,
     }*/
     return TASK_CURRENT_NOT_QUEUED;
   }
-  
-  if (new_taskdata->is_taskgraph && staticSchedule) {
-    int threadID = RecordMap[new_taskdata->td_task_id].static_thread;
+  if (new_taskdata->is_taskgraph && StaticSchedule) {
+    int threadID = new_taskdata->tdg->RecordMap[new_taskdata->td_task_id].static_thread;
     if (threadID != -1) {
       if (!disable_stealing)
         disable_stealing = true;
@@ -2335,7 +2411,7 @@ kmp_int32 __kmp_omp_task(kmp_int32 gtid, kmp_task_t *new_task,
       gtid = newGtid;
     }
     else{
-      RecordMap[new_taskdata->td_task_id].static_thread = __kmp_tid_from_gtid(gtid);
+      new_taskdata->tdg->RecordMap[new_taskdata->td_task_id].static_thread = __kmp_tid_from_gtid(gtid);
     }
 
     // Wait for the target thread to spawn

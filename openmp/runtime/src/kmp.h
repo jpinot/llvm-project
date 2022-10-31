@@ -2366,7 +2366,7 @@ typedef struct kmp_base_depnode {
   kmp_lock_t *mtx_locks[MAX_MTX_DEPS]; /* lock mutexinoutset dependent tasks */
   kmp_int32 mtx_num_locks; /* number of locks in mtx_locks array */
   kmp_lock_t lock; /* guards shared fields: task, successors */
-  kmp_uint32 part_id; /* used by taskgraph */
+  kmp_uint32 part_id; /* used by untied */
 #if KMP_SUPPORT_GRAPH_OUTPUT
   kmp_uint32 id;
 #endif
@@ -2468,47 +2468,70 @@ typedef struct kmp_tasking_flags { /* Total struct must be exactly 32 bits */
 } kmp_tasking_flags_t;
 
 #if LIBOMP_TASKGRAPH
-enum tdg_type { DYNAMIC_TDG, STATIC_TDG };
+//Represents the two types of TDGs
+enum kmp_tdg_type { DYNAMIC_TDG, STATIC_TDG };
+//Represents the possible status of the TDG
+enum kmp_tdg_status { TDG_NONE, TDG_RECORDING, TDG_FILL_DATA, TDG_PREALLOC};
 
-struct kmp_record_info {
-  kmp_int32 static_id;
-  kmp_task_t *task;
-  kmp_int32 *successors;
-  kmp_int32 nsuccessors;
-  std::atomic<kmp_int32> npredecessors_counter;
-  kmp_int32 npredecessors;
-  kmp_int32 successors_size;
-  kmp_int32 static_thread;
+//Represents a TDG node
+struct kmp_node_info {
+  kmp_int32 static_id; //Unique id of the node
+  kmp_task_t *task; //Pointer to the actual task
+  kmp_int32 *successors; //Array of the succesors ids
+  kmp_int32 nsuccessors; //Number of succesors of the node
+  std::atomic<kmp_int32> npredecessors_counter; //Number of predessors on the fly
+  kmp_int32 npredecessors; //Total number of predecessors
+  kmp_int32 successors_size; //Number of allocated succesors ids
+  kmp_int32 static_thread; //Thread assigned for the node, in case static mapping is enabled
 
   // Temporal members for preallocation
-  kmp_int32 pragma_id;
-  void *private_data;
-  void *shared_data;
-  kmp_taskdata_t *parent_task;
-  kmp_record_info *next_waiting_tdg;
+  kmp_int32 pragma_id; //Unique id of the pragma
+  void *private_data; //Private data of the task
+  void *shared_data; //Shared data of the task
+  kmp_taskdata_t *parent_task; //Parent implicit task
+  kmp_node_info *next_waiting_tdg; //Next tdg waiting in the queue
 };
 
+//Initial number of allocated nodes while recording
 #define INIT_MAPSIZE 50
+
+//Maximum number of TDGs
 #define NUM_TDG_LIMIT 50
 
-struct ident_task {
+struct kmp_ident_task {
   const char *td_ident;
 };
 
-struct dynamic_tdg_info {
-  const char *loc;
-  kmp_int32 mapSize;
-  kmp_int32 numRoots;
-  kmp_int32 *rootTasks;
-  kmp_record_info *RecordMap;
-  ident_task *taskIdent;
-};
-
-struct ident_color {
+struct kmp_ident_color {
   const char *td_ident;
   const char *color;
 };
 
+//Structure that contains a TDG
+struct kmp_tdg_info {
+  const char *loc; //Location of the pragma
+  kmp_uint64 tdgId; //Unique idenfifier of the TDG
+  kmp_int32 mapSize; //Number of allocated TDG nodes
+  kmp_int32 numRoots; //Number of roots tasks int the TDG
+  kmp_int32 *rootTasks; //Array of tasks identifiers that are roots
+  kmp_node_info *RecordMap; //Array of TDG nodes
+  kmp_ident_task *taskIdent; //Array of locations of each TDG node
+  kmp_ident_color *colorMap; //Array of colors for the dot output
+  kmp_int32 colorIndex; //Index of colors used
+  kmp_int32 colorMapSize; //Size of colors array
+  kmp_tdg_status tdgStatus; //Status of the TDG (recording, filling data...)
+  kmp_int32 numTasks; //Number of TDG nodes
+  std::atomic<kmp_int32> remainingTasks; //Used to know if the TDG is finished
+};
+
+//Structure to associate a task gen ID for each thread. This is needed to allow several threads to record different TDGs at the same time
+struct kmp_tdg_creation_info {
+  kmp_int32 currentTaskGenID;
+  kmp_int32 gtid;
+  kmp_tdg_info *tdg;
+};
+
+//Structures used for the preallocation and lazy task creation mechanisms
 struct kmp_space_indexer_node {
   kmp_task_t *task;
   struct kmp_space_indexer_node *next;
@@ -2523,8 +2546,8 @@ struct kmp_space_indexer {
 };
 
 struct kmp_waiting_tdg {
-  struct kmp_record_info *head;
-  struct kmp_record_info *tail;
+  struct kmp_node_info *head;
+  struct kmp_node_info *tail;
   int size;
   kmp_futex_lock_t waiting_tdg_lock;
 };
@@ -2590,6 +2613,8 @@ struct kmp_taskdata { /* aligned during dynamic allocation       */
   struct kmp_space_indexer_node *indexer_node;
   //Used for replicas
   int groupID = 0;
+  //Used to associate task with a tdg
+  kmp_tdg_info *tdg;
 #endif
 }; // struct kmp_taskdata
 
@@ -4009,17 +4034,18 @@ KMP_EXPORT kmp_int32 __kmpc_omp_task_parts(ident_t *loc_ref, kmp_int32 gtid,
                                            kmp_task_t *new_task);
 KMP_EXPORT kmp_int32 __kmpc_omp_taskwait(ident_t *loc_ref, kmp_int32 gtid);
 #if LIBOMP_TASKGRAPH
-KMP_EXPORT void __kmpc_set_tdg(struct kmp_record_info *tdg, kmp_int32 ntasks,
+KMP_EXPORT void __kmpc_set_tdg(struct kmp_node_info *tdg,  kmp_int32 gtid, kmp_uint64 tdg_id,  kmp_int32 ntasks,
                                kmp_int32 *roots, kmp_int32 nroots);
 KMP_EXPORT void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid,
-                                 void (*entry)(void *), void *args,
-                                 kmp_int32 tdg_type);
+                                 kmp_uint64 tdg_id, void (*entry)(void *),
+                                 void *args, kmp_int32 tdg_type);
 KMP_EXPORT void __kmpc_prealloc_tasks(
     kmp_task_alloc_info *task_static_data, char *preallocated_tasks,
     kmp_space_indexer_node *preallocated_nodes, kmp_uint32 n_task_constructs,
-    kmp_uint32 max_concurrent_tasks, kmp_uint32 task_size);
-KMP_EXPORT void __kmpc_set_task_static_id(kmp_task_t *task, int staticID);
+    kmp_uint32 max_concurrent_tasks, kmp_uint32 task_size,  kmp_uint64 tdg_id);
+KMP_EXPORT void __kmpc_set_task_static_id(kmp_int32 gtid, kmp_task_t *task);
 KMP_EXPORT kmp_int32 __kmpc_getNewGroupID(ident_t *loc_ref);
+KMP_EXPORT kmp_int32 __kmpc_getFakeAddrGroupID(ident_t *loc_ref);
 KMP_EXPORT kmp_int32 __kmpc_getNewTaskID(ident_t *loc_ref);
 KMP_EXPORT void __kmpc_prepare_taskwait(kmp_task_t *task, void *data, kmp_int32 groupID, kmp_int32 gtid, bool spatialConstraint);
 KMP_EXPORT void __kmpc_replication_callback(ident_t *loc_ref, void *callbackFunction, kmp_int32 groupID, kmp_int32 threadID);

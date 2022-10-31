@@ -504,11 +504,6 @@ int main(int Argc, const char **Argv) {
     Args.push_back("-O2");
   }
 
-  //Add -g flag to force generate debug names, for dynamic tdgs
-  if(isDynamicTdg || isStaticTdg){
-    Args.push_back("-g");
-  }
-
   //Remove -o and fopenmp-target flag when using static tdgs
   SmallVector<const char *, 256>  ArgsCopy = Args;
   SmallVector<const char *, 256>  ArgsCopyOffloading = Args;
@@ -631,12 +626,16 @@ int main(int Argc, const char **Argv) {
           }
         }
       }
+      FILE *file;
       Args.push_back("tdg.cpp");
       Args.push_back("--driver-mode=g++");
 
-      std::unique_ptr<Compilation> C_tdg(TheDriver.BuildCompilation(Args));
-      SmallVector<std::pair<int, const Command *>, 4> FailingCommands;
-      TheDriver.ExecuteCompilation(*C_tdg, FailingCommands);
+      //Only recompile if the tdg file exists
+      if((file = fopen("tdg.cpp","r"))!=NULL){
+        std::unique_ptr<Compilation> C_tdg(TheDriver.BuildCompilation(Args));
+        SmallVector<std::pair<int, const Command *>, 4> FailingCommands;
+        TheDriver.ExecuteCompilation(*C_tdg, FailingCommands);
+      }
     }
   }
 

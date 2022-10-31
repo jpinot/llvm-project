@@ -4983,16 +4983,22 @@ void CodeGenFunction::EmitOMPTaskDirective(const OMPTaskDirective &S) {
   OMPTaskDataTy ArtificialTaskData;
   ArtificialTaskData.IsLastReplicaNode = true;
 
+  llvm::Value *FirstFakeAddr = nullptr;
   if (NumReplicas) {
+
+    llvm::Value *FakeAddr = CGM.getOpenMPRuntime().emitGetFakeAddrGroupID(*this, S.getBeginLoc());
+    FirstFakeAddr = FakeAddr;
     // Add fake dummy out dep
     OMPTaskDataTy::DependData &DD =
         Data.Dependences.emplace_back(OMPC_DEPEND_out, nullptr);
     DD.DepExprs.push_back(DummyVars[0]);
+    DD.FakeAddrReplication = FakeAddr;
 
     // Add fake in dependency on last replica
     OMPTaskDataTy::DependData &DDArt =
         ArtificialTaskData.Dependences.emplace_back(OMPC_DEPEND_in, nullptr);
     DDArt.DepExprs.push_back(DummyVars[0]);
+    DDArt.FakeAddrReplication = FakeAddr;
   }
   // Check if we should emit tied or untied task.
   Data.Tied = !S.getSingleClause<OMPUntiedClause>();
@@ -5104,20 +5110,25 @@ void CodeGenFunction::EmitOMPTaskDirective(const OMPTaskDirective &S) {
 
       int dummyNumber = i + 1;
 
+      llvm::Value *FakeAddr = nullptr;
       //When temporal constraint is activated all the replicas use the same dummy var as an out dependency, in order to sequence the execution
       if (Constraint == OMPC_REDUNDANCY_CONSTRAINT_temporal || Constraint == OMPC_REDUNDANCY_CONSTRAINT_spatial_temporal)
-        dummyNumber = 0;
+        FakeAddr = FirstFakeAddr;
+      else
+        FakeAddr = CGM.getOpenMPRuntime().emitGetFakeAddrGroupID(*this, S.getBeginLoc());
+
       // Add fake out dependency on replicas
       OMPTaskDataTy::DependData &DD =
           NewData.Dependences.emplace_back(OMPC_DEPEND_out, nullptr);
       DD.DepExprs.push_back(DummyVars[dummyNumber]);
+      DD.FakeAddrReplication = FakeAddr;
 
       // Add fake in dependency on last replica. If they are sequential it is not needed.
-      if(dummyNumber!=0){
-        OMPTaskDataTy::DependData &DDArt =
+      OMPTaskDataTy::DependData &DDArt =
             ArtificialTaskData.Dependences.emplace_back(OMPC_DEPEND_in, nullptr);
-        DDArt.DepExprs.push_back(DummyVars[dummyNumber]);
-      }
+      DDArt.DepExprs.push_back(DummyVars[dummyNumber]);
+      DDArt.FakeAddrReplication = FakeAddr;
+
 
       EmitOMPTaskBasedDirective(S, OMPD_task, BodyGen, TaskGen, NewData);
     }

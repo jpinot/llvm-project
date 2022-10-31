@@ -70,9 +70,9 @@ public:
   void traverse_node(SmallVectorImpl<uint64_t> &edges_to_check, int node,
                      int master, int nesting_level, std::vector<bool> &Visited);
   void print_tdg();
-  void print_tdg_to_dot(StringRef ModuleName);
+  void print_tdg_to_dot(StringRef ModuleName,  int ntdgs);
   void generate_analysis_tdg_file(StringRef ModuleName);
-  void generate_runtime_tdg_file(StringRef ModuleName);
+  void generate_runtime_tdg_file(StringRef ModuleName, Function &F, int ntdgs);
   void obtainTaskIdent(TaskInfo &TaskFound, CallInst &TaskCall);
   std::string get_c_struct_from_types(SmallVectorImpl<Type *> &types,
                                       int struct_id, bool is_private);
@@ -80,10 +80,10 @@ public:
                               std::string LongestSharedName);
   void erase_transitive_edges();
   bool checkDependency(TaskDependInfo &Source, TaskDependInfo &Dest);
-  void findOpenMPTasks(Function &F, DominatorTree &DT);
+  void findOpenMPTasks(Function &F, DominatorTree &DT, int ntdgs);
   void obtainTaskInfo(TaskInfo &TaskFound, CallInst &TaskCall,
                       DominatorTree &DT);
-  int findPragmaId(CallInst &TaskCallInst, TaskInfo &TaskFound, Function &F);
+  int findPragmaId(CallInst &TaskCallInst, TaskInfo &TaskFound, Function &F, DominatorTree &DT);
   void setPrealloc() { Prealloc = true; }
   bool invalidate(Module &, const PreservedAnalyses &,
                   ModuleAnalysisManager::Invalidator &) {

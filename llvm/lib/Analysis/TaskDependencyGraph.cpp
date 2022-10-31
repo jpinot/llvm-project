@@ -26,6 +26,7 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/FileSystem.h"
 
 using namespace llvm;
 const StringRef Color_names[] = {
@@ -104,18 +105,14 @@ void TaskDependencyGraphData::obtainTaskInfo(TaskInfo &TaskFound,
         // Check that the next task call is the one we are looking for
         CallInst *SelectedTaskCall = nullptr;
         Instruction *NextIns = BaseUse->getNextNode();
-        while (!SelectedTaskCall) {
+        while (!SelectedTaskCall  || SelectedTaskCall->getCalledFunction()->getName()!="__kmpc_omp_task_with_deps") {
           SelectedTaskCall = dyn_cast<CallInst>(NextIns);
           NextIns = NextIns->getNextNode();
         }
-        if (SelectedTaskCall->getCalledFunction() &&
-            SelectedTaskCall->getCalledFunction()->getName() ==
-                "__kmpc_omp_task_with_deps") {
-          if (SelectedTaskCall != TaskCall) {
+        if (SelectedTaskCall != TaskCall){
             continue;
-          }
         }
-
+        
         if (StoreInst *BaseStore = dyn_cast<StoreInst>(U)) {
           if (PtrToIntOperator *BasePtrToInt =
                   dyn_cast<PtrToIntOperator>(BaseStore->getValueOperand())) {
@@ -288,13 +285,15 @@ void TaskDependencyGraphData::print_tdg() {
   }
 }
 
-void TaskDependencyGraphData::print_tdg_to_dot(StringRef ModuleName) {
+void TaskDependencyGraphData::print_tdg_to_dot(StringRef ModuleName, int ntdgs) {
 
   // std::string fileName = ModuleName.str();
   // size_t lastindex = fileName.find_last_of(".");
   // std::string rawFileName = fileName.substr(0, lastindex);
   std::error_code EC;
-  llvm::raw_fd_ostream Tdgfile("tdg.dot", EC);
+  char FileName[10];
+  sprintf(FileName, "tdg_%d.dot", ntdgs);
+  llvm::raw_fd_ostream Tdgfile(FileName, EC);
 
   if (Tdgfile.has_error()) {
     llvm_unreachable("Error Opening TDG file \n");
@@ -303,7 +302,7 @@ void TaskDependencyGraphData::print_tdg_to_dot(StringRef ModuleName) {
   Tdgfile << "digraph TDG {\n";
   Tdgfile << "   compound=true\n";
   Tdgfile << "   subgraph cluster_0 {\n";
-  Tdgfile << "      label=TDG_0\n";
+  Tdgfile << "      label=TDG_"<< ntdgs <<"\n";
 
   for (auto &Task : FunctionTasks) {
 
@@ -530,7 +529,9 @@ TaskDependencyGraphData::get_task_layout(std::string LongestPrivateName,
             "  kmp_event_t td_allow_completion_event;\n"
             "  ompt_task_info_t ompt_task_info; \n"
             "  int is_taskgraph = 0;\n"
-            "  void *indexer_node;\n";
+            "  void *indexer_node;\n"
+            "  int groupID = 0;\n"
+            "  void *tdg;\n";
 
   // Define shared data
   Result += "  struct " + LongestSharedName + " shared_data;\n";
@@ -601,14 +602,18 @@ std::string TaskDependencyGraphData::get_c_struct_from_types(
   return Result;
 }
 
-void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName) {
+void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName, Function &F, int ntdgs) {
   /*
   std::string fileName = ModuleName.str();
   size_t lastindex = fileName.find_last_of(".");
   std::string rawFileName = fileName.substr(0, lastindex);
   */
   std::error_code EC;
-  llvm::raw_fd_ostream Tdgfile("tdg.cpp", EC);
+  sys::fs::OpenFlags flags = sys::fs::OF_None;
+  if(ntdgs>1)
+    flags=  sys::fs::OF_Append;
+
+  llvm::raw_fd_ostream Tdgfile("tdg.cpp", EC, flags);
 
   if (Tdgfile.has_error()) {
     llvm_unreachable("Error Opening TDG file \n");
@@ -625,78 +630,95 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName) {
   }
 
   int offout = 0;
-  Tdgfile << "#include <stddef.h>\n";
-  Tdgfile << "#include <atomic>\n";
-  if (Prealloc) {
-    Tdgfile << "#include <stdint.h>\n";
-    Tdgfile << "#include <stdio.h>\n";
-  }
 
-  Tdgfile << "struct kmp_task_t;\nstruct kmp_record_info\n{\n";
-  Tdgfile << "  int static_id;\n  struct kmp_task_t *task;\n  int "
-             "* succesors;\n  int nsuccessors;\n  "
-             "std::atomic<int> npredecessors_counter;\n  int npredecessors;\n  int "
-             "successors_size;\n  int static_thread;\n  int pragma_id;\n  void "
-             "* private_data;\n  "
-             "void * shared_data;\n  void * parent_task;\n  struct "
-             "kmp_record_info * next_waiting_tdg;\n};\n";
-
-  Tdgfile
-      << "extern  \"C\" void __kmpc_set_tdg(struct kmp_record_info *tdg, int "
-         "ntasks, int *roots, int nroots);\n";
-  if (Prealloc) {
-    for (int i = 0; i < (int)TasksAllocInfo.size(); i++) {
-      Tdgfile << "extern  \"C\" int " << TasksAllocInfo[i].entryPoint->getName()
-              << "(int, void *);\n";
+  if (ntdgs == 1) {
+    Tdgfile << "#include <stddef.h>\n";
+    Tdgfile << "#include <atomic>\n";
+    if (Prealloc) {
+      Tdgfile << "#include <stdint.h>\n";
+      Tdgfile << "#include <stdio.h>\n";
     }
-    Tdgfile << "struct kmp_task_alloc_info\n{\n";
-    Tdgfile << "  int flags;\n  int sizeOfTask;\n  int sizeOfShareds;\n  void* "
-               "taskEntry;\n  int *sharedDataPositions;\n  int *firstPrivateDataPositions;\n  int *firstPrivateDataOffsets;\n  int *firstPrivateDataSizes;\n  int numFirstPrivates;\n};\n";
-    Tdgfile << "extern  \"C\"  void  __kmpc_prealloc_tasks(struct "
-               "kmp_task_alloc_info *task_static_data, char "
-               "*preallocated_tasks, void *preallocated_nodes, unsigned int "
-               "n_task_constructs,unsigned int "
-               "max_concurrent_tasks, unsigned int task_size);\n";
-    int longest_pragma_size = 0;
-    int longest_pragma;
-    for (int i = 0; i < (int)TasksAllocInfo.size(); i++) {
-      int pragma_size =
-          TasksAllocInfo[i].sizeOfTask + TasksAllocInfo[i].sizeOfShareds;
-      if (pragma_size > longest_pragma_size) {
-        longest_pragma_size = pragma_size;
-        longest_pragma = i;
+
+    Tdgfile << "struct kmp_task_t;\nstruct kmp_node_info\n{\n";
+    Tdgfile
+        << "  int static_id;\n  struct kmp_task_t *task;\n  int "
+           "* succesors;\n  int nsuccessors;\n  "
+           "std::atomic<int> npredecessors_counter;\n  int npredecessors;\n  "
+           "int "
+           "successors_size;\n  int static_thread;\n  int pragma_id;\n  void "
+           "* private_data;\n  "
+           "void * shared_data;\n  void * parent_task;\n  struct "
+           "kmp_node_info * next_waiting_tdg;\n};\n";
+
+    Tdgfile << "extern  \"C\" void __kmpc_set_tdg(struct kmp_node_info *tdg, "
+               "int gtid, unsigned long long tdg_id, int "
+               "ntasks, int *roots, int nroots);\n";
+    if (Prealloc) {
+      for (int i = 0; i < (int)TasksAllocInfo.size(); i++) {
+        Tdgfile << "extern  \"C\" int "
+                << TasksAllocInfo[i].entryPoint->getName()
+                << "(int, void *);\n";
       }
-      Tdgfile << get_c_struct_from_types(TasksAllocInfo[i].privatesType,
-                                         FunctionTasks[i].id, true);
-      Tdgfile << get_c_struct_from_types(TasksAllocInfo[i].sharedsType,
-                                         FunctionTasks[i].id, false);
-    }
-    for (int i = 0; i < (int)FunctionTasks.size(); i++) {
-      Tdgfile << "struct private_data_" << FunctionTasks[i].pragmaId << " task_"
-              << FunctionTasks[i].id << "_private_data={";
-      for (int j = 0; j < (int)FunctionTasks[i].FirstPrivateData.size(); j++) {
-        if(TasksAllocInfo[FunctionTasks[i].pragmaId].privatesType[j]->isPointerTy()){
-          Tdgfile << "(void *) ";
+      Tdgfile << "struct kmp_task_alloc_info\n{\n";
+      Tdgfile
+          << "  int flags;\n  int sizeOfTask;\n  int sizeOfShareds;\n  void* "
+             "taskEntry;\n  int *sharedDataPositions;\n  int "
+             "*firstPrivateDataPositions;\n  int *firstPrivateDataOffsets;\n  "
+             "int *firstPrivateDataSizes;\n  int numFirstPrivates;\n};\n";
+      Tdgfile << "extern  \"C\"  void  __kmpc_prealloc_tasks(struct "
+                 "kmp_task_alloc_info *task_static_data, char "
+                 "*preallocated_tasks, void *preallocated_nodes, unsigned int "
+                 "n_task_constructs,unsigned int "
+                 "max_concurrent_tasks, unsigned int task_size, unsigned long long tdg_id);\n";
+      int longest_pragma_size = 0;
+      int longest_pragma;
+      for (int i = 0; i < (int)TasksAllocInfo.size(); i++) {
+        int pragma_size =
+            TasksAllocInfo[i].sizeOfTask + TasksAllocInfo[i].sizeOfShareds;
+        if (pragma_size > longest_pragma_size) {
+          longest_pragma_size = pragma_size;
+          longest_pragma = i;
         }
-        Tdgfile << FunctionTasks[i].FirstPrivateData[j];
-        if (j != (int)FunctionTasks[i].FirstPrivateData.size() - 1)
-          Tdgfile << ", ";
-        else
-          Tdgfile << "};\n";
+        Tdgfile << get_c_struct_from_types(TasksAllocInfo[i].privatesType,
+                                           FunctionTasks[i].id, true);
+        Tdgfile << get_c_struct_from_types(TasksAllocInfo[i].sharedsType,
+                                           FunctionTasks[i].id, false);
       }
-      if(!FunctionTasks[i].FirstPrivateData.size())
-         Tdgfile << "};\n";
-      Tdgfile << "struct shared_data_" << FunctionTasks[i].pragmaId << " task_"
-              << FunctionTasks[i].id << "_shared_data;\n";
+      for (int i = 0; i < (int)FunctionTasks.size(); i++) {
+        Tdgfile << "struct private_data_" << FunctionTasks[i].pragmaId
+                << " task_" << FunctionTasks[i].id << "_private_data={";
+        for (int j = 0; j < (int)FunctionTasks[i].FirstPrivateData.size();
+             j++) {
+          if (TasksAllocInfo[FunctionTasks[i].pragmaId]
+                  .privatesType[j]
+                  ->isPointerTy()) {
+            Tdgfile << "(void *) ";
+          }
+          Tdgfile << FunctionTasks[i].FirstPrivateData[j];
+          if (j != (int)FunctionTasks[i].FirstPrivateData.size() - 1)
+            Tdgfile << ", ";
+          else
+            Tdgfile << "};\n";
+        }
+        if (!FunctionTasks[i].FirstPrivateData.size())
+          Tdgfile << "};\n";
+        Tdgfile << "struct shared_data_" << FunctionTasks[i].pragmaId
+                << " task_" << FunctionTasks[i].id << "_shared_data;\n";
+      }
+      Tdgfile << get_task_layout(
+          "private_data_" + std::to_string(longest_pragma),
+          "shared_data_" + std::to_string(longest_pragma));
+      Tdgfile << "struct kmp_task preallocated_tasks[" << NumPreallocs
+              << "];\n";
+      Tdgfile << "struct kmp_space_indexer_node preallocated_nodes["
+              << NumPreallocs << "];\n\n";
     }
-    Tdgfile << get_task_layout("private_data_" + std::to_string(longest_pragma),
-                               "shared_data_" + std::to_string(longest_pragma));
-    Tdgfile << "struct kmp_task preallocated_tasks[" << NumPreallocs << "];\n";
-    Tdgfile << "struct kmp_space_indexer_node preallocated_nodes["
-            << NumPreallocs << "];\n\n";
+  }
+  else{
+     Tdgfile << "\n";
   }
 
-  Tdgfile << "int kmp_tdg_outs_0[" << OutputList.size() << "] = {";
+  Tdgfile << "int kmp_tdg_outs_" << ntdgs << "[" << OutputList.size() << "] = {";
   if (OutputList.size()) {
     for (int i = 0; i < (int)OutputList.size(); i++) {
       Tdgfile << OutputList[i];
@@ -708,11 +730,11 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName) {
   } else {
     Tdgfile << "};\n";
   }
-  Tdgfile << "struct kmp_record_info kmp_tdg_0[" << FunctionTasks.size()
+  Tdgfile << "struct kmp_node_info kmp_tdg_" << ntdgs << "[" << FunctionTasks.size()
           << "] = {";
   for (int i = 0; i < (int)FunctionTasks.size(); i++) {
     Tdgfile << "{ .static_id = " << FunctionTasks[i].id
-            << ", .task = NULL, .succesors = &kmp_tdg_outs_0[" << offout << "]"
+            << ", .task = NULL, .succesors = &kmp_tdg_outs_" << ntdgs << "[" << offout << "]"
             << ", .nsuccessors = " << FunctionTasks[i].successors.size()
             << ", .npredecessors_counter = {"
             << FunctionTasks[i].predecessors.size()
@@ -739,7 +761,7 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName) {
     else
       Tdgfile << "};\n";
   }
-  Tdgfile << "int kmp_tdg_roots[" << TdgRoots.size() << "] = {";
+  Tdgfile << "int kmp_tdg_roots_" << ntdgs << "[" << TdgRoots.size() << "] = {";
   for (int i = 0; i < (int)TdgRoots.size(); i++) {
     Tdgfile << TdgRoots[i];
     if (i != (int)TdgRoots.size() - 1)
@@ -830,17 +852,18 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName) {
 
     }
   }
-
-  Tdgfile << "extern \"C\" void kmp_set_tdg(int num_preallocs)\n{\n";
+  std::pair<StringRef, StringRef> FNames = F.getName().split(".");
+  Tdgfile << "extern \"C\" void kmp_set_tdg_"<< FNames.first << "_" << FNames.second << "(int num_preallocs, int gtid)\n{\n";
+  uint64_t FGuid = F.getGUID();
   if (Prealloc) {
     // Tdgfile << "printf(\" es: %d \", sizeof(struct kmp_task));\n";
     Tdgfile << "  __kmpc_prealloc_tasks(task_static_data, (char *) preallocated_tasks, "
                "preallocated_nodes, "
             << FunctionTasks.size()
-            << ", num_preallocs, sizeof(struct kmp_task));\n";
+            << ", num_preallocs, sizeof(struct kmp_task)," << FGuid << "U);\n";
   }
-  Tdgfile << "  __kmpc_set_tdg(kmp_tdg_0, " << FunctionTasks.size()
-          << ", kmp_tdg_roots, " << TdgRoots.size() << ");\n}";
+  Tdgfile << "  __kmpc_set_tdg(kmp_tdg_" << ntdgs << ", gtid, " << FGuid  << "U , " << FunctionTasks.size()
+          << ", kmp_tdg_roots_" << ntdgs <<", " << TdgRoots.size() << ");\n}";
 
   Tdgfile.close();
 }
@@ -881,7 +904,7 @@ int getTypeSizeInBytes(Type *this_type){
 }
 
 int TaskDependencyGraphData::findPragmaId(CallInst &TaskCallInst,
-                                          TaskInfo &TaskFound, Function &F) {
+                                          TaskInfo &TaskFound, Function &F, DominatorTree &DT) {
 
   // Get task alloc from the task call, operand 2
   CallInst *TaskAlloc = dyn_cast<CallInst>(TaskCallInst.getArgOperand(2));
@@ -1028,8 +1051,7 @@ int TaskDependencyGraphData::findPragmaId(CallInst &TaskCallInst,
   // Store position of shared data
   SmallVector<int, 2> FinalSharedPositions;
   SmallVector<int, 2> FinalFirstPrivatePositions;
-
-  //TODO: Falla cuando el taskgraph y el task alloc no estan en la misma funcion
+  SmallVector<bool, 2> DoubleLoadPositions;
   Value *FuncArg = F.getArg(0);
   std::vector<Value *> ArgPositions(FuncArg->getNumUses());
   for (Value *ArgUser : FuncArg->users()) {
@@ -1037,6 +1059,12 @@ int TaskDependencyGraphData::findPragmaId(CallInst &TaskCallInst,
       Value *PositionValue = GetArg->getOperand(2);
       int position = dyn_cast<ConstantInt>(PositionValue)->getSExtValue();
       if (LoadInst *ArgLoad = dyn_cast<LoadInst>(GetArg->getNextNode())) {
+        LoadInst *OtherLoad = dyn_cast<LoadInst>(ArgLoad->getNextNode());
+        while(OtherLoad && OtherLoad->getPointerOperand() == ArgLoad){
+          OtherLoad = dyn_cast<LoadInst>(ArgLoad->getNextNode());
+          ArgLoad = OtherLoad;
+          DoubleLoadPositions[position] =true;
+        }
         ArgPositions[position] = ArgLoad;
       } else {
         Start = TaskCallInst.getPrevNode();
@@ -1056,17 +1084,22 @@ int TaskDependencyGraphData::findPragmaId(CallInst &TaskCallInst,
       }
     }
   }
+
   Start = dyn_cast<Instruction>(TaskAlloc);
   End = dyn_cast<Instruction>(&TaskCallInst);
 
   while (Start != End) {
     for (int i = 0; i < (int)ArgPositions.size(); i++){
+      bool doubleLoad = DoubleLoadPositions[i];
       if(ArgPositions[i] ==nullptr) continue;
       for (Value *ArgUser : ArgPositions[i]->users()) {
         if (Start == dyn_cast<Instruction>(ArgUser)) {
-          if(dyn_cast<StoreInst>(ArgUser))
+
+          if(dyn_cast<StoreInst>(ArgUser) && !doubleLoad)
             FinalSharedPositions.push_back(i);
-          else if(dyn_cast<StoreInst>(dyn_cast<Instruction>(ArgUser)->getNextNode()))
+          else if (dyn_cast<StoreInst>(ArgUser) && doubleLoad)
+            FinalFirstPrivatePositions.push_back(i);
+          else if((dyn_cast<StoreInst>(dyn_cast<Instruction>(ArgUser)->getNextNode())))
             FinalFirstPrivatePositions.push_back(i);
         }
       }
@@ -1089,7 +1122,7 @@ int TaskDependencyGraphData::findPragmaId(CallInst &TaskCallInst,
   return i;
 }
 
-void TaskDependencyGraphData::findOpenMPTasks(Function &F, DominatorTree &DT) {
+void TaskDependencyGraphData::findOpenMPTasks(Function &F, DominatorTree &DT, int ntdgs) {
 
   // Iterate over the BB
   SmallVector<BasicBlock *, 8> Worklist;
@@ -1132,7 +1165,7 @@ void TaskDependencyGraphData::findOpenMPTasks(Function &F, DominatorTree &DT) {
           TaskInfo TaskFound;
           TaskFound.id = NumTasks;
           if(Prealloc)
-            TaskFound.pragmaId = findPragmaId(*II, TaskFound, F);
+            TaskFound.pragmaId = findPragmaId(*II, TaskFound, F, DT);
           else
             TaskFound.pragmaId = -1;
           ++NumTasks;
@@ -1150,7 +1183,7 @@ void TaskDependencyGraphData::findOpenMPTasks(Function &F, DominatorTree &DT) {
           TaskInfo TaskFound;
           TaskFound.id = NumTasks;
           if (Prealloc)
-            TaskFound.pragmaId = findPragmaId(*II, TaskFound, F);
+            TaskFound.pragmaId = findPragmaId(*II, TaskFound, F, DT);
           else
             TaskFound.pragmaId = -1;
           ++NumTasks;
@@ -1197,9 +1230,9 @@ void TaskDependencyGraphData::findOpenMPTasks(Function &F, DominatorTree &DT) {
 
   // print_tdg();
   if (FunctionTasks.size()) {
-    print_tdg_to_dot(F.getParent()->getSourceFileName());
+    print_tdg_to_dot(F.getParent()->getSourceFileName(), ntdgs);
     generate_analysis_tdg_file(F.getParent()->getSourceFileName());
-    generate_runtime_tdg_file(F.getParent()->getSourceFileName());
+    generate_runtime_tdg_file(F.getParent()->getSourceFileName(), F, ntdgs);
   }
   TasksAllocInfo.clear();
   FunctionTasks.clear();
@@ -1208,15 +1241,17 @@ void TaskDependencyGraphData::findOpenMPTasks(Function &F, DominatorTree &DT) {
 bool TaskDependencyGraphPass::runOnModule(Module &M) {
   TaskDependencyGraphData TDG;
 
+  int ntdgs=0;
   for (Function &F : M) {
     if (F.isDeclaration() || F.empty())
       continue;
     // Only check functions with tasks
     auto &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
     if (F.hasFnAttribute("llvm.omp.taskgraph.static")) {
+      ntdgs++;
       if (F.hasFnAttribute("llvm.omp.taskgraph.prealloc"))
         TDG.setPrealloc();
-      TDG.findOpenMPTasks(F, DT);
+      TDG.findOpenMPTasks(F, DT, ntdgs);
     }
   }
   return false;
@@ -1254,15 +1289,17 @@ TaskDependencyGraphData
 TaskDependencyGraphAnalysis::run(Module &M, ModuleAnalysisManager &AM) {
   FunctionAnalysisManager &FAM =
       AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
+  int ntdgs=0;
   for (Function &F : M) {
     if (F.isDeclaration() || F.empty())
       continue;
     auto &DT = FAM.getResult<DominatorTreeAnalysis>(F);
     // Only check functions with tasks
     if (F.hasFnAttribute("llvm.omp.taskgraph.static")) {
+      ntdgs++;
       if (F.hasFnAttribute("llvm.omp.taskgraph.prealloc"))
         TDG.setPrealloc();
-      TDG.findOpenMPTasks(F, DT);
+      TDG.findOpenMPTasks(F, DT, ntdgs);
     }
   }
   return TDG;

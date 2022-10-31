@@ -19,15 +19,12 @@
 #define KMP_RELEASE_DEPNODE(gtid, n) __kmp_release_lock(&(n)->dn.lock, (gtid))
 
 #if LIBOMP_TASKGRAPH
-extern kmp_record_info *RecordMap;
-extern int recording;
-extern int fill_data;
-extern int prealloc;
+//Variables to manage data preallocation and lazy task creation
 extern kmp_task_t *kmp_init_lazy_task(int static_id, kmp_task_t *current_task,
-                                      kmp_int32 gtid);
-extern void insert_to_waiting_tdg(struct kmp_record_info *tdg);
+                                      kmp_int32 gtid, kmp_node_info *thisRecordMap, kmp_uint64 tdg_id);
+extern void insert_to_waiting_tdg(struct kmp_node_info *tdg);
 extern int check_waiting_tdg();
-extern struct kmp_record_info *get_from_waiting_tdg();
+extern struct kmp_node_info *get_from_waiting_tdg();
 #endif
 
 static inline void __kmp_node_deref(kmp_info_t *thread, kmp_depnode_t *node) {
@@ -103,23 +100,23 @@ extern void __kmpc_give_task(kmp_task_t *ptask, kmp_int32 start);
 static inline void __kmp_release_deps(kmp_int32 gtid, kmp_taskdata_t *task) {
 
 #if LIBOMP_TASKGRAPH
-  if (task->is_taskgraph && !recording && !fill_data) {
+  if (task->is_taskgraph && !(task->tdg->tdgStatus==TDG_RECORDING) && !(task->tdg->tdgStatus==TDG_FILL_DATA)) {
     // TODO: Not needed when taskifying
     // printf("[OpenMP] ---- Task %d ends, checking successors ----\n",
     // this_task->part_id);
-    kmp_record_info *TaskInfo = &(RecordMap[task->td_task_id]);
+    kmp_node_info *TaskInfo = &(task->tdg->RecordMap[task->td_task_id]);
 
     for (int i = 0; i < TaskInfo->nsuccessors; i++) {
       kmp_int32 successorNumber = TaskInfo->successors[i];
-      kmp_record_info *successor = &(RecordMap[successorNumber]);
+      kmp_node_info *successor = &(task->tdg->RecordMap[successorNumber]);
       // printf("  [OpenMP] Found one successor %d , deps : %d \n",
       // successorNumber, successor->npredecessors_counter);
 
        kmp_int32 npredecessors = KMP_ATOMIC_DEC(&successor->npredecessors_counter) - 1;
-      if (prealloc) {
+      if (task->tdg->tdgStatus == TDG_PREALLOC) {
         if (!successor->npredecessors_counter) {
           kmp_task_t *NextTask = kmp_init_lazy_task(
-              successorNumber, KMP_TASKDATA_TO_TASK(task->td_parent), gtid);
+              successorNumber, KMP_TASKDATA_TO_TASK(task->td_parent), gtid, task->tdg->RecordMap, task->tdg->tdgId);
           if (NextTask == nullptr) {
             insert_to_waiting_tdg(successor);
             //printf("Me guardo %d \n", successorNumber);

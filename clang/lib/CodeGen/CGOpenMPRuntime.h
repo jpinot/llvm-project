@@ -107,6 +107,7 @@ struct OMPTaskDataTy final {
     OpenMPDependClauseKind DepKind = OMPC_DEPEND_unknown;
     const Expr *IteratorExpr = nullptr;
     SmallVector<const Expr *, 4> DepExprs;
+    llvm::Value *FakeAddrReplication = nullptr;
     explicit DependData() = default;
     DependData(OpenMPDependClauseKind DepKind, const Expr *IteratorExpr)
         : DepKind(DepKind), IteratorExpr(IteratorExpr) {}
@@ -1375,7 +1376,8 @@ public:
   emitGetNewGroupID(CodeGenFunction &CGF, SourceLocation Loc);
 
   virtual llvm::Value *
-  emitGetNewTaskID(CodeGenFunction &CGF, SourceLocation Loc);
+  emitGetFakeAddrGroupID(CodeGenFunction &CGF, SourceLocation Loc);
+
   /// Emit task region for the taskloop directive. The taskloop region is
   /// emitted in several steps:
   /// 1. Emit a call to kmp_task_t *__kmpc_omp_task_alloc(ident_t *, kmp_int32
@@ -2266,7 +2268,8 @@ public:
 
   llvm::Value *emitGetNewGroupID(CodeGenFunction &CGF, SourceLocation Loc) override;
 
-  llvm::Value *emitGetNewTaskID(CodeGenFunction &CGF, SourceLocation Loc) override;
+  llvm::Value *emitGetFakeAddrGroupID(CodeGenFunction &CGF, SourceLocation Loc) override;
+
   /// Emit task region for the taskloop directive. The taskloop region is
   /// emitted in several steps:
   /// 1. Emit a call to kmp_task_t *__kmpc_omp_task_alloc(ident_t *, kmp_int32

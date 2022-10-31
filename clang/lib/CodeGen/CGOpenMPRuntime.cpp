@@ -4246,19 +4246,21 @@ static void getKmpAffinityType(ASTContext &C, QualType &KmpTaskAffinityInfoTy) {
   }
 }
 
-llvm::Value *CGOpenMPRuntime::emitGetNewTaskID(CodeGenFunction &CGF, SourceLocation Loc) {
-  llvm::Value *UpLoc = emitUpdateLocation(CGF, Loc);
-  return CGF.EmitRuntimeCall(OMPBuilder.getOrCreateRuntimeFunction(
-                                 CGM.getModule(), OMPRTL___kmpc_getNewTaskID),
-                             {UpLoc});
-}
-
 llvm::Value *CGOpenMPRuntime::emitGetNewGroupID(CodeGenFunction &CGF,
                                                 SourceLocation Loc) {
   llvm::Value *UpLoc = emitUpdateLocation(CGF, Loc);
   return CGF.EmitRuntimeCall(OMPBuilder.getOrCreateRuntimeFunction(
                                  CGM.getModule(), OMPRTL___kmpc_getNewGroupID),
                              {UpLoc});
+}
+
+llvm::Value *CGOpenMPRuntime::emitGetFakeAddrGroupID(CodeGenFunction &CGF,
+                                                     SourceLocation Loc) {
+  llvm::Value *UpLoc = emitUpdateLocation(CGF, Loc);
+  return CGF.EmitRuntimeCall(
+      OMPBuilder.getOrCreateRuntimeFunction(CGM.getModule(),
+                                            OMPRTL___kmpc_getFakeAddrGroupID),
+      {UpLoc});
 }
 
 void emitReplicationArchitecture(CodeGenFunction &CGF) {
@@ -4451,12 +4453,10 @@ CGOpenMPRuntime::emitTaskInit(CodeGenFunction &CGF, SourceLocation Loc,
                             AllocArgs);
   }
   if (CGF.CGM.getLangOpts().OpenMPTaskGraph) {
-    // Taskgraph support: obtain the static id.
-    llvm::Value *TaskID = emitGetNewTaskID(CGF, Loc);
 
     CGF.EmitRuntimeCall(OMPBuilder.getOrCreateRuntimeFunction(
                             CGM.getModule(), OMPRTL___kmpc_set_task_static_id),
-                        {NewTask, TaskID});
+                        {getThreadID(CGF, Loc), NewTask});
   }
 
   emitReplicationArchitecture(CGF);
@@ -4794,8 +4794,15 @@ static void emitDependData(CodeGenFunction &CGF, QualType &KmpDependInfoTy,
     // deps[i].base_addr = &<Dependencies[i].second>;
     LValue BaseAddrLVal = CGF.EmitLValueForField(
         Base, *std::next(KmpDependInfoRD->field_begin(), BaseAddr));
-    CGF.EmitStoreOfScalar(CGF.Builder.CreatePtrToInt(Addr, CGF.IntPtrTy),
-                          BaseAddrLVal);
+
+    if (Data.FakeAddrReplication != nullptr) {
+      CGF.EmitStoreOfScalar(
+          CGF.Builder.CreatePtrToInt(Data.FakeAddrReplication, CGF.IntPtrTy),
+          BaseAddrLVal);
+    } else {
+      CGF.EmitStoreOfScalar(CGF.Builder.CreatePtrToInt(Addr, CGF.IntPtrTy),
+                            BaseAddrLVal);
+    }
     // deps[i].len = sizeof(<Dependencies[i].second>);
     LValue LenLVal = CGF.EmitLValueForField(
         Base, *std::next(KmpDependInfoRD->field_begin(), Len));
@@ -6471,14 +6478,19 @@ void CGOpenMPRuntime::emitTaskwaitCall(CodeGenFunction &CGF, SourceLocation Loc,
     Region->emitUntiedSwitch(CGF);
 }
 
-void markFunctionsInsideTaskgraph(llvm::Function &F, StringRef Prop) {
-  if (!F.hasFnAttribute(Prop))
-    F.addFnAttr(Prop);
+void markFunctionsInlineInsideTaskgraph(llvm::Function &F) {
+  if (!F.hasFnAttribute(llvm::Attribute::AlwaysInline)){
+    F.removeFnAttr(llvm::Attribute::NoInline);
+    F.removeFnAttr(llvm::Attribute::OptimizeNone);
+    F.addFnAttr(llvm::Attribute::AlwaysInline);
+  }
 
   for (llvm::BasicBlock &bb : F) {
     for (llvm::Instruction &I : bb) {
       if (llvm::CallInst *call = dyn_cast<llvm::CallInst>(&I)) {
-        markFunctionsInsideTaskgraph(*(call->getCalledFunction()), Prop);
+        llvm::Function *CalledFunction = call->getCalledFunction();
+        if(!CalledFunction->isDeclaration())
+          markFunctionsInlineInsideTaskgraph(*(call->getCalledFunction()));
       }
     }
   }
@@ -6544,22 +6556,32 @@ void CGOpenMPRuntime::emitTaskgraphCall(CodeGenFunction &CGF,
 
   // Static TDG
   if (tdg_type) {
-    markFunctionsInsideTaskgraph(*FnT,
-                                 "llvm.omp.taskgraph.static");
+    if (!FnT->hasFnAttribute("llvm.omp.taskgraph.static"))
+      FnT->addFnAttr("llvm.omp.taskgraph.static");
+
+    markFunctionsInlineInsideTaskgraph(*FnT);
+
     if (CGF.CGM.getLangOpts().OpenMPPrealloc) {
-      markFunctionsInsideTaskgraph(*FnT,
-                                   "llvm.omp.taskgraph.prealloc");
+      if (!FnT->hasFnAttribute("llvm.omp.taskgraph.prealloc"))
+        FnT->addFnAttr("llvm.omp.taskgraph.prealloc");
     }
     auto *FT = llvm::FunctionType::get(CGF.VoidTy, false);
-    CGF.Builder.CreateCall(CGM.CreateRuntimeFunction(FT, "kmp_set_tdg"), NumPreallocs);
-  }
 
-  llvm::Value *Args[] = {emitUpdateLocation(CGF, Loc), getThreadID(CGF, Loc),
-                         CGF.Builder.CreatePointerBitCastOrAddrSpaceCast(
-                             FnT, CGF.Int8PtrTy),
-                         CGF.Builder.CreatePointerBitCastOrAddrSpaceCast(
-                             CapStruct.getPointer(OutlinedCGF), CGF.Int8PtrTy),
-                         CGF.Builder.getInt32(tdg_type)};
+    std::pair<StringRef, StringRef> FNames = FnT->getName().split(".");
+    std::string setName =
+        "kmp_set_tdg_" + FNames.first.str() + "_" + FNames.second.str();
+    CGF.Builder.CreateCall(CGM.CreateRuntimeFunction(FT, setName),
+                           {NumPreallocs, getThreadID(CGF, Loc)});
+  }
+  llvm::Value *Args[] = {
+      emitUpdateLocation(CGF, Loc),
+      getThreadID(CGF, Loc),
+      llvm::ConstantInt::get(llvm::Type::getInt64Ty(CGF.getLLVMContext()),
+                             FnT->getGUID()),
+      CGF.Builder.CreatePointerBitCastOrAddrSpaceCast(FnT, CGF.Int8PtrTy),
+      CGF.Builder.CreatePointerBitCastOrAddrSpaceCast(
+          CapStruct.getPointer(OutlinedCGF), CGF.Int8PtrTy),
+      CGF.Builder.getInt32(tdg_type)};
   CGF.EmitRuntimeCall(OMPBuilder.getOrCreateRuntimeFunction(
                           CGM.getModule(), OMPRTL___kmpc_taskgraph),
                       Args);
@@ -13309,7 +13331,7 @@ llvm::Value *CGOpenMPSIMDRuntime::emitGetNewGroupID(CodeGenFunction &CGF,
   llvm_unreachable("Not supported in SIMD-only mode");
 }
 
-llvm::Value *CGOpenMPSIMDRuntime::emitGetNewTaskID(CodeGenFunction &CGF,
+llvm::Value *CGOpenMPSIMDRuntime::emitGetFakeAddrGroupID(CodeGenFunction &CGF,
                                                     SourceLocation Loc) {
   llvm_unreachable("Not supported in SIMD-only mode");
 }
