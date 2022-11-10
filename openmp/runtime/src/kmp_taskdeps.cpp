@@ -981,7 +981,6 @@ void erase_transitive_edges(kmp_tdg_info *thisTdg) {
 }
 
 void print_tdg_to_dot(kmp_tdg_info *thisTdg) {
-
   char FileName[10];
   sprintf(FileName, "tdg_%d.dot", Ntdgs);
   FILE *f = fopen(FileName, "w");
@@ -994,7 +993,7 @@ void print_tdg_to_dot(kmp_tdg_info *thisTdg) {
   fprintf(f, "digraph TDG {\n");
   fprintf(f, "   compound=true\n");
   fprintf(f, "   subgraph cluster_0 {\n");
-  fprintf(f, "      label=TDG_%d\n", Ntdgs);
+  fprintf(f, "      label=TDG_%llu\n", thisTdg->tdgId);
 
   for (kmp_int32 i = 0; i < thisTdg->numTasks; i++) {
 

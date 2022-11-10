@@ -285,7 +285,7 @@ void TaskDependencyGraphData::print_tdg() {
   }
 }
 
-void TaskDependencyGraphData::print_tdg_to_dot(StringRef ModuleName, int ntdgs) {
+void TaskDependencyGraphData::print_tdg_to_dot(StringRef ModuleName, int ntdgs, Function &F) {
 
   // std::string fileName = ModuleName.str();
   // size_t lastindex = fileName.find_last_of(".");
@@ -295,6 +295,8 @@ void TaskDependencyGraphData::print_tdg_to_dot(StringRef ModuleName, int ntdgs) 
   sprintf(FileName, "tdg_%d.dot", ntdgs);
   llvm::raw_fd_ostream Tdgfile(FileName, EC);
 
+  uint64_t FGuid = F.getGUID();
+
   if (Tdgfile.has_error()) {
     llvm_unreachable("Error Opening TDG file \n");
   }
@@ -302,7 +304,7 @@ void TaskDependencyGraphData::print_tdg_to_dot(StringRef ModuleName, int ntdgs) 
   Tdgfile << "digraph TDG {\n";
   Tdgfile << "   compound=true\n";
   Tdgfile << "   subgraph cluster_0 {\n";
-  Tdgfile << "      label=TDG_"<< ntdgs <<"\n";
+  Tdgfile << "      label=TDG_"<< FGuid <<"\n";
 
   for (auto &Task : FunctionTasks) {
 
@@ -1230,7 +1232,7 @@ void TaskDependencyGraphData::findOpenMPTasks(Function &F, DominatorTree &DT, in
 
   // print_tdg();
   if (FunctionTasks.size()) {
-    print_tdg_to_dot(F.getParent()->getSourceFileName(), ntdgs);
+    print_tdg_to_dot(F.getParent()->getSourceFileName(), ntdgs, F);
     generate_analysis_tdg_file(F.getParent()->getSourceFileName());
     generate_runtime_tdg_file(F.getParent()->getSourceFileName(), F, ntdgs);
   }

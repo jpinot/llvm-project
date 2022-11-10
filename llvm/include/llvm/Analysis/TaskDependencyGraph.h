@@ -70,7 +70,7 @@ public:
   void traverse_node(SmallVectorImpl<uint64_t> &edges_to_check, int node,
                      int master, int nesting_level, std::vector<bool> &Visited);
   void print_tdg();
-  void print_tdg_to_dot(StringRef ModuleName,  int ntdgs);
+  void print_tdg_to_dot(StringRef ModuleName, int ntdgs, Function &F);
   void generate_analysis_tdg_file(StringRef ModuleName);
   void generate_runtime_tdg_file(StringRef ModuleName, Function &F, int ntdgs);
   void obtainTaskIdent(TaskInfo &TaskFound, CallInst &TaskCall);

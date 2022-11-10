@@ -4043,7 +4043,8 @@ KMP_EXPORT void __kmpc_prealloc_tasks(
     kmp_task_alloc_info *task_static_data, char *preallocated_tasks,
     kmp_space_indexer_node *preallocated_nodes, kmp_uint32 n_task_constructs,
     kmp_uint32 max_concurrent_tasks, kmp_uint32 task_size,  kmp_uint64 tdg_id);
-KMP_EXPORT void __kmpc_set_task_static_id(kmp_int32 gtid, kmp_task_t *task);
+KMP_EXPORT kmp_int32 __kmpc_set_task_static_id(kmp_int32 gtid, kmp_task_t *task);
+KMP_EXPORT kmp_uint64 __kmpc_get_taskgraph_id(kmp_task_t *task);
 KMP_EXPORT kmp_int32 __kmpc_getNewGroupID(ident_t *loc_ref);
 KMP_EXPORT kmp_int32 __kmpc_getFakeAddrGroupID(ident_t *loc_ref);
 KMP_EXPORT kmp_int32 __kmpc_getNewTaskID(ident_t *loc_ref);

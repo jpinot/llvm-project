@@ -1556,8 +1556,8 @@ kmp_task_t *__kmp_task_alloc(ident_t *loc_ref, kmp_int32 gtid,
 #if LIBOMP_TASKGRAPH
 // Mark tasks created inside a taskgraph, to differenciate
 // them, this is used to decide if task should be freed and also when task ends
-// and we look por successors.
-void __kmpc_set_task_static_id(kmp_int32 gtid, kmp_task_t *task) {
+// and we look for successors.
+kmp_int32 __kmpc_set_task_static_id(kmp_int32 gtid, kmp_task_t *task) {
   kmp_taskdata_t *taskdata = KMP_TASK_TO_TASKDATA(task);
   for (int i = 0; i < TdgCreationInfoSize; i++) {
     if (TdgCreationInfo[i].gtid == gtid) {
@@ -1568,6 +1568,13 @@ void __kmpc_set_task_static_id(kmp_int32 gtid, kmp_task_t *task) {
       break;
     }
   }
+
+  return taskdata->td_task_id;
+}
+
+kmp_uint64 __kmpc_get_taskgraph_id(kmp_task_t *task) {
+  kmp_taskdata_t *taskdata = KMP_TASK_TO_TASKDATA(task);
+  return taskdata->tdg->tdgId;
 }
 
 kmp_int32 __kmpc_getNewGroupID(ident_t *loc_ref) {
