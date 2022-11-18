@@ -1713,11 +1713,18 @@ void __kmpc_prepare_taskwait(kmp_task_t *task, void *data, kmp_int32 groupID,
   ListToUse->nodes[ListToUse->numNodes] = {task, data, FALSE, FALSE, -1, -1};
   ListToUse->numNodes = ListToUse->numNodes + 1;
   // printf("--- Runtime ---:Node saved! \n");
-  if (spatialConstraint && __kmp_threads[gtid]->th.th_task_team->tt.tt_nproc <=
-                               ListToUse->numNodes) {
+  if (!__kmp_threads[gtid]->th.th_task_team ||
+      (spatialConstraint && __kmp_threads[gtid]->th.th_task_team->tt.tt_nproc <=
+                                ListToUse->numNodes)) {
+
     ListToUse->spatialConstraint = FALSE;
-    printf("WARNING: Number of replicas is higher than the number of threads, "
-           "spatial constraint will not be satisfied \n");
+    if (!__kmp_threads[gtid]->th.th_task_team)
+      printf("WARNING: Thread team has not been initialized. spatial "
+             "constraint will not be satisfied \n");
+    else
+      printf(
+          "WARNING: Number of replicas is higher than the number of threads, "
+          "spatial constraint will not be satisfied \n");
   }
 
   // Save groupID inside the task member
