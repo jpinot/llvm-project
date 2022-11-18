@@ -1785,7 +1785,7 @@ bool checkIfListIsFinished(int gtid, ReplicationList *list) {
 
   for (int j = 0; j < list->numNodes; j++) {
     if (list->nodes[j].finished == TRUE) {
-      if (__replication_architecture_minimum != -1)
+      if (__replication_architecture_minimum != -1 && list->functionToCall!=nullptr)
         numFinishedTasks += finishedWithCorrectResult(list, j);
       else
         numFinishedTasks++;
@@ -1923,20 +1923,11 @@ void __kmpc_replication_callback(ident_t *loc_ref, void *callbackFunction,
                                  kmp_int32 groupID, kmp_int32 gtid) {
   __kmp_acquire_futex_lock(&ReplicationsLock, gtid);
   for (int i = 0; i < NumReplicasListSize; i++) {
-    // Figure out if a list with the GroupID is already created
+    // Find the list with the GroupID and update callback
     if (listsOfReplicas[i].groupID == groupID) {
       listsOfReplicas[i].functionToCall = callbackFunction;
-
-      // Now check if all nodes of the list has finished
-      bool executeCallback = checkIfListIsFinished(gtid, &listsOfReplicas[i]);
-
-      if (executeCallback) {
-        // printf("--- Runtime ---:Executing callback from callback! \n");
-        executeCallbackAndFreeList(&listsOfReplicas[i]);
-      }
     }
   }
-
   __kmp_release_futex_lock(&ReplicationsLock, gtid);
 }
 #endif
