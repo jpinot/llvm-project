@@ -653,8 +653,11 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName, Fu
            "kmp_node_info * next_waiting_tdg;\n};\n";
 
     Tdgfile << "extern  \"C\" void __kmpc_set_tdg(struct kmp_node_info *tdg, "
-               "int gtid, unsigned long long tdg_id, int "
+               "int gtid, int tdg_id, int "
                "ntasks, int *roots, int nroots);\n";
+
+    Tdgfile << "extern \"C\" void __kmpc_taskgraph(void *loc_ref, int gtid, int tdg_id, void (*entry)(void *), void *args, int tdg_type);\n";
+
     if (Prealloc) {
       for (int i = 0; i < (int)TasksAllocInfo.size(); i++) {
         Tdgfile << "extern  \"C\" int "
@@ -855,17 +858,19 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName, Fu
     }
   }
   std::pair<StringRef, StringRef> FNames = F.getName().split(".");
-  Tdgfile << "extern \"C\" void kmp_set_tdg_"<< FNames.first << "_" << FNames.second << "(int num_preallocs, int gtid)\n{\n";
+  Tdgfile << "extern \"C\" void kmp_set_tdg_"<< FNames.first << "_" << FNames.second << "(void *loc_ref, int gtid, void (*entry)(void *), void *args, int tdg_type, int num_preallocs)\n{\n";
   uint64_t FGuid = F.getGUID();
   if (Prealloc) {
     // Tdgfile << "printf(\" es: %d \", sizeof(struct kmp_task));\n";
     Tdgfile << "  __kmpc_prealloc_tasks(task_static_data, (char *) preallocated_tasks, "
                "preallocated_nodes, "
             << FunctionTasks.size()
-            << ", num_preallocs, sizeof(struct kmp_task)," << FGuid << "U);\n";
+            << ", num_preallocs, sizeof(struct kmp_task)," << ntdgs << ");\n";
   }
-  Tdgfile << "  __kmpc_set_tdg(kmp_tdg_" << ntdgs << ", gtid, " << FGuid  << "U , " << FunctionTasks.size()
-          << ", kmp_tdg_roots_" << ntdgs <<", " << TdgRoots.size() << ");\n}";
+  Tdgfile << "  __kmpc_set_tdg(kmp_tdg_" << ntdgs << ", gtid, " << ntdgs  << ", " << FunctionTasks.size()
+          << ", kmp_tdg_roots_" << ntdgs <<", " << TdgRoots.size() << ");\n";
+
+  Tdgfile << "  __kmpc_taskgraph(loc_ref, gtid, " << ntdgs << ", entry, args, tdg_type);\n}";
 
   Tdgfile.close();
 }

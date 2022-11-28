@@ -4034,15 +4034,15 @@ KMP_EXPORT kmp_int32 __kmpc_omp_task_parts(ident_t *loc_ref, kmp_int32 gtid,
                                            kmp_task_t *new_task);
 KMP_EXPORT kmp_int32 __kmpc_omp_taskwait(ident_t *loc_ref, kmp_int32 gtid);
 #if LIBOMP_TASKGRAPH
-KMP_EXPORT void __kmpc_set_tdg(struct kmp_node_info *tdg,  kmp_int32 gtid, kmp_uint64 tdg_id,  kmp_int32 ntasks,
+KMP_EXPORT void __kmpc_set_tdg(struct kmp_node_info *tdg,  kmp_int32 gtid, kmp_int32 tdg_id,  kmp_int32 ntasks,
                                kmp_int32 *roots, kmp_int32 nroots);
 KMP_EXPORT void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid,
-                                 kmp_uint64 tdg_id, void (*entry)(void *),
+                                 kmp_int32 tdg_id, void (*entry)(void *),
                                  void *args, kmp_int32 tdg_type);
 KMP_EXPORT void __kmpc_prealloc_tasks(
     kmp_task_alloc_info *task_static_data, char *preallocated_tasks,
     kmp_space_indexer_node *preallocated_nodes, kmp_uint32 n_task_constructs,
-    kmp_uint32 max_concurrent_tasks, kmp_uint32 task_size,  kmp_uint64 tdg_id);
+    kmp_uint32 max_concurrent_tasks, kmp_uint32 task_size,  kmp_int32 tdg_id);
 KMP_EXPORT kmp_int32 __kmpc_set_task_static_id(kmp_int32 gtid, kmp_task_t *task);
 KMP_EXPORT kmp_uint64 __kmpc_get_taskgraph_id(kmp_task_t *task);
 KMP_EXPORT kmp_int32 __kmpc_getNewGroupID(ident_t *loc_ref);

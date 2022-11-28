@@ -21,7 +21,7 @@
 #if LIBOMP_TASKGRAPH
 //Variables to manage data preallocation and lazy task creation
 extern kmp_task_t *kmp_init_lazy_task(int static_id, kmp_task_t *current_task,
-                                      kmp_int32 gtid, kmp_node_info *thisRecordMap, kmp_uint64 tdg_id);
+                                      kmp_int32 gtid, kmp_node_info *thisRecordMap, kmp_int32 tdg_id);
 extern void insert_to_waiting_tdg(struct kmp_node_info *tdg);
 extern int check_waiting_tdg();
 extern struct kmp_node_info *get_from_waiting_tdg();

@@ -6554,6 +6554,18 @@ void CGOpenMPRuntime::emitTaskgraphCall(CodeGenFunction &CGF,
     Condition = CGF.Builder.getInt32(0);
   */
 
+  // Dynamic TDGs start from id 1000 and static TDGs from 0.
+  static int dynamicTDGId = 1000;
+
+  std::vector<llvm::Value *> Args{
+      emitUpdateLocation(CGF, Loc),
+      getThreadID(CGF, Loc),
+      llvm::ConstantInt::get(llvm::Type::getInt32Ty(CGF.getLLVMContext()),
+                             dynamicTDGId),
+      CGF.Builder.CreatePointerBitCastOrAddrSpaceCast(FnT, CGF.Int8PtrTy),
+      CGF.Builder.CreatePointerBitCastOrAddrSpaceCast(
+          CapStruct.getPointer(OutlinedCGF), CGF.Int8PtrTy),
+      CGF.Builder.getInt32(tdg_type)};
   // Static TDG
   if (tdg_type) {
     if (!FnT->hasFnAttribute("llvm.omp.taskgraph.static"))
@@ -6565,26 +6577,20 @@ void CGOpenMPRuntime::emitTaskgraphCall(CodeGenFunction &CGF,
       if (!FnT->hasFnAttribute("llvm.omp.taskgraph.prealloc"))
         FnT->addFnAttr("llvm.omp.taskgraph.prealloc");
     }
+    // Erase tdg id and add numpreallocs
+    Args.erase(Args.begin() + 2);
+    Args.push_back(NumPreallocs);
     auto *FT = llvm::FunctionType::get(CGF.VoidTy, false);
-
     std::pair<StringRef, StringRef> FNames = FnT->getName().split(".");
     std::string setName =
         "kmp_set_tdg_" + FNames.first.str() + "_" + FNames.second.str();
-    CGF.Builder.CreateCall(CGM.CreateRuntimeFunction(FT, setName),
-                           {NumPreallocs, getThreadID(CGF, Loc)});
+    CGF.Builder.CreateCall(CGM.CreateRuntimeFunction(FT, setName), Args);
+  } else {
+    CGF.EmitRuntimeCall(OMPBuilder.getOrCreateRuntimeFunction(
+                            CGM.getModule(), OMPRTL___kmpc_taskgraph),
+                        Args);
+    dynamicTDGId++;
   }
-  llvm::Value *Args[] = {
-      emitUpdateLocation(CGF, Loc),
-      getThreadID(CGF, Loc),
-      llvm::ConstantInt::get(llvm::Type::getInt64Ty(CGF.getLLVMContext()),
-                             FnT->getGUID()),
-      CGF.Builder.CreatePointerBitCastOrAddrSpaceCast(FnT, CGF.Int8PtrTy),
-      CGF.Builder.CreatePointerBitCastOrAddrSpaceCast(
-          CapStruct.getPointer(OutlinedCGF), CGF.Int8PtrTy),
-      CGF.Builder.getInt32(tdg_type)};
-  CGF.EmitRuntimeCall(OMPBuilder.getOrCreateRuntimeFunction(
-                          CGM.getModule(), OMPRTL___kmpc_taskgraph),
-                      Args);
 }
 
 void CGOpenMPRuntime::emitInlinedDirective(CodeGenFunction &CGF,

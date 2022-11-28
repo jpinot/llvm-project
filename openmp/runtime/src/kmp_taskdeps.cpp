@@ -69,7 +69,7 @@ struct kmp_task_alloc_info *task_static_table;
 struct kmp_waiting_tdg waiting_tdg_to_execute;
 extern size_t __kmp_round_up_to_val(size_t size, size_t val);
 kmp_task_t *kmp_init_lazy_task(int static_id, kmp_task_t *current_task,
-                               kmp_int32 gtid, kmp_node_info *thisRecordMap, kmp_uint64 tdg_id);
+                               kmp_int32 gtid, kmp_node_info *thisRecordMap, kmp_int32 tdg_id);
 void kmp_insert_task_in_indexer(kmp_task_t *task);
 
 #endif // LIBOMP_TASKGRAPH
@@ -1176,7 +1176,7 @@ void __kmpc_fill_data(ident_t *loc_ref, kmp_int32 gtid, void (*entry)(void *),
   cleanTdgCreationInfo(gtid);
 }
 
-void __kmpc_set_tdg(struct kmp_node_info *tdg, kmp_int32 gtid, kmp_uint64 tdg_id, kmp_int32 ntasks, kmp_int32 *roots, kmp_int32 nroots) {
+void __kmpc_set_tdg(struct kmp_node_info *tdg, kmp_int32 gtid, kmp_int32 tdg_id, kmp_int32 ntasks, kmp_int32 *roots, kmp_int32 nroots) {
 
   // Skip tdgs that we already have
   for (int i = 0; i < Ntdgs; i++) {
@@ -1216,7 +1216,7 @@ void __kmpc_set_tdg(struct kmp_node_info *tdg, kmp_int32 gtid, kmp_uint64 tdg_id
 }
 
 kmp_int32 __kmpc_record(ident_t *loc_ref, kmp_int32 gtid, void (*entry)(void *),
-                        void *args, kmp_uint64 tdg_id) {
+                        void *args, kmp_int32 tdg_id) {
 
   kmp_int32 ThisMapSize = INIT_MAPSIZE;
 
@@ -1322,9 +1322,8 @@ kmp_int32 __kmpc_record(ident_t *loc_ref, kmp_int32 gtid, void (*entry)(void *),
   return 1;
 }
 
-void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid, kmp_uint64 tdg_id,
+void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 tdg_id,
                       void (*entry)(void *), void *args, kmp_int32 tdg_type) {
-
   int tdg_index = -1;
   for (int i = 0; i < Ntdgs; i++) {
     if (GlobalTdgs[i].tdgId == tdg_id) {
@@ -1563,7 +1562,7 @@ void __kmpc_prealloc_tasks(kmp_task_alloc_info *task_static_data,
                            unsigned int n_task_constructs,
                            unsigned int max_concurrent_tasks,
                            unsigned int task_size,
-                           kmp_uint64 tdg_id) {
+                           kmp_int32 tdg_id) {
 
   __kmp_acquire_futex_lock(&TdgLock, 0);
   //If the TDG is encountered preallocation has already been performed
@@ -1604,7 +1603,7 @@ void __kmpc_prealloc_tasks(kmp_task_alloc_info *task_static_data,
 }
 
 kmp_task_t *kmp_init_lazy_task(int static_id, kmp_task_t *current_task,
-                               kmp_int32 gtid, kmp_node_info *thisRecordMap, kmp_uint64 tdg_id) {
+                               kmp_int32 gtid, kmp_node_info *thisRecordMap, kmp_int32 tdg_id) {
 
   kmp_task_t *new_task = kmp_get_free_task_from_indexer();
   if (new_task == NULL)
