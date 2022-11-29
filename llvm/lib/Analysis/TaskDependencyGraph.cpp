@@ -295,8 +295,6 @@ void TaskDependencyGraphData::print_tdg_to_dot(StringRef ModuleName, int ntdgs, 
   sprintf(FileName, "tdg_%d.dot", ntdgs);
   llvm::raw_fd_ostream Tdgfile(FileName, EC);
 
-  uint64_t FGuid = F.getGUID();
-
   if (Tdgfile.has_error()) {
     llvm_unreachable("Error Opening TDG file \n");
   }
@@ -304,7 +302,7 @@ void TaskDependencyGraphData::print_tdg_to_dot(StringRef ModuleName, int ntdgs, 
   Tdgfile << "digraph TDG {\n";
   Tdgfile << "   compound=true\n";
   Tdgfile << "   subgraph cluster_0 {\n";
-  Tdgfile << "      label=TDG_"<< FGuid <<"\n";
+  Tdgfile << "      label=TDG_"<< ntdgs <<"\n";
 
   for (auto &Task : FunctionTasks) {
 
@@ -859,7 +857,7 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName, Fu
   }
   std::pair<StringRef, StringRef> FNames = F.getName().split(".");
   Tdgfile << "extern \"C\" void kmp_set_tdg_"<< FNames.first << "_" << FNames.second << "(void *loc_ref, int gtid, void (*entry)(void *), void *args, int tdg_type, int num_preallocs)\n{\n";
-  uint64_t FGuid = F.getGUID();
+
   if (Prealloc) {
     // Tdgfile << "printf(\" es: %d \", sizeof(struct kmp_task));\n";
     Tdgfile << "  __kmpc_prealloc_tasks(task_static_data, (char *) preallocated_tasks, "
