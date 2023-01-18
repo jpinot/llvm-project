@@ -600,7 +600,8 @@ int main(int Argc, const char **Argv) {
       }
 
       for(int i=0; i < (int) FileNames.size(); i++){
-        Args.push_back(FileNames[i]);
+        auto itPos = Args.begin() + 2;
+        Args.insert(itPos,FileNames[i]);
       }
       //Remove -static-tdg flag
       for(int i=1; i < (int) Args.size(); i++){
@@ -627,7 +628,8 @@ int main(int Argc, const char **Argv) {
         }
       }
       FILE *file;
-      Args.push_back("tdg.cpp");
+      auto itPos = Args.begin() + 2;
+      Args.insert(itPos,"tdg.cpp");
       Args.push_back("--driver-mode=g++");
 
       //Only recompile if the tdg file exists

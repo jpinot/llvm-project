@@ -29,9 +29,18 @@
 // runtime locks
 // TODO: Any ITT support needed?
 
+bool KMP_TDG_TRACING =
+    0; // set to 1 to turn on the printf throughout the library
+bool KMP_TDG_TIMING =
+    0; // set to 1 to turn on time measurements, needed to sort tasks
+void debug_print(const char *format, ...);
+void __kmp_enable_tasking(kmp_task_team_t *task_team, kmp_info_t *this_thr);
+void sync_tdg_tasks_for_task_team(kmp_int32, kmp_task_team_t *,
+                                  kmp_task_team_t *, kmp_int32);
+
 #if LIBOMP_TASKGRAPH
 #include <new>
-
+#include <utility>
 //Global protected number of tdgs
 kmp_int32 Ntdgs = 0;
 
@@ -51,6 +60,7 @@ kmp_futex_lock_t TdgLock = KMP_FUTEX_LOCK_INITIALIZER(TdgLock);
 kmp_int32 MaxNesting = 4; //Nesting when erasing edges
 kmp_int32 SuccessorsSize = 10; //Initial succesor size list for recording
 kmp_int32 SuccessorsIncrement = 5; //Allocation increment when recording
+int task_teams_sync = false; //To keep two task teams homogeneous
 
 // Colors for the graphviz output
 const char *ColorNames[] = {
@@ -63,11 +73,16 @@ const char *ColorNames[] = {
 //By default the static scheduling is disabled
 bool StaticSchedule = false;
 
-//Structures for the prealloc and lazy task creation mechanism
+int replaying[MAX_NUM_PROC] = {0};
+
+
 struct kmp_space_indexer free_space_indexer;
 struct kmp_task_alloc_info *task_static_table;
 struct kmp_waiting_tdg waiting_tdg_to_execute;
 extern size_t __kmp_round_up_to_val(size_t size, size_t val);
+extern void __kmp_free_task_and_ancestors(kmp_int32 gtid,
+                                          kmp_taskdata_t *taskdata,
+                                          kmp_info_t *thread);
 kmp_task_t *kmp_init_lazy_task(int static_id, kmp_task_t *current_task,
                                kmp_int32 gtid, kmp_node_info *thisRecordMap, kmp_int32 tdg_id);
 void kmp_insert_task_in_indexer(kmp_task_t *task);
@@ -260,8 +275,13 @@ static kmp_depnode_list_t *__kmp_add_node(kmp_info_t *thread,
 static inline void __kmp_track_dependence(kmp_int32 gtid, kmp_depnode_t *source,
                                           kmp_depnode_t *sink,
                                           kmp_task_t *sink_task) {
+
+kmp_taskdata_t *task_source = KMP_TASK_TO_TASKDATA(source->dn.task);
+kmp_taskdata_t *task_sink = KMP_TASK_TO_TASKDATA(sink_task);
 #if LIBOMP_TASKGRAPH
-  kmp_taskdata_t *task_sink = KMP_TASK_TO_TASKDATA(sink_task);
+  if((task_source->is_taskgraph && !task_sink->is_taskgraph) || (!task_source->is_taskgraph && task_sink->is_taskgraph)){
+    printf("Internal OpenMP error: task dependency detected between a task inside a taskgraph and a task outside, this is not supported \n");
+  }
   if (task_sink->is_taskgraph && task_sink->tdg->tdgStatus == TDG_RECORDING) {
     kmp_node_info *SourceInfo = &(task_sink->tdg->RecordMap[source->dn.part_id]);
     bool exists = false;
@@ -289,9 +309,6 @@ static inline void __kmp_track_dependence(kmp_int32 gtid, kmp_depnode_t *source,
 #endif
 
 #ifdef KMP_SUPPORT_GRAPH_OUTPUT
-  kmp_taskdata_t *task_source = KMP_TASK_TO_TASKDATA(source->dn.task);
-  kmp_taskdata_t *task_sink = KMP_TASK_TO_TASKDATA(sink_task);
-
   // do not use sink->dn.task as that is only filled after the dependences
   // are already processed!
 
@@ -366,7 +383,7 @@ static inline kmp_int32 __kmp_depnode_link_successor(kmp_int32 gtid,
   kmp_tdg_status tdgStatus = TDG_NONE;
   if(KMP_TASK_TO_TASKDATA(task)->is_taskgraph)
      tdgStatus = KMP_TASK_TO_TASKDATA(task)->tdg->tdgStatus;
-  if (tdgStatus == TDG_RECORDING)
+  if (tdgStatus == TDG_RECORDING && sink->dn.task)
     __kmp_track_dependence(gtid, sink, source, task);
 #endif
   if (sink->dn.task) {
@@ -678,7 +695,8 @@ kmp_int32 __kmpc_omp_task_with_deps(ident_t *loc_ref, kmp_int32 gtid,
                                     kmp_depend_info_t *dep_list,
                                     kmp_int32 ndeps_noalias,
                                     kmp_depend_info_t *noalias_dep_list) {
-
+  // debug_print("kmpc_omp_task_with_deps called with gtid %d, tid %d\n", gtid,
+  // __kmp_get_tid());
   kmp_taskdata_t *new_taskdata = KMP_TASK_TO_TASKDATA(new_task);
 
   KA_TRACE(10, ("__kmpc_omp_task_with_deps(enter): T#%d loc=%p task=%p\n", gtid,
@@ -752,6 +770,7 @@ kmp_int32 __kmpc_omp_task_with_deps(ident_t *loc_ref, kmp_int32 gtid,
     if (new_taskdata->td_parent->td_flags.tasktype == TASK_EXPLICIT) {
       KMP_ATOMIC_DEC(&new_taskdata->td_parent->td_allocated_child_tasks);
     }
+
     // if (prealloc) {
     //   TaskInfo->task = nullptr;
     /*
@@ -980,6 +999,20 @@ void erase_transitive_edges(kmp_tdg_info *thisTdg) {
   }
 }
 
+/*
+void erase_taskgroup() {
+  for (kmp_uint i = 0; i < MapSize; i++) {
+    if (RecordMap[i].task == nullptr) {
+      continue;
+    }
+    kmp_task_t *task = RecordMap[i].task;
+    kmp_taskdata_t *td = KMP_TASK_TO_TASKDATA(task);
+    if (td->td_taskgroup) {
+      td->td_taskgroup = nullptr;
+    }
+  }
+}*/
+
 void print_tdg_to_dot(kmp_tdg_info *thisTdg) {
   char FileName[10];
   sprintf(FileName, "tdg_%d.dot", Ntdgs);
@@ -1074,6 +1107,16 @@ void print_tdg_to_dot(kmp_tdg_info *thisTdg) {
   fclose(f);
 }
 
+// wait all threads to schedule their tasks.
+void wait_all_threads_scheduled(kmp_int32 gtid, kmp_int32 nthreads) {
+  volatile int proceed;
+  do {
+    proceed = 0;
+    for (int i = 0; i < nthreads; ++i)
+      proceed |= replaying[i];
+  } while (proceed);
+}
+
 void __kmpc_execute_tdg(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 tdg_index) {
    kmp_node_info *ThisRecordMap;
    kmp_int32 *ThisRootTasks;
@@ -1084,22 +1127,43 @@ void __kmpc_execute_tdg(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 tdg_index) {
    ThisNumRoots = GlobalTdgs[tdg_index].numRoots;
    ThisRootTasks = GlobalTdgs[tdg_index].rootTasks;
    kmp_int32 ThisNumTasks = GlobalTdgs[tdg_index].numTasks;
+
+   kmp_info_t *thread = __kmp_threads[gtid];
+   kmp_taskdata_t *parent_task = thread->th.th_current_task;
+
+   if (GlobalTdgs[tdg_index].rec_taskred_data) {
+        __kmpc_taskred_init(gtid, GlobalTdgs[tdg_index].rec_num_taskred,
+                            GlobalTdgs[tdg_index].rec_taskred_data);
+   }
    // Reset remaining tasks
    KMP_ATOMIC_ST_RLX(&GlobalTdgs[tdg_index].remainingTasks, ThisNumTasks);
 
    for (kmp_int32 j = 0; j < ThisNumTasks; j++) {
+     kmp_taskdata_t *td = KMP_TASK_TO_TASKDATA(ThisRecordMap[j].task);
+     td->td_parent = parent_task;
+     ThisRecordMap[j].parent_task = parent_task;
      // kmp_taskdata_t *new_taskdata =
      KMP_ATOMIC_ST_RLX(&ThisRecordMap[j].npredecessors_counter,
                        ThisRecordMap[j].npredecessors);
 
      KMP_ATOMIC_INC(&ThisRecordMap[j].parent_task->td_incomplete_child_tasks);
 
+     //printf ("Es: %d \n", KMP_ATOMIC_LD_RLX(&ThisRecordMap[j].parent_task->td_taskgroup->count));
      // Protect with if?
-     if (ThisRecordMap[j].parent_task->td_taskgroup)
+     if (ThisRecordMap[j].parent_task->td_taskgroup){
        KMP_ATOMIC_INC(&ThisRecordMap[j].parent_task->td_taskgroup->count);
+       //The taskgroup is different so we must update it
+       td->td_taskgroup = ThisRecordMap[j].parent_task->td_taskgroup;
+     }
+     else if( td->td_taskgroup!=nullptr){
+      //If the parent doesnt have a taskgroup, remove it from the task
+      td->td_taskgroup = nullptr;
+     }
 
      if (ThisRecordMap[j].parent_task->td_flags.tasktype == TASK_EXPLICIT)
        KMP_ATOMIC_INC(&ThisRecordMap[j].parent_task->td_allocated_child_tasks);
+
+
    }
 
   for (kmp_int32 j = 0; j < ThisNumRoots; j++) {
@@ -1118,29 +1182,35 @@ void __kmpc_execute_tdg(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 tdg_index) {
 	__kmp_omp_task(gtid, ThisRecordMap[ThisRootTasks[j]].task, true);
     }
   }
-
-  //__kmpc_omp_taskwait(loc_ref, gtid);
+  //__kmpc_end_taskgroup(loc_ref, gtid);
 }
 
 void cleanTdgCreationInfo(kmp_int32 gtid) {
   for (int i = 0; i < TdgCreationInfoSize; i++) {
     if (TdgCreationInfo[i].gtid == gtid) {
       TdgCreationInfo[i].gtid = -1;
-      TdgCreationInfo[i].currentTaskGenID = -1;
+       KMP_ATOMIC_ST_RLX(&TdgCreationInfo[i].currentTaskGenID, -1);
       TdgCreationInfo[i].tdg = nullptr;
     }
   }
 }
+
 kmp_int32 obtainTdgCreationInfo(kmp_int32 gtid) {
   if (TdgCreationInfoSize == 0) {
     TdgCreationInfoSize = 2;
     TdgCreationInfo = (kmp_tdg_creation_info *)malloc(TdgCreationInfoSize *
                                                   sizeof(kmp_tdg_creation_info));
-    TdgCreationInfo[0] = {0, gtid, nullptr};
+    TdgCreationInfo[0].gtid = gtid;
+    TdgCreationInfo[0].tdg = nullptr;
+    void * pCounters = (void *) &TdgCreationInfo[0].currentTaskGenID;
+    new (pCounters) std::atomic<kmp_int32>(0);    
+
     NtdgsBeingCreated++;
 
     for (int i=1; i< TdgCreationInfoSize; i++){
-      TdgCreationInfo[i] = {-1, -1, nullptr};
+      TdgCreationInfo[i].gtid = -1;
+      TdgCreationInfo[i].tdg = nullptr;
+      KMP_ATOMIC_ST_RLX(&TdgCreationInfo[i].currentTaskGenID, -1);
     }
     return 0;
   } else if (NtdgsBeingCreated > TdgCreationInfoSize) {
@@ -1148,16 +1218,27 @@ kmp_int32 obtainTdgCreationInfo(kmp_int32 gtid) {
     TdgCreationInfoSize += 2;
     TdgCreationInfo = (kmp_tdg_creation_info *)realloc(
         TdgCreationInfo, TdgCreationInfoSize * sizeof(kmp_tdg_creation_info));
-    TdgCreationInfo[oldsize] = {0, gtid, nullptr};
+
+
+    TdgCreationInfo[oldsize].gtid = gtid;
+    TdgCreationInfo[oldsize].tdg = nullptr;
+    KMP_ATOMIC_ST_RLX(&TdgCreationInfo[oldsize].currentTaskGenID, 0);
+
     NtdgsBeingCreated++;
     for (int i=oldsize+1; i< TdgCreationInfoSize; i++){
-      TdgCreationInfo[i] = {-1, -1, nullptr};
+      TdgCreationInfo[i].gtid = -1;
+      TdgCreationInfo[i].tdg = nullptr;
+      KMP_ATOMIC_ST_RLX(&TdgCreationInfo[i].currentTaskGenID, -1);
     }
     return oldsize;
   } else {
     for (int i = 0; i < TdgCreationInfoSize; i++) {
       if (TdgCreationInfo[i].gtid == -1) {
-        TdgCreationInfo[i] = {0, gtid, nullptr};
+
+        TdgCreationInfo[i].gtid = gtid;
+        TdgCreationInfo[i].tdg = nullptr;
+        KMP_ATOMIC_ST_RLX(&TdgCreationInfo[i].currentTaskGenID, 0);
+
         NtdgsBeingCreated++;
         return i;
       }
@@ -1186,6 +1267,9 @@ void __kmpc_set_tdg(struct kmp_node_info *tdg, kmp_int32 gtid, kmp_int32 tdg_id,
   }
   __kmp_acquire_futex_lock(&TdgLock, 0);
   kmp_int32 tdgCreationIndex = obtainTdgCreationInfo(gtid);
+  if(Ntdgs > NUM_TDG_LIMIT){
+    printf("internal OpenMP error: Max number of TDGs exceeded \n");
+  }
   int current_tdg_number = Ntdgs;
   Ntdgs++;
   __kmp_release_futex_lock(&TdgLock, 0);
@@ -1198,7 +1282,6 @@ void __kmpc_set_tdg(struct kmp_node_info *tdg, kmp_int32 gtid, kmp_int32 tdg_id,
   GlobalTdgs[current_tdg_number].numRoots = nroots;
   GlobalTdgs[current_tdg_number].rootTasks = roots;
   GlobalTdgs[current_tdg_number].RecordMap = tdg;
-
   /*
   GlobalTdgs[current_tdg_number].taskIdent = nullptr;
   GlobalTdgs[current_tdg_number].colorMap = nullptr;
@@ -1216,7 +1299,7 @@ void __kmpc_set_tdg(struct kmp_node_info *tdg, kmp_int32 gtid, kmp_int32 tdg_id,
 }
 
 kmp_int32 __kmpc_record(ident_t *loc_ref, kmp_int32 gtid, void (*entry)(void *),
-                        void *args, kmp_int32 tdg_id) {
+                        void *args, kmp_int32 tdg_id, bool re_rec) {
 
   kmp_int32 ThisMapSize = INIT_MAPSIZE;
 
@@ -1238,20 +1321,26 @@ kmp_int32 __kmpc_record(ident_t *loc_ref, kmp_int32 gtid, void (*entry)(void *),
     ThisRecordMap[i].successors_size = SuccessorsSize;
     ThisRecordMap[i].static_thread = -1;
     void * pCounters = (void *) &ThisRecordMap[i].npredecessors_counter;
-    new (pCounters) std::atomic<kmp_int32>(0);
+        new (pCounters) std::atomic<kmp_int32>(0);
   }
   for (int i = 0; i < ThisColorMapSize; i++) {
     ThisColorMap[i] = {nullptr, nullptr};
   }
-  // printf("[OpenMP] Finish initializing Record map \n");
-
 
   //Lock tdg creation info and global tdg number counter
   __kmp_acquire_futex_lock(&TdgLock, 0);
   kmp_int32 tdgCreationIndex = obtainTdgCreationInfo(gtid);
 
+  if(Ntdgs > NUM_TDG_LIMIT){
+    printf("internal OpenMP error: Max number of TDGs exceeded \n");
+  }
   int current_tdg_number = Ntdgs;
-  Ntdgs++;
+
+  if (!re_rec)
+    Ntdgs++;
+  else
+    current_tdg_number--;
+
   __kmp_release_futex_lock(&TdgLock, 0);
 
   TdgCreationInfo[tdgCreationIndex].tdg = &GlobalTdgs[current_tdg_number];
@@ -1269,13 +1358,17 @@ kmp_int32 __kmpc_record(ident_t *loc_ref, kmp_int32 gtid, void (*entry)(void *),
   GlobalTdgs[current_tdg_number].colorMapSize = 20;
   GlobalTdgs[current_tdg_number].tdgStatus = TDG_RECORDING;
   GlobalTdgs[current_tdg_number].numTasks = 0;
+  GlobalTdgs[current_tdg_number].rec_num_taskred = 0;
+  GlobalTdgs[current_tdg_number].rec_taskred_data = nullptr;
+
   void * pCounters = (void *) &GlobalTdgs[current_tdg_number].remainingTasks;
   new (pCounters) std::atomic<kmp_int32>(0);
 
+  __kmpc_taskgroup(loc_ref, gtid);
   //Start recording and wait to finish
   entry(args);
-  __kmpc_omp_taskwait(loc_ref, gtid);
-
+  __kmpc_end_taskgroup(loc_ref, gtid);
+  
   //We have to update the mapsize and the record pointer, as it may change during task creation
   ThisRecordMap = GlobalTdgs[current_tdg_number].RecordMap;
   ThisMapSize = GlobalTdgs[current_tdg_number].mapSize;
@@ -1294,18 +1387,20 @@ kmp_int32 __kmpc_record(ident_t *loc_ref, kmp_int32 gtid, void (*entry)(void *),
   GlobalTdgs[current_tdg_number].numRoots = ThisNumRoots;
   GlobalTdgs[current_tdg_number].rootTasks = ThisRootTasks;
   GlobalTdgs[current_tdg_number].tdgStatus = TDG_NONE;
-
+  GlobalTdgs[current_tdg_number].spent_time = 0;
   //Clean tdg creation info slot
   cleanTdgCreationInfo(gtid);
   // printf("[OpenMP] Recording finished! \n");
   erase_transitive_edges(&GlobalTdgs[current_tdg_number]);
   // print_tdg(&GlobalTdgs[current_tdg_number]);
+  // remove taskgroup from recorded tasks, not needed since taskwait is
+  // called at the end of execute_tdg
+  //erase_taskgroup();
   char *my_env_var = getenv("OMP_PRINT_TDG");
   if (my_env_var && strcmp(my_env_var, "TRUE") == 0) {
     // printf("[OpenMP] Dot file tdg.dot generated \n");
     print_tdg_to_dot(&GlobalTdgs[current_tdg_number]);
   }
-
 
   //We have to clean the dephash after recording, to avoid conflicts
   kmp_info_t *thread = __kmp_threads[gtid];
@@ -1322,8 +1417,26 @@ kmp_int32 __kmpc_record(ident_t *loc_ref, kmp_int32 gtid, void (*entry)(void *),
   return 1;
 }
 
+void freeTDG(int tdg_index, int gtid){  
+   kmp_info_t *thread = __kmp_threads[gtid];
+
+   for (kmp_int32 i = 0; i < GlobalTdgs[tdg_index].numTasks; i++) {
+    free(GlobalTdgs[tdg_index].RecordMap[i].successors);
+    kmp_taskdata_t *taskdata = KMP_TASK_TO_TASKDATA(GlobalTdgs[tdg_index].RecordMap[i].task);
+    taskdata->is_taskgraph = 0;
+    taskdata->td_flags.executing = 0;
+    taskdata->td_flags.complete = 1;
+    taskdata->td_flags.freed = 0;
+    __kmp_free_task_and_ancestors(gtid, taskdata, thread);
+   }
+   free(GlobalTdgs[tdg_index].RecordMap);
+   free(GlobalTdgs[tdg_index].rootTasks);
+   free(GlobalTdgs[tdg_index].taskIdent);
+   free(GlobalTdgs[tdg_index].colorMap);
+}
+
 void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 tdg_id,
-                      void (*entry)(void *), void *args, kmp_int32 tdg_type) {
+                      void (*entry)(void *), void *args, kmp_int32 tdg_type, kmp_int32 if_cond, bool nowait) {
   int tdg_index = -1;
   for (int i = 0; i < Ntdgs; i++) {
     if (GlobalTdgs[i].tdgId == tdg_id) {
@@ -1334,23 +1447,33 @@ void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 tdg_id,
             KMP_ATOMIC_LD_RLX(&GlobalTdgs[i].remainingTasks);
         // Wait if this tdg is already running
         if (remainingTasks > 0) {
-          // printf("Espero a mi mismo \n");
           __kmpc_omp_taskwait(loc_ref, gtid);
         }
-        // printf("Executing!  \n");
+        // printf("Executing! \n");
+        if(!if_cond || tdg_type == STATIC_TDG) {
+          if (!nowait)
+            __kmpc_taskgroup(loc_ref, gtid);
 
-        __kmpc_execute_tdg(loc_ref, gtid, tdg_index);
+          __kmpc_execute_tdg(loc_ref, gtid, tdg_index);
 
-        return;
+          if (!nowait)
+            __kmpc_end_taskgroup(loc_ref, gtid);
+
+          return;
+        }
       }
     }
   }
 
   if (tdg_type == DYNAMIC_TDG) {
     // printf("Recording! \n");
-    __kmpc_record(loc_ref, gtid, entry, args, tdg_id);
+    if(tdg_index!=-1 && if_cond)
+      freeTDG(tdg_index, gtid);
+      
+    __kmpc_record(loc_ref, gtid, entry, args, tdg_id, if_cond);
   } else if (tdg_type == STATIC_TDG) {
-
+    if (!nowait)
+      __kmpc_taskgroup(loc_ref, gtid);
     char *my_env_var = getenv("OMP_TASK_SCHEDULE");
     if (my_env_var && strcmp(my_env_var, "static") == 0) {
       StaticSchedule = true;
@@ -1365,7 +1488,6 @@ void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 tdg_id,
       kmp_info_t *thread = __kmp_threads[gtid];
       kmp_taskdata_t *parent_task = thread->th.th_current_task;
       for (kmp_int32 i = 0; i < ThisMapSize; i++) {
-
         ThisRecordMap[i].parent_task = parent_task;
         int Pragma = ThisRecordMap[i].pragma_id;
         int *SharedPositions = task_static_table[Pragma].sharedDataPositions;
@@ -1402,8 +1524,9 @@ void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 tdg_id,
       // From TDG_FILL_DATA to TDG_NONE
       GlobalTdgs[tdg_index].tdgStatus = TDG_NONE;
     }
-
     __kmpc_execute_tdg(loc_ref, gtid, tdg_index);
+    if (!nowait)
+      __kmpc_end_taskgroup(loc_ref, gtid);
   } else {
     printf("internal OpenMP error: tdg_type not recognized\n");
   }
@@ -1641,6 +1764,7 @@ kmp_task_t *kmp_init_lazy_task(int static_id, kmp_task_t *current_task,
   new_taskdata->is_taskgraph = 1;
   new_taskdata->tdg = &GlobalTdgs[tdg_index];
   new_taskdata->groupID = 0;
+  new_taskdata->is_taskloop = 0;
   new_taskdata->td_task_id = tdg->static_id;
   new_taskdata->td_team = thread->th.th_team;
   new_taskdata->td_alloc_thread = thread;

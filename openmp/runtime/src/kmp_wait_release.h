@@ -19,7 +19,6 @@
 #if OMPT_SUPPORT
 #include "ompt-specific.h"
 #endif
-
 /*!
 @defgroup WAIT_RELEASE Wait/Release operations
 

@@ -333,7 +333,7 @@ __OMP_RTL(__kmpc_omp_task_alloc, false, /* kmp_task_t */ VoidPtr, IdentPtr,
           Int32, Int32, SizeTy, SizeTy, TaskRoutineEntryPtr)
 __OMP_RTL(__kmpc_omp_task, false, Int32, IdentPtr, Int32,
           /* kmp_task_t */ VoidPtr)
-__OMP_RTL(__kmpc_taskgraph, false, Void, IdentPtr, Int32, Int64, VoidPtr, VoidPtr, Int32)
+__OMP_RTL(__kmpc_taskgraph, false, Void, IdentPtr, Int32, Int64, VoidPtr, VoidPtr, Int32, Int32, Int1)
 __OMP_RTL(__kmpc_getNewGroupID, false, Int32, IdentPtr)
 __OMP_RTL(__kmpc_getFakeAddrGroupID, false, Int32, IdentPtr)
 __OMP_RTL(__kmpc_getNewTaskID, false, Int32, IdentPtr)

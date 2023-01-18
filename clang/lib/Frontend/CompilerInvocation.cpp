@@ -3482,6 +3482,9 @@ void CompilerInvocation::GenerateLangArgs(const LangOptions &Opts,
     if (Opts.OpenMPStaticTaskGraph)
       GenerateArg(Args, OPT_static_tdg, SA);
 
+    if (Opts.OpenMPCudaTDG)
+      GenerateArg(Args, OPT_cuda_tdg, SA);
+
     if (Opts.OpenMPPrealloc)
       GenerateArg(Args, OPT_prealloc_tdg, SA);
 

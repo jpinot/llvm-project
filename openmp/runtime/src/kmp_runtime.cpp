@@ -6170,7 +6170,7 @@ static void __kmp_reap_thread(kmp_info_t *thread, int is_root) {
   __kmp_free_implicit_task(thread);
 
 // Free the fast memory for tasking
-#if USE_FAST_MEMORY
+#if USE_FAST_MEMORY && !LIBOMP_TASKGRAPH
   __kmp_free_fast_memory(thread);
 #endif /* USE_FAST_MEMORY */
 

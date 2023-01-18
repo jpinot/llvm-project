@@ -2493,6 +2493,9 @@ def fopenmp_replication_arch : Joined<["-"], "fopenmp-replication-arch=">, Group
 def prealloc_tdg : Flag<["-"], "prealloc">, Group<f_Group>,
   Flags<[CC1Option, NoArgumentUnused, HelpHidden]>,
   HelpText<"Enable support for taskgraph preallocation.">;
+def cuda_tdg : Flag<["-"], "cuda-tdg">, Group<f_Group>,
+  Flags<[CC1Option, NoArgumentUnused, HelpHidden]>,
+  HelpText<"Enable cuda graph generation based on static tdg generation">;
 def dynamic_variant : Flag<["-"], "dynamic-variant">, Group<f_Group>,
   Flags<[CC1Option, NoArgumentUnused, HelpHidden]>,
   HelpText<"Enable support for dynamic variants.">;

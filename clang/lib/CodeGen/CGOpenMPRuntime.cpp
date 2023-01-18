@@ -38,6 +38,7 @@
 #include "llvm/Support/AtomicOrdering.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
+#include <stdio.h> // debug purpose
 #include <cassert>
 #include <numeric>
 
@@ -6487,7 +6488,7 @@ void markFunctionsInlineInsideTaskgraph(llvm::Function &F) {
 
   for (llvm::BasicBlock &bb : F) {
     for (llvm::Instruction &I : bb) {
-      if (llvm::CallInst *call = dyn_cast<llvm::CallInst>(&I)) {
+      if (llvm::CallBase *call = dyn_cast<llvm::CallBase>(&I)) {
         llvm::Function *CalledFunction = call->getCalledFunction();
         if(!CalledFunction->isDeclaration())
           markFunctionsInlineInsideTaskgraph(*(call->getCalledFunction()));
@@ -6519,18 +6520,21 @@ void CGOpenMPRuntime::emitTaskgraphCall(CodeGenFunction &CGF,
                                                /*isSigned=*/false);
   }
 
-  //llvm::Value *IfVal = nullptr;
+  llvm::Value *IfVal = nullptr;
 
-  /*
-  for (const auto *C : D.getClausesOfKind<OMPIfClause>()) {
-    const Expr *Cond = C->getCondition();
-    llvm::Value *CondVal = nullptr;
-    CondVal = CGF.EvaluateExprAsBool(Cond);
+  const OMPIfClause *IfClause = D.getSingleClause<OMPIfClause>();
+  if (IfClause) {
+    const Expr *Cond = IfClause->getCondition();
+    llvm::Value *CondVal = CGF.EvaluateExprAsBool(Cond);
     if (CondVal) {
       IfVal = CGF.Builder.CreateIntCast(CondVal, CGF.IntTy,
-                                        /*isSigned=*///true);
-  //  }
-  //}
+                                        /*isSigned=*/true);
+    }
+  }
+
+  llvm::Value *Nowait = CGF.Builder.getInt1(0);
+  if (D.getSingleClause<OMPNowaitClause>())
+    Nowait = CGF.Builder.getInt1(1);
 
   CodeGenFunction OutlinedCGF(CGM, true);
 
@@ -6546,13 +6550,12 @@ void CGOpenMPRuntime::emitTaskgraphCall(CodeGenFunction &CGF,
   CodeGenFunction::CGCapturedStmtRAII CapInfoRAII(OutlinedCGF, &TaskgraphRegion);
   llvm::Function *FnT = OutlinedCGF.GenerateCapturedStmtFunction(*CS);
 
-  /*
+  
   llvm::Value *Condition = nullptr;
   if (IfVal != nullptr)
     Condition = IfVal;
   else
     Condition = CGF.Builder.getInt32(0);
-  */
 
   // Dynamic TDGs start from id 1000 and static TDGs from 0.
   static int dynamicTDGId = 1000;
@@ -6565,8 +6568,9 @@ void CGOpenMPRuntime::emitTaskgraphCall(CodeGenFunction &CGF,
       CGF.Builder.CreatePointerBitCastOrAddrSpaceCast(FnT, CGF.Int8PtrTy),
       CGF.Builder.CreatePointerBitCastOrAddrSpaceCast(
           CapStruct.getPointer(OutlinedCGF), CGF.Int8PtrTy),
-      CGF.Builder.getInt32(tdg_type)};
+      CGF.Builder.getInt32(tdg_type), Condition, Nowait};
   // Static TDG
+  llvm::Function *FnCu;
   if (tdg_type) {
     if (!FnT->hasFnAttribute("llvm.omp.taskgraph.static"))
       FnT->addFnAttr("llvm.omp.taskgraph.static");
@@ -11630,6 +11634,7 @@ void CGOpenMPRuntime::emitTargetDataStandAloneCall(
   CodeGenFunction::OMPTargetDataInfo InputInfo;
   llvm::Value *MapTypesArray = nullptr;
   llvm::Value *MapNamesArray = nullptr;
+
   // Generate the code for the opening of the data environment.
   auto &&ThenGen = [this, &D, Device, &InputInfo, &MapTypesArray,
                     &MapNamesArray](CodeGenFunction &CGF, PrePostActionTy &) {

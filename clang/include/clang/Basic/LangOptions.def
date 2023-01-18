@@ -246,6 +246,7 @@ LANGOPT(OpenMPTargetNewRuntime , 1, 0, "Use the new bitcode library for OpenMP o
 LANGOPT(OpenMPTargetDebug , 32, 0, "Enable debugging in the OpenMP offloading device RTL")
 LANGOPT(OpenMPOptimisticCollapse  , 1, 0, "Use at most 32 bits to represent the collapsed loop nest counter.")
 LANGOPT(OpenMPTaskGraph   , 1, 0, "Enable support for #pragma omp taskgraph")
+LANGOPT(OpenMPCudaTDG     , 1, 0, "Enable Cuda Graph generation from static tdg")
 LANGOPT(OpenMPStaticTaskGraph   , 1, 0, "Enable support for static #pragma omp taskgraph")
 LANGOPT(OpenMPReplicationArch  , 1, 0, "Enable tasking 2o3 architecture for replication")
 LANGOPT(OpenMPReplicationMinimum  , 32, 0, "Minimum replicas to be executed for replication")

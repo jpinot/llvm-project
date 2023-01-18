@@ -182,6 +182,11 @@ TypeSize Type::getPrimitiveSizeInBits() const {
     assert(!ETS.isScalable() && "Vector type should have fixed-width elements");
     return {ETS.getFixedSize() * EC.getKnownMinValue(), EC.isScalable()};
   }
+  case Type::PointerTyID: {
+    // is it dangerous to do this?
+    uint64_t pointerSize = sizeof (void *) * 8;
+    return TypeSize::Fixed(pointerSize);
+  }
   default: return TypeSize::Fixed(0);
   }
 }

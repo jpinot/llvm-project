@@ -73,9 +73,11 @@ public:
   void print_tdg_to_dot(StringRef ModuleName, int ntdgs, Function &F);
   void generate_analysis_tdg_file(StringRef ModuleName);
   void generate_runtime_tdg_file(StringRef ModuleName, Function &F, int ntdgs);
+  void clear();
   void obtainTaskIdent(TaskInfo &TaskFound, CallInst &TaskCall);
-  std::string get_c_struct_from_types(SmallVectorImpl<Type *> &types,
-                                      int struct_id, bool is_private);
+  // static so that it can be used in cuda generation
+  static std::string get_c_struct_from_types(SmallVectorImpl<Type *> &types,
+                                      int struct_id, bool is_private, std::string name = "");
   std::string get_task_layout(std::string LongestPrivateName,
                               std::string LongestSharedName);
   void erase_transitive_edges();

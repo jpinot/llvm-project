@@ -5017,9 +5017,6 @@ void CodeGenFunction::EmitOMPTaskDirective(const OMPTaskDirective &S) {
   EmitOMPTaskBasedDirective(S, OMPD_task, BodyGen, TaskGen, Data);
 
   if (NumReplicas) {
-     //Emit callback
-    CGM.getOpenMPRuntime().emitTaskReplicasCallback(
-        *this, S.getBeginLoc(), S, FuncToCall, OriginalVarValue, GroupID);
     // Generate multiple tasks
     for (int i = 0; i < NumReplicas; i++) {
 
@@ -5146,6 +5143,9 @@ void CodeGenFunction::EmitOMPTaskDirective(const OMPTaskDirective &S) {
 
     EmitOMPTaskBasedDirective(S, OMPD_task, EmptyBodyGen, TaskGen,
                               ArtificialTaskData);
+    //Emit callback
+    CGM.getOpenMPRuntime().emitTaskReplicasCallback(
+        *this, S.getBeginLoc(), S, FuncToCall, OriginalVarValue, GroupID);
   }
 }
 

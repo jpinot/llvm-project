@@ -1107,13 +1107,11 @@ extern void __kmp_init_target_mem();
 /* Calculate new number of monitor wakeups for a specific block time based on
    previous monitor_wakeups. Only allow increasing number of wakeups */
 #define KMP_WAKEUPS_FROM_BLOCKTIME(blocktime, monitor_wakeups)                 \
-  (((blocktime) == KMP_MAX_BLOCKTIME)                                          \
+  (((blocktime) == KMP_MAX_BLOCKTIME)   ? (monitor_wakeups)                    \
+   : ((blocktime) == KMP_MIN_BLOCKTIME) ? KMP_MAX_MONITOR_WAKEUPS              \
+   : ((monitor_wakeups) > (KMP_BLOCKTIME_MULTIPLIER / (blocktime)))            \
        ? (monitor_wakeups)                                                     \
-       : ((blocktime) == KMP_MIN_BLOCKTIME)                                    \
-             ? KMP_MAX_MONITOR_WAKEUPS                                         \
-             : ((monitor_wakeups) > (KMP_BLOCKTIME_MULTIPLIER / (blocktime)))  \
-                   ? (monitor_wakeups)                                         \
-                   : (KMP_BLOCKTIME_MULTIPLIER) / (blocktime))
+       : (KMP_BLOCKTIME_MULTIPLIER) / (blocktime))
 
 /* Calculate number of intervals for a specific block time based on
    monitor_wakeups */
@@ -2366,7 +2364,7 @@ typedef struct kmp_base_depnode {
   kmp_lock_t *mtx_locks[MAX_MTX_DEPS]; /* lock mutexinoutset dependent tasks */
   kmp_int32 mtx_num_locks; /* number of locks in mtx_locks array */
   kmp_lock_t lock; /* guards shared fields: task, successors */
-  kmp_uint32 part_id; /* used by untied */
+  kmp_uint32 part_id;
 #if KMP_SUPPORT_GRAPH_OUTPUT
   kmp_uint32 id;
 #endif
@@ -2496,7 +2494,7 @@ struct kmp_node_info {
 #define INIT_MAPSIZE 50
 
 //Maximum number of TDGs
-#define NUM_TDG_LIMIT 50
+#define NUM_TDG_LIMIT 100
 
 struct kmp_ident_task {
   const char *td_ident;
@@ -2522,11 +2520,16 @@ struct kmp_tdg_info {
   kmp_tdg_status tdgStatus; //Status of the TDG (recording, filling data...)
   kmp_int32 numTasks; //Number of TDG nodes
   std::atomic<kmp_int32> remainingTasks; //Used to know if the TDG is finished
+  double spent_time; // time spent to execute this tdg, in us
+  // taskloop reduction related
+  void *rec_taskred_data; // data to pass to __kmpc_task_reduction_init or
+                          // __kmpc_taskred_init
+  kmp_int32 rec_num_taskred;
 };
 
 //Structure to associate a task gen ID for each thread. This is needed to allow several threads to record different TDGs at the same time
 struct kmp_tdg_creation_info {
-  kmp_int32 currentTaskGenID;
+  std::atomic<kmp_int32> currentTaskGenID;
   kmp_int32 gtid;
   kmp_tdg_info *tdg;
 };
@@ -2608,8 +2611,9 @@ struct kmp_taskdata { /* aligned during dynamic allocation       */
 #endif
 #if LIBOMP_TASKGRAPH
   //Used to know if the task is created inside a taskgraph
-  int is_taskgraph = 0;
-  //Used for preallocation mechanism
+  bool is_taskgraph = 0;
+  bool is_taskloop = 0;
+  double duration = 0;
   struct kmp_space_indexer_node *indexer_node;
   //Used for replicas
   int groupID = 0;
@@ -2639,10 +2643,23 @@ typedef struct kmp_base_thread_data {
   kmp_task_stack_t td_susp_tied_tasks; // Stack of suspended tied tasks for task
 // scheduling constraint
 #endif // BUILD_TIED_TASK_STACK
+#if LIBOMP_TASKGRAPH
+#define MAX_NUM_PROC 100
+  kmp_task_t *
+      *td_tdg_tasks[NUM_TDG_LIMIT]; // an array containing many arrays of tasks
+                                    // (as kmp_task_t *) associated with this
+                                    // thread in different tdgs, allocated
+                                    // dynamically
+  kmp_int32
+      td_tdg_ntasks[NUM_TDG_LIMIT]; // how many tdg tasks in current thread
+  kmp_uint td_tdg_sizes[NUM_TDG_LIMIT]; // size of the dynamic allocated array
+#endif // LIBOMP_TASKGRAPH
 } kmp_base_thread_data_t;
 
 #define TASK_DEQUE_BITS 8 // Used solely to define INITIAL_TASK_DEQUE_SIZE
+#define TDG_TASK_DEQUE_BITS 6 // shorter task deque for tdg so they spent less time in scheduling but more in execution
 #define INITIAL_TASK_DEQUE_SIZE (1 << TASK_DEQUE_BITS)
+#define INITIAL_TDG_TASK_DEQUE_SIZE (1 << TDG_TASK_DEQUE_BITS)
 
 #define TASK_DEQUE_SIZE(td) ((td).td_deque_size)
 #define TASK_DEQUE_MASK(td) ((td).td_deque_size - 1)
@@ -4036,9 +4053,12 @@ KMP_EXPORT kmp_int32 __kmpc_omp_taskwait(ident_t *loc_ref, kmp_int32 gtid);
 #if LIBOMP_TASKGRAPH
 KMP_EXPORT void __kmpc_set_tdg(struct kmp_node_info *tdg,  kmp_int32 gtid, kmp_int32 tdg_id,  kmp_int32 ntasks,
                                kmp_int32 *roots, kmp_int32 nroots);
+// KMP_EXPORT void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid,
+//                                  void (*entry)(void *), void *args,
+//                                  kmp_int32 tdg_type);
 KMP_EXPORT void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid,
                                  kmp_int32 tdg_id, void (*entry)(void *),
-                                 void *args, kmp_int32 tdg_type);
+                                 void *args, kmp_int32 tdg_type, kmp_int32 if_cond, bool nowait);
 KMP_EXPORT void __kmpc_prealloc_tasks(
     kmp_task_alloc_info *task_static_data, char *preallocated_tasks,
     kmp_space_indexer_node *preallocated_nodes, kmp_uint32 n_task_constructs,
@@ -4051,7 +4071,8 @@ KMP_EXPORT kmp_int32 __kmpc_getNewTaskID(ident_t *loc_ref);
 KMP_EXPORT void __kmpc_prepare_taskwait(kmp_task_t *task, void *data, kmp_int32 groupID, kmp_int32 gtid, bool spatialConstraint);
 KMP_EXPORT void __kmpc_replication_callback(ident_t *loc_ref, void *callbackFunction, kmp_int32 groupID, kmp_int32 threadID);
 #endif
-KMP_EXPORT kmp_int32 __kmpc_dynamic_variant(kmp_int32 *traits, int numVariants, kmp_int32 *user_conditions);
+KMP_EXPORT kmp_int32 __kmpc_dynamic_variant(kmp_int32 *traits, int numVariants,
+                                            kmp_int32 *user_conditions);
 KMP_EXPORT kmp_int32 __kmpc_omp_taskyield(ident_t *loc_ref, kmp_int32 gtid,
                                           int end_part);
 
@@ -4169,6 +4190,17 @@ KMP_EXPORT kmp_int32 __kmp_get_reduce_method(void);
 
 KMP_EXPORT kmp_uint64 __kmpc_get_taskid();
 KMP_EXPORT kmp_uint64 __kmpc_get_parent_taskid();
+
+// new functions for TDG task
+KMP_EXPORT void __kmp_insert_task_into_tdg(kmp_int32 gtid,
+                                           kmp_thread_data_t *thread_data,
+                                           kmp_int32 tdg_id, kmp_task_t *task);
+KMP_EXPORT void *__kmp_realloc_tdg_tasks(kmp_int32 gtid,
+                                         kmp_thread_data_t *thread_data,
+                                         kmp_int32 tdg_id);
+KMP_EXPORT void __kmp_alloc_tdg_tasks(kmp_int32 gtid,
+                                      kmp_thread_data_t *thread_data,
+                                      kmp_int32 tdg_id, int ntasks);
 
 // C++ port
 // missing 'extern "C"' declarations
@@ -4416,6 +4448,33 @@ int __kmp_execute_tasks_64(kmp_info_t *thread, kmp_int32 gtid,
                            void *itt_sync_obj,
 #endif /* USE_ITT_BUILD */
                            kmp_int32 is_constrained);
+
+template <bool C, bool S>
+int __kmp_schedule_tasks_32(kmp_info_t *thread, kmp_int32 gtid,
+                            kmp_flag_32<C, S> *flag, int final_spin,
+                            int *thread_finished,
+#if USE_ITT_BUILD
+                            void *itt_sync_obj,
+#endif /* USE_ITT_BUILD */
+                            kmp_int32 is_constrained);
+
+template <bool C, bool S>
+int __kmp_schedule_tasks_64(kmp_info_t *thread, kmp_int32 gtid,
+                            kmp_flag_64<C, S> *flag, int final_spin,
+                            int *thread_finished,
+#if USE_ITT_BUILD
+                            void *itt_sync_obj,
+#endif /* USE_ITT_BUILD */
+                            kmp_int32 is_constrained);
+
+template <bool C, bool S>
+int __kmp_atomic_schedule_tasks_64(kmp_info_t *thread, kmp_int32 gtid,
+                                   kmp_atomic_flag_64<C, S> *flag,
+                                   int final_spin, int *thread_finished,
+#if USE_ITT_BUILD
+                                   void *itt_sync_obj,
+#endif /* USE_ITT_BUILD */
+                                   kmp_int32 is_constrained);
 template <bool C, bool S>
 int __kmp_atomic_execute_tasks_64(kmp_info_t *thread, kmp_int32 gtid,
                                   kmp_atomic_flag_64<C, S> *flag,
@@ -4431,6 +4490,14 @@ int __kmp_execute_tasks_oncore(kmp_info_t *thread, kmp_int32 gtid,
                                void *itt_sync_obj,
 #endif /* USE_ITT_BUILD */
                                kmp_int32 is_constrained);
+
+int __kmp_schedule_tasks_oncore(kmp_info_t *thread, kmp_int32 gtid,
+                                kmp_flag_oncore *flag, int final_spin,
+                                int *thread_finished,
+#if USE_ITT_BUILD
+                                void *itt_sync_obj,
+#endif /* USE_ITT_BUILD */
+                                kmp_int32 is_constrained);
 
 extern int __kmp_nesting_mode;
 extern int __kmp_nesting_mode_nlevels;

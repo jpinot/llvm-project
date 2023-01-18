@@ -2823,27 +2823,6 @@ Parser::ParseOpenMPDeclarativeOrExecutableDirective(ParsedStmtContext StmtCtx) {
     ParseScope OMPDirectiveScope(this, ScopeFlags);
     Actions.StartOpenMPDSABlock(DKind, DirName, Actions.getCurScope(), Loc);
 
-    bool TaskReplicated = false;
-    if (DKind == OMPD_task) {
-      // We must know if the task is replicated before parsing all clauses,
-      // since shareds are transformed into firstprivates
-      std::vector<Token> SavedToks;
-      while (Tok.isNot(tok::annot_pragma_openmp_end)) {
-        SavedToks.push_back(Tok);
-        OpenMPClauseKind CKind = Tok.isAnnotation()
-                                     ? OMPC_unknown
-                                     : getOpenMPClauseKind(PP.getSpelling(Tok));
-        if (CKind == OMPC_replicated)
-          TaskReplicated = true;
-
-        ConsumeAnyToken();
-      }
-
-      for (int i = SavedToks.size() - 1; i >= 0; i--) {
-        UnconsumeToken(SavedToks[i]);
-      }
-    }
-
     while (Tok.isNot(tok::annot_pragma_openmp_end)) {
       // If we are parsing for a directive within a metadirective, the directive
       // ends with a ')'.
@@ -2874,10 +2853,6 @@ Parser::ParseOpenMPDeclarativeOrExecutableDirective(ParsedStmtContext StmtCtx) {
           CKind = OMPC_depobj;
         }
       }
-
-      //Transform shareds clauses into firstprivates
-      if(TaskReplicated && CKind == OMPC_shared)
-        CKind = OMPC_firstprivate;
 
       // No more implicit clauses allowed.
       ImplicitClauseAllowed = false;

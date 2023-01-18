@@ -23,11 +23,17 @@
 #include "llvm/Analysis/VectorUtils.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/Type.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/FileSystem.h"
 
+// for debug/understanding purpose
+#include <fstream>
+#include <iostream>
+
+#define DEBUG_CUDA_TDG 1
 using namespace llvm;
 const StringRef Color_names[] = {
     "aquamarine3", "crimson",         "chartreuse",  "blue2",
@@ -121,7 +127,8 @@ void TaskDependencyGraphData::obtainTaskInfo(TaskInfo &TaskFound,
 
               if (LoadInst *BaseLoad = dyn_cast<LoadInst>(GEP->getOperand(0))) {
                 CurrentTaskDepInfo.base = BaseLoad->getPointerOperand();
-                if(LoadInst *DobleLoad = dyn_cast<LoadInst>(CurrentTaskDepInfo.base))
+                if (LoadInst *DobleLoad =
+                        dyn_cast<LoadInst>(CurrentTaskDepInfo.base))
                   CurrentTaskDepInfo.base = DobleLoad->getPointerOperand();
               } else {
                 CurrentTaskDepInfo.base = GEP->getOperand(0);
@@ -144,7 +151,8 @@ void TaskDependencyGraphData::obtainTaskInfo(TaskInfo &TaskFound,
                       dyn_cast<LoadInst>(BasePtrToInt->getPointerOperand())) {
 
                 CurrentTaskDepInfo.base = BaseLoad->getPointerOperand();
-                if(LoadInst *DobleLoad = dyn_cast<LoadInst>(CurrentTaskDepInfo.base))
+                if (LoadInst *DobleLoad =
+                        dyn_cast<LoadInst>(CurrentTaskDepInfo.base))
                   CurrentTaskDepInfo.base = DobleLoad->getPointerOperand();
                 CurrentTaskDepInfo.isArray = false;
 
@@ -550,14 +558,21 @@ TaskDependencyGraphData::get_task_layout(std::string LongestPrivateName,
   return Result;
 }
 
-std::string TaskDependencyGraphData::get_c_struct_from_types(
-    SmallVectorImpl<Type *> &types, int pragma_id, bool is_private) {
+std::string
+TaskDependencyGraphData::get_c_struct_from_types(SmallVectorImpl<Type *> &types,
+                                                 int pragma_id, bool is_private,
+                                                 std::string name) {
   std::string Result;
 
-  if (is_private)
-    Result += "struct private_data_" + std::to_string(pragma_id) + "{\n";
-  else
-    Result += "struct shared_data_" + std::to_string(pragma_id) + "{\n";
+  // if name is not given
+  if (name.size() == 0) {
+    if (is_private)
+      Result += "struct private_data_" + std::to_string(pragma_id) + "{\n";
+    else
+      Result += "struct shared_data_" + std::to_string(pragma_id) + "{\n";
+  } else {
+    Result += "typedef struct " + name + "{\n";
+  }
   int num_members = 0;
   for (Type *this_type : types) {
     switch (this_type->getTypeID()) {
@@ -598,7 +613,11 @@ std::string TaskDependencyGraphData::get_c_struct_from_types(
       break;
     }
   }
-  Result += "};\n";
+  if (name.size() == 0)
+    Result += "};\n";
+  else
+    Result += "}" + name + ";\n";
+
   return Result;
 }
 
@@ -654,7 +673,7 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName, Fu
                "int gtid, int tdg_id, int "
                "ntasks, int *roots, int nroots);\n";
 
-    Tdgfile << "extern \"C\" void __kmpc_taskgraph(void *loc_ref, int gtid, int tdg_id, void (*entry)(void *), void *args, int tdg_type);\n";
+    Tdgfile << "extern \"C\" void __kmpc_taskgraph(void *loc_ref, int gtid, int tdg_id, void (*entry)(void *), void *args, int tdg_type, int if_cond, bool nowait);\n";
 
     if (Prealloc) {
       for (int i = 0; i < (int)TasksAllocInfo.size(); i++) {
@@ -789,78 +808,86 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName, Fu
     */
     for (int i = 0; i < (int)TasksAllocInfo.size(); i++) {
       Tdgfile << "int shared_data_positions_" << i << "[] = {";
-      for (int j = 0; j < (int)TasksAllocInfo[i].sharedDataPositions.size(); j++){
+      for (int j = 0; j < (int)TasksAllocInfo[i].sharedDataPositions.size();
+           j++) {
         Tdgfile << TasksAllocInfo[i].sharedDataPositions[j];
         if (j != (int)TasksAllocInfo[i].sharedDataPositions.size() - 1)
           Tdgfile << ", ";
         else
           Tdgfile << "};\n";
       }
-      if(!TasksAllocInfo[i].sharedDataPositions.size())
+      if (!TasksAllocInfo[i].sharedDataPositions.size())
         Tdgfile << "};\n";
 
       Tdgfile << "int firstprivate_data_positions_" << i << "[] = {";
-      for (int j = 0; j < (int)TasksAllocInfo[i].firstPrivateDataPositions.size(); j++){
+      for (int j = 0;
+           j < (int)TasksAllocInfo[i].firstPrivateDataPositions.size(); j++) {
         Tdgfile << TasksAllocInfo[i].firstPrivateDataPositions[j];
         if (j != (int)TasksAllocInfo[i].firstPrivateDataPositions.size() - 1)
           Tdgfile << ", ";
         else
           Tdgfile << "};\n";
       }
-      if(!TasksAllocInfo[i].firstPrivateDataPositions.size())
+      if (!TasksAllocInfo[i].firstPrivateDataPositions.size())
         Tdgfile << "};\n";
 
       Tdgfile << "int firstprivate_data_offsets_" << i << "[] = {";
-      for (int j = 0; j < (int)TasksAllocInfo[i].firstPrivateDataOffsets.size(); j++){
+      for (int j = 0; j < (int)TasksAllocInfo[i].firstPrivateDataOffsets.size();
+           j++) {
         Tdgfile << TasksAllocInfo[i].firstPrivateDataOffsets[j];
         if (j != (int)TasksAllocInfo[i].firstPrivateDataOffsets.size() - 1)
           Tdgfile << ", ";
         else
           Tdgfile << "};\n";
       }
-      if(!TasksAllocInfo[i].firstPrivateDataOffsets.size())
+      if (!TasksAllocInfo[i].firstPrivateDataOffsets.size())
         Tdgfile << "};\n";
 
       Tdgfile << "int firstprivate_data_sizes_" << i << "[] = {";
-      for (int j = 0; j < (int)TasksAllocInfo[i].firstPrivateDataSizes.size(); j++){
+      for (int j = 0; j < (int)TasksAllocInfo[i].firstPrivateDataSizes.size();
+           j++) {
         Tdgfile << TasksAllocInfo[i].firstPrivateDataSizes[j];
         if (j != (int)TasksAllocInfo[i].firstPrivateDataSizes.size() - 1)
           Tdgfile << ", ";
         else
           Tdgfile << "};\n";
       }
-      if(!TasksAllocInfo[i].firstPrivateDataSizes.size())
+      if (!TasksAllocInfo[i].firstPrivateDataSizes.size())
         Tdgfile << "};\n";
-
-
     }
     Tdgfile << "struct kmp_task_alloc_info task_static_data["
             << TasksAllocInfo.size() << "] = {";
     for (int i = 0; i < (int)TasksAllocInfo.size(); i++) {
 
-      Tdgfile << "{ .flags = " << TasksAllocInfo[i].flags
-              << ", .sizeOfTask = " << TasksAllocInfo[i].sizeOfTask
-              << ", .sizeOfShareds = " << TasksAllocInfo[i].sizeOfShareds
-              << ", .taskEntry = (void *) &"
-              << TasksAllocInfo[i].entryPoint->getName() << ", .sharedDataPositions = (int *) &shared_data_positions_" << i 
-              << ", .firstPrivateDataPositions = (int *) &firstprivate_data_positions_" << i
-              << ", .firstPrivateDataOffsets = (int *) &firstprivate_data_offsets_" << i
-              << ", .firstPrivateDataSizes = (int *) & firstprivate_data_sizes_" << i
-              << ", .numFirstPrivates = " << TasksAllocInfo[i].firstPrivateDataSizes.size() << "}";
+      Tdgfile
+          << "{ .flags = " << TasksAllocInfo[i].flags
+          << ", .sizeOfTask = " << TasksAllocInfo[i].sizeOfTask
+          << ", .sizeOfShareds = " << TasksAllocInfo[i].sizeOfShareds
+          << ", .taskEntry = (void *) &"
+          << TasksAllocInfo[i].entryPoint->getName()
+          << ", .sharedDataPositions = (int *) &shared_data_positions_" << i
+          << ", .firstPrivateDataPositions = (int *) "
+             "&firstprivate_data_positions_"
+          << i
+          << ", .firstPrivateDataOffsets = (int *) &firstprivate_data_offsets_"
+          << i
+          << ", .firstPrivateDataSizes = (int *) & firstprivate_data_sizes_"
+          << i << ", .numFirstPrivates = "
+          << TasksAllocInfo[i].firstPrivateDataSizes.size() << "}";
 
       if (i != (int)TasksAllocInfo.size() - 1)
         Tdgfile << ",\n";
       else
         Tdgfile << "};\n";
-
     }
   }
   std::pair<StringRef, StringRef> FNames = F.getName().split(".");
-  Tdgfile << "extern \"C\" void kmp_set_tdg_"<< FNames.first << "_" << FNames.second << "(void *loc_ref, int gtid, void (*entry)(void *), void *args, int tdg_type, int num_preallocs)\n{\n";
+  Tdgfile << "extern \"C\" void kmp_set_tdg_"<< FNames.first << "_" << FNames.second << "(void *loc_ref, int gtid, void (*entry)(void *), void *args, int tdg_type, int if_cond, bool nowait, int num_preallocs)\n{\n";
 
   if (Prealloc) {
     // Tdgfile << "printf(\" es: %d \", sizeof(struct kmp_task));\n";
-    Tdgfile << "  __kmpc_prealloc_tasks(task_static_data, (char *) preallocated_tasks, "
+    Tdgfile << "  __kmpc_prealloc_tasks(task_static_data, (char *) "
+               "preallocated_tasks, "
                "preallocated_nodes, "
             << FunctionTasks.size()
             << ", num_preallocs, sizeof(struct kmp_task)," << ntdgs << ");\n";
@@ -868,44 +895,44 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName, Fu
   Tdgfile << "  __kmpc_set_tdg(kmp_tdg_" << ntdgs << ", gtid, " << ntdgs  << ", " << FunctionTasks.size()
           << ", kmp_tdg_roots_" << ntdgs <<", " << TdgRoots.size() << ");\n";
 
-  Tdgfile << "  __kmpc_taskgraph(loc_ref, gtid, " << ntdgs << ", entry, args, tdg_type);\n}";
+  Tdgfile << "  __kmpc_taskgraph(loc_ref, gtid, " << ntdgs << ", entry, args, tdg_type, if_cond, nowait);\n}";
 
   Tdgfile.close();
 }
 
-int getTypeSizeInBytes(Type *this_type){
-   int result=0;
-   switch (this_type->getTypeID()) {
-    case Type::HalfTyID:
-      result= sizeof(short);
-      break;
+int getTypeSizeInBytes(Type *this_type) {
+  int result = 0;
+  switch (this_type->getTypeID()) {
+  case Type::HalfTyID:
+    result = sizeof(short);
+    break;
 
-    case Type::BFloatTyID:
-      result= sizeof(float);
-      break;
+  case Type::BFloatTyID:
+    result = sizeof(float);
+    break;
 
-    case Type::FloatTyID:
-      result= sizeof(float);
-      break;
+  case Type::FloatTyID:
+    result = sizeof(float);
+    break;
 
-    case Type::DoubleTyID:
-      result= sizeof(double);
-      break;
+  case Type::DoubleTyID:
+    result = sizeof(double);
+    break;
 
-    case Type::IntegerTyID:
-      result= (this_type->getIntegerBitWidth())/8;
-      break;
+  case Type::IntegerTyID:
+    result = (this_type->getIntegerBitWidth()) / 8;
+    break;
 
-    case Type::PointerTyID:
-      result= sizeof(void *);
-      break;
+  case Type::PointerTyID:
+    result = sizeof(void *);
+    break;
 
-    default:
-      dbgs() << "Data type not implemented or recognized "
-             << this_type->getTypeID() << "\n";
-      break;
-    }
-    return result;
+  default:
+    dbgs() << "Data type not implemented or recognized "
+           << this_type->getTypeID() << "\n";
+    break;
+  }
+  return result;
 }
 
 int TaskDependencyGraphData::findPragmaId(CallInst &TaskCallInst,
@@ -968,33 +995,33 @@ int TaskDependencyGraphData::findPragmaId(CallInst &TaskCallInst,
       if (Start == dyn_cast<Instruction>(TaskAllocUser)) {
         if (auto *ThisGEP = dyn_cast<GEPOperator>(TaskAllocUser)) {
           Value *ValSize = ThisGEP->getOperand(1);
-          int Size = (int) dyn_cast<ConstantInt>(ValSize)->getSExtValue() - 40;
+          int Size = (int)dyn_cast<ConstantInt>(ValSize)->getSExtValue() - 40;
           AllPositions.push_back(Size);
 
-          //Check if there is a private variable in the middle!!!
+          // Check if there is a private variable in the middle!!!
           int BytesDiff, LastBytes, DiffCount;
-          if(AllPositions.size() != 1){
-            BytesDiff= AllPositions.back()-AllPositions[AllPositions.size()-2];
-            LastBytes=  getTypeSizeInBytes(TaskPrivatesType[AllPositions.size()-2]);
-          }
-          else{
-            BytesDiff= AllPositions.back();
+          if (AllPositions.size() != 1) {
+            BytesDiff =
+                AllPositions.back() - AllPositions[AllPositions.size() - 2];
+            LastBytes =
+                getTypeSizeInBytes(TaskPrivatesType[AllPositions.size() - 2]);
+          } else {
+            BytesDiff = AllPositions.back();
             LastBytes = 0;
           }
-          if(BytesDiff != LastBytes){
-            int Index=0;
+          if (BytesDiff != LastBytes) {
+            int Index = 0;
             DiffCount = LastBytes;
-            while(DiffCount < BytesDiff){
+            while (DiffCount < BytesDiff) {
               PrivateValues.push_back(-2);
-              //dbgs()<< "Es " << DiffCount << " " << BytesDiff << " \n";
-              if(LastBytes!=0)
-                DiffCount+= 4;
+              // dbgs()<< "Es " << DiffCount << " " << BytesDiff << " \n";
+              if (LastBytes != 0)
+                DiffCount += 4;
               else
-                DiffCount+= 4; //getTypeSizeInBytes(TaskPrivatesType[Index]);
+                DiffCount += 4; // getTypeSizeInBytes(TaskPrivatesType[Index]);
               Index++;
             }
           }
-          
 
           Value *ValStored = nullptr;
           if (StoreInst *ConstantStore =
@@ -1003,9 +1030,8 @@ int TaskDependencyGraphData::findPragmaId(CallInst &TaskCallInst,
           } else if (StoreInst *ConstantStore =
                          dyn_cast<StoreInst>(Start->getNextNode())) {
             ValStored = ConstantStore->getValueOperand();
-          }
-          else if (StoreInst *ConstantStore =
-                         dyn_cast<StoreInst>(Start->getNextNode()->getNextNode()->getNextNode())) {
+          } else if (StoreInst *ConstantStore = dyn_cast<StoreInst>(
+                         Start->getNextNode()->getNextNode()->getNextNode())) {
             ValStored = ConstantStore->getValueOperand();
           }
           if (ValStored) {
@@ -1013,15 +1039,16 @@ int TaskDependencyGraphData::findPragmaId(CallInst &TaskCallInst,
               PrivateValues.push_back(CI->getSExtValue());
             } else {
 
-              if(PrivateValues.size()==0)
+              if (PrivateValues.size() == 0)
                 FinalFirstPrivateOffsets.push_back(0);
-              else{
+              else {
                 FinalFirstPrivateOffsets.push_back(AllPositions.back());
               }
 
               int CurrentPos = PrivateValues.size();
               PrivateValues.push_back(-1);
-              FirstPrivateSizes.push_back(getTypeSizeInBytes(TaskPrivatesType[CurrentPos]));
+              FirstPrivateSizes.push_back(
+                  getTypeSizeInBytes(TaskPrivatesType[CurrentPos]));
             }
           }
         }
@@ -1035,9 +1062,8 @@ int TaskDependencyGraphData::findPragmaId(CallInst &TaskCallInst,
   for (int i = 0; i < diff; i++) {
     PrivateValues.push_back(-2);
   }
-  
+
   TaskFound.FirstPrivateData = PrivateValues;
-  
 
   // Get shared data types
   SmallVector<Type *, 2> TaskSharedsType;
@@ -1057,6 +1083,7 @@ int TaskDependencyGraphData::findPragmaId(CallInst &TaskCallInst,
   SmallVector<int, 2> FinalSharedPositions;
   SmallVector<int, 2> FinalFirstPrivatePositions;
   SmallVector<bool, 2> DoubleLoadPositions;
+
   Value *FuncArg = F.getArg(0);
   std::vector<Value *> ArgPositions(FuncArg->getNumUses());
   for (Value *ArgUser : FuncArg->users()) {
@@ -1076,12 +1103,12 @@ int TaskDependencyGraphData::findPragmaId(CallInst &TaskCallInst,
         bool Found = false;
         while (!Found) {
           if (LoadInst *ArgLoad = dyn_cast<LoadInst>(Start)) {
-            if (ArgLoad->getPointerOperand() == GetArg){
+            if (ArgLoad->getPointerOperand() == GetArg) {
               ArgPositions[position] = ArgLoad;
               Found = true;
             }
           }
-          if(Start->getPrevNode()==nullptr)
+          if (Start->getPrevNode() == nullptr)
             break;
 
           Start = Start->getPrevNode();
@@ -1122,7 +1149,8 @@ int TaskDependencyGraphData::findPragmaId(CallInst &TaskCallInst,
   if (i == (int)TasksAllocInfo.size())
     TasksAllocInfo.push_back({Flags, SizeOfTask, SizeOfShareds, EntryPoint,
                               TaskPrivatesType, TaskSharedsType,
-                              FinalSharedPositions, FinalFirstPrivatePositions, FinalFirstPrivateOffsets, FirstPrivateSizes});
+                              FinalSharedPositions, FinalFirstPrivatePositions,
+                              FinalFirstPrivateOffsets, FirstPrivateSizes});
 
   return i;
 }
@@ -1230,15 +1258,20 @@ void TaskDependencyGraphData::findOpenMPTasks(Function &F, DominatorTree &DT, in
 
   if (Prealloc && (NumPreallocs == 0 || NumPreallocs > FunctionTasks.size()))
     NumPreallocs = FunctionTasks.size();
-  // Remove transisitve edges
+  // Erase transitive edges
   erase_transitive_edges();
 
   // print_tdg();
   if (FunctionTasks.size()) {
     print_tdg_to_dot(F.getParent()->getSourceFileName(), ntdgs, F);
-    generate_analysis_tdg_file(F.getParent()->getSourceFileName());
+    //generate_analysis_tdg_file(F.getParent()->getSourceFileName());
     generate_runtime_tdg_file(F.getParent()->getSourceFileName(), F, ntdgs);
+    TasksAllocInfo.clear();
+    FunctionTasks.clear();
   }
+}
+
+void TaskDependencyGraphData::clear() {
   TasksAllocInfo.clear();
   FunctionTasks.clear();
 }
@@ -1295,6 +1328,7 @@ TaskDependencyGraphAnalysis::run(Module &M, ModuleAnalysisManager &AM) {
   FunctionAnalysisManager &FAM =
       AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
   int ntdgs=0;
+
   for (Function &F : M) {
     if (F.isDeclaration() || F.empty())
       continue;
@@ -1307,6 +1341,8 @@ TaskDependencyGraphAnalysis::run(Module &M, ModuleAnalysisManager &AM) {
       TDG.findOpenMPTasks(F, DT, ntdgs);
     }
   }
+
+  // TDG.clear();
   return TDG;
 }
 
