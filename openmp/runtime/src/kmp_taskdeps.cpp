@@ -1015,7 +1015,7 @@ void erase_taskgroup() {
 
 void print_tdg_to_dot(kmp_tdg_info *thisTdg) {
   char FileName[10];
-  sprintf(FileName, "tdg_%d.dot", Ntdgs);
+  sprintf(FileName, "tdg_%d.dot", thisTdg->tdgId);
   FILE *f = fopen(FileName, "w");
 
   if (f == NULL) {
