@@ -279,7 +279,7 @@ static inline void __kmp_track_dependence(kmp_int32 gtid, kmp_depnode_t *source,
 kmp_taskdata_t *task_source = KMP_TASK_TO_TASKDATA(source->dn.task);
 kmp_taskdata_t *task_sink = KMP_TASK_TO_TASKDATA(sink_task);
 #if LIBOMP_TASKGRAPH
-  if((task_source->is_taskgraph && !task_sink->is_taskgraph) || (!task_source->is_taskgraph && task_sink->is_taskgraph)){
+  if((source->dn.task && sink_task) && ((task_source->is_taskgraph && !task_sink->is_taskgraph) || (!task_source->is_taskgraph && task_sink->is_taskgraph))){
     printf("Internal OpenMP error: task dependency detected between a task inside a taskgraph and a task outside, this is not supported \n");
   }
   if (task_sink->is_taskgraph && task_sink->tdg->tdgStatus == TDG_RECORDING) {
@@ -1014,7 +1014,7 @@ void erase_taskgroup() {
 }*/
 
 void print_tdg_to_dot(kmp_tdg_info *thisTdg) {
-  char FileName[10];
+  char FileName[20];
   sprintf(FileName, "tdg_%d.dot", thisTdg->tdgId);
   FILE *f = fopen(FileName, "w");
 
@@ -1213,7 +1213,7 @@ kmp_int32 obtainTdgCreationInfo(kmp_int32 gtid) {
       KMP_ATOMIC_ST_RLX(&TdgCreationInfo[i].currentTaskGenID, -1);
     }
     return 0;
-  } else if (NtdgsBeingCreated > TdgCreationInfoSize) {
+  } else if (NtdgsBeingCreated >= TdgCreationInfoSize) {
     kmp_int32 oldsize = TdgCreationInfoSize;
     TdgCreationInfoSize += 2;
     TdgCreationInfo = (kmp_tdg_creation_info *)realloc(
