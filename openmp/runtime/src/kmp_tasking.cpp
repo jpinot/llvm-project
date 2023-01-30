@@ -37,6 +37,9 @@ kmp_int32 taskloop_task_id = 0;
 kmp_bootstrap_lock_t task_id_lock =
     KMP_BOOTSTRAP_LOCK_INITIALIZER(task_id_lock);
 extern int replaying[MAX_NUM_PROC];
+extern kmp_int32 curr_tdg_idx;
+extern kmp_int32 Ntdgs;
+extern kmp_tdg_info GlobalTdgs[NUM_TDG_LIMIT];
 
 // Taskgraph
 extern int SuccessorsSize;
@@ -3940,6 +3943,28 @@ static inline int __kmp_execute_tasks_template(
   }
 }
 
+template <class C>
+static inline int __kmp_schedule_tasks_template(
+    kmp_info_t *thread, kmp_int32 gtid, C *flag, int final_spin,
+    int *thread_finished USE_ITT_BUILD_ARG(void *itt_sync_obj),
+    kmp_int32 is_constrained) {
+
+  kmp_taskdata_t *taskdata;
+  kmp_int32 tid = __kmp_get_tid();
+  kmp_thread_data_t *thread_data =
+      &thread->th.th_task_team->tt.tt_threads_data[tid];
+  if (!replaying[tid]) {
+    return FALSE;
+  } else {
+    for (kmp_int32 i = 0; i < thread_data->td.td_tdg_ntasks[curr_tdg_idx]; ++i) {
+      taskdata = KMP_TASK_TO_TASKDATA(thread_data->td.td_tdg_tasks[curr_tdg_idx][i]);
+      __kmp_omp_task(gtid, thread_data->td.td_tdg_tasks[curr_tdg_idx][i], true);
+    }
+    replaying[tid] = 0;
+    return TRUE;
+  }
+}
+
 template <bool C, bool S>
 int __kmp_execute_tasks_32(
     kmp_info_t *thread, kmp_int32 gtid, kmp_flag_32<C, S> *flag, int final_spin,
@@ -3961,6 +3986,26 @@ int __kmp_execute_tasks_64(
 }
 
 template <bool C, bool S>
+int __kmp_schedule_tasks_32(
+    kmp_info_t *thread, kmp_int32 gtid, kmp_flag_32<C, S> *flag, int final_spin,
+    int *thread_finished USE_ITT_BUILD_ARG(void *itt_sync_obj),
+    kmp_int32 is_constrained) {
+  return __kmp_schedule_tasks_template(
+      thread, gtid, flag, final_spin,
+      thread_finished USE_ITT_BUILD_ARG(itt_sync_obj), is_constrained);
+}
+
+template <bool C, bool S>
+int __kmp_schedule_tasks_64(
+    kmp_info_t *thread, kmp_int32 gtid, kmp_flag_64<C, S> *flag, int final_spin,
+    int *thread_finished USE_ITT_BUILD_ARG(void *itt_sync_obj),
+    kmp_int32 is_constrained) {
+  return __kmp_schedule_tasks_template(
+      thread, gtid, flag, final_spin,
+      thread_finished USE_ITT_BUILD_ARG(itt_sync_obj), is_constrained);
+}
+
+template <bool C, bool S>
 int __kmp_atomic_execute_tasks_64(
     kmp_info_t *thread, kmp_int32 gtid, kmp_atomic_flag_64<C, S> *flag,
     int final_spin, int *thread_finished USE_ITT_BUILD_ARG(void *itt_sync_obj),
@@ -3970,11 +4015,30 @@ int __kmp_atomic_execute_tasks_64(
       thread_finished USE_ITT_BUILD_ARG(itt_sync_obj), is_constrained);
 }
 
+template <bool C, bool S>
+int __kmp_atomic_schedule_tasks_64(
+    kmp_info_t *thread, kmp_int32 gtid, kmp_atomic_flag_64<C, S> *flag,
+    int final_spin, int *thread_finished USE_ITT_BUILD_ARG(void *itt_sync_obj),
+    kmp_int32 is_constrained) {
+  return __kmp_schedule_tasks_template(
+      thread, gtid, flag, final_spin,
+      thread_finished USE_ITT_BUILD_ARG(itt_sync_obj), is_constrained);
+}
+
 int __kmp_execute_tasks_oncore(
     kmp_info_t *thread, kmp_int32 gtid, kmp_flag_oncore *flag, int final_spin,
     int *thread_finished USE_ITT_BUILD_ARG(void *itt_sync_obj),
     kmp_int32 is_constrained) {
   return __kmp_execute_tasks_template(
+      thread, gtid, flag, final_spin,
+      thread_finished USE_ITT_BUILD_ARG(itt_sync_obj), is_constrained);
+}
+
+int __kmp_schedule_tasks_oncore(
+    kmp_info_t *thread, kmp_int32 gtid, kmp_flag_oncore *flag, int final_spin,
+    int *thread_finished USE_ITT_BUILD_ARG(void *itt_sync_obj),
+    kmp_int32 is_constrained) {
+  return __kmp_schedule_tasks_template(
       thread, gtid, flag, final_spin,
       thread_finished USE_ITT_BUILD_ARG(itt_sync_obj), is_constrained);
 }
@@ -3995,11 +4059,35 @@ template int __kmp_execute_tasks_64<true, false>(kmp_info_t *, kmp_int32,
                                                  int,
                                                  int *USE_ITT_BUILD_ARG(void *),
                                                  kmp_int32);
+
+template int __kmp_schedule_tasks_32<false, false>(
+    kmp_info *, kmp_int32, kmp_flag_32<false, false> *, int,
+    int *USE_ITT_BUILD_ARG(void *), kmp_int32);
+
+template int
+__kmp_schedule_tasks_64<false, true>(kmp_info_t *, kmp_int32,
+                                     kmp_flag_64<false, true> *, int,
+                                     int *USE_ITT_BUILD_ARG(void *), kmp_int32);
+
+template int
+__kmp_schedule_tasks_64<true, false>(kmp_info_t *, kmp_int32,
+                                     kmp_flag_64<true, false> *, int,
+                                     int *USE_ITT_BUILD_ARG(void *), kmp_int32);
+
+
 template int __kmp_atomic_execute_tasks_64<false, true>(
     kmp_info_t *, kmp_int32, kmp_atomic_flag_64<false, true> *, int,
     int *USE_ITT_BUILD_ARG(void *), kmp_int32);
 
 template int __kmp_atomic_execute_tasks_64<true, false>(
+    kmp_info_t *, kmp_int32, kmp_atomic_flag_64<true, false> *, int,
+    int *USE_ITT_BUILD_ARG(void *), kmp_int32);
+
+template int __kmp_atomic_schedule_tasks_64<false, true>(
+    kmp_info_t *, kmp_int32, kmp_atomic_flag_64<false, true> *, int,
+    int *USE_ITT_BUILD_ARG(void *), kmp_int32);
+
+template int __kmp_atomic_schedule_tasks_64<true, false>(
     kmp_info_t *, kmp_int32, kmp_atomic_flag_64<true, false> *, int,
     int *USE_ITT_BUILD_ARG(void *), kmp_int32);
 
@@ -4168,7 +4256,7 @@ void __kmp_alloc_tdg_tasks(kmp_int32 gtid, kmp_thread_data_t *thread_data,
 //
 // gtid: global id of calling thread
 // thread_data, the thread_data to modify
-// tdg_id, the TDG identifier within td_tdg_tasks
+// tdg_id, the TDG identifier within GlobalTdgs
 void *__kmp_realloc_tdg_tasks(kmp_int32 gtid, kmp_thread_data_t *thread_data,
                               kmp_int32 tdg_id) {
   kmp_uint array_size = thread_data->td.td_tdg_sizes[tdg_id];
@@ -4192,7 +4280,27 @@ void *__kmp_realloc_tdg_tasks(kmp_int32 gtid, kmp_thread_data_t *thread_data,
   return result;
 }
 
+// __kmp_insert_task_into_tdg: insert a task to a thread_data's tdg_task list.
+// Later, the thread will schedule all tasks in this list to its own deque
+//
+// gtid:        global thread id of the calling thread
+// thread_data: the thread's thread_data to modify
+// tdg_id:      the corresponding TDG identifier
+// task:        the task to insert
+void __kmp_insert_task_into_tdg(kmp_int32 gtid, kmp_thread_data_t *thread_data,
+                                kmp_int32 tdg_id, kmp_task_t *task) {
+  kmp_int32 task_count = thread_data->td.td_tdg_ntasks[tdg_id];
+  kmp_task_t **task_list = thread_data->td.td_tdg_tasks[tdg_id];
+  kmp_uint array_size = thread_data->td.td_tdg_sizes[tdg_id];
+  kmp_taskdata_t *taskdata = KMP_TASK_TO_TASKDATA(task);
+
+  KMP_ASSERT(task_count < array_size);
+
+  task_list[task_count] = task;
+  thread_data->td.td_tdg_ntasks[tdg_id]++;
+}
 #endif
+
 // __kmp_free_task_deque:
 // Deallocates a task deque for a particular thread. Happens at library
 // deallocation so don't need to reset all thread data fields.
@@ -4211,6 +4319,55 @@ static void __kmp_free_task_deque(kmp_thread_data_t *thread_data) {
     __kmp_free_task_stack(__kmp_thread_from_gtid(gtid), thread_data);
   }
 #endif // BUILD_TIED_TASK_STACK
+}
+
+// sync_tdg_tasks_for_task_team: synchronize tdg tasks in two task teams. So
+// that we do not lose recorded tdg tasks in one when executing with the other
+//
+// gtid: caller's global thread id
+// tt: the task_team that is about to be used
+// other_tt: the other task_team
+// nthreads: number of threads in this team
+void sync_tdg_tasks_for_task_team(kmp_int32 gtid, kmp_task_team_t *other_tt,
+                                  kmp_task_team_t *tt, kmp_int32 nthreads) {
+
+  KMP_ASSERT(other_tt->tt.tt_nproc == tt->tt.tt_nproc);
+
+  for (kmp_int32 i = 0; i < nthreads; ++i) {
+    for (int tdg_id = 0; tdg_id < Ntdgs; ++tdg_id) {
+      if (tt->tt.tt_threads_data[i].td.td_tdg_ntasks[tdg_id] != 0)
+        continue;
+      memcpy(&(tt->tt.tt_threads_data[i].td.td_tdg_tasks[tdg_id]),
+             &(other_tt->tt.tt_threads_data[i].td.td_tdg_tasks[tdg_id]),
+             sizeof(kmp_task_t **));
+      memcpy(&(tt->tt.tt_threads_data[i].td.td_tdg_tasks[tdg_id][0]),
+             &(other_tt->tt.tt_threads_data[i].td.td_tdg_tasks[tdg_id][0]),
+             sizeof(kmp_task_t *) *
+                 other_tt->tt.tt_threads_data[i].td.td_tdg_sizes[tdg_id]);
+      tt->tt.tt_threads_data[i].td.td_tdg_ntasks[tdg_id] =
+          other_tt->tt.tt_threads_data[i].td.td_tdg_ntasks[tdg_id];
+      tt->tt.tt_threads_data[i].td.td_tdg_sizes[tdg_id] =
+          other_tt->tt.tt_threads_data[i].td.td_tdg_sizes[tdg_id];
+    }
+  }
+
+  for (kmp_int32 i = 0; i < nthreads; ++i) {
+    for (int tdg_id = 0; tdg_id < Ntdgs; ++tdg_id) {
+      if (other_tt->tt.tt_threads_data[i].td.td_tdg_ntasks[tdg_id] != 0)
+        continue;
+      memcpy(&(other_tt->tt.tt_threads_data[i].td.td_tdg_tasks[tdg_id]),
+             &(tt->tt.tt_threads_data[i].td.td_tdg_tasks[tdg_id]),
+             sizeof(kmp_task_t **));
+      memcpy(&(other_tt->tt.tt_threads_data[i].td.td_tdg_tasks[tdg_id][0]),
+             &(tt->tt.tt_threads_data[i].td.td_tdg_tasks[tdg_id][0]),
+             sizeof(kmp_task_t *) *
+                 tt->tt.tt_threads_data[i].td.td_tdg_sizes[tdg_id]);
+      other_tt->tt.tt_threads_data[i].td.td_tdg_ntasks[tdg_id] =
+          tt->tt.tt_threads_data[i].td.td_tdg_ntasks[tdg_id];
+      other_tt->tt.tt_threads_data[i].td.td_tdg_sizes[tdg_id] =
+          tt->tt.tt_threads_data[i].td.td_tdg_sizes[tdg_id];
+    }
+  }
 }
 
 // __kmp_realloc_task_threads_data:

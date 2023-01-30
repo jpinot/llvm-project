@@ -535,6 +535,9 @@ final_spin=FALSE)
       if (task_team != NULL) {
         if (TCR_SYNC_4(task_team->tt.tt_active)) {
           if (KMP_TASKING_ENABLED(task_team)) {
+            flag->schedule_tasks(
+                this_thr, th_gtid, final_spin,
+                &tasks_completed USE_ITT_BUILD_ARG(itt_sync_obj), 0);
             flag->execute_tasks(
                 this_thr, th_gtid, final_spin,
                 &tasks_completed USE_ITT_BUILD_ARG(itt_sync_obj), 0);
@@ -841,6 +844,13 @@ public:
         this_thr, gtid, this, final_spin,
         thread_finished USE_ITT_BUILD_ARG(itt_sync_obj), is_constrained);
   }
+  int schedule_tasks(kmp_info_t *this_thr, kmp_int32 gtid, int final_spin,
+                    int *thread_finished USE_ITT_BUILD_ARG(void *itt_sync_obj),
+                    kmp_int32 is_constrained) {
+    return __kmp_schedule_tasks_32(
+        this_thr, gtid, this, final_spin,
+        thread_finished USE_ITT_BUILD_ARG(itt_sync_obj), is_constrained);
+  }
   bool wait(kmp_info_t *this_thr,
             int final_spin USE_ITT_BUILD_ARG(void *itt_sync_obj)) {
     if (final_spin)
@@ -877,6 +887,13 @@ public:
         this_thr, gtid, this, final_spin,
         thread_finished USE_ITT_BUILD_ARG(itt_sync_obj), is_constrained);
   }
+  int schedule_tasks(kmp_info_t *this_thr, kmp_int32 gtid, int final_spin,
+                     int *thread_finished USE_ITT_BUILD_ARG(void *itt_sync_obj),
+                    kmp_int32 is_constrained) {
+    return __kmp_schedule_tasks_64(
+        this_thr, gtid, this, final_spin,
+        thread_finished USE_ITT_BUILD_ARG(itt_sync_obj), is_constrained);
+  }
   bool wait(kmp_info_t *this_thr,
             int final_spin USE_ITT_BUILD_ARG(void *itt_sync_obj)) {
     if (final_spin)
@@ -910,6 +927,13 @@ public:
                     int *thread_finished USE_ITT_BUILD_ARG(void *itt_sync_obj),
                     kmp_int32 is_constrained) {
     return __kmp_atomic_execute_tasks_64(
+        this_thr, gtid, this, final_spin,
+        thread_finished USE_ITT_BUILD_ARG(itt_sync_obj), is_constrained);
+  }
+  int schedule_tasks(kmp_info_t *this_thr, kmp_int32 gtid, int final_spin,
+                    int *thread_finished USE_ITT_BUILD_ARG(void *itt_sync_obj),
+                    kmp_int32 is_constrained) {
+    return __kmp_atomic_schedule_tasks_64(
         this_thr, gtid, this, final_spin,
         thread_finished USE_ITT_BUILD_ARG(itt_sync_obj), is_constrained);
   }
@@ -1015,6 +1039,13 @@ public:
         this_thr, gtid, this, final_spin,
         thread_finished USE_ITT_BUILD_ARG(itt_sync_obj), is_constrained);
 #endif
+  }
+  int schedule_tasks(kmp_info_t *this_thr, kmp_int32 gtid, int final_spin,
+                     int *thread_finished USE_ITT_BUILD_ARG(void *itt_sync_obj),
+                    kmp_int32 is_constrained) {
+    return __kmp_schedule_tasks_oncore(
+        this_thr, gtid, this, final_spin,
+        thread_finished USE_ITT_BUILD_ARG(itt_sync_obj), is_constrained);
   }
   enum barrier_type get_bt() { return bt; }
   flag_type get_ptr_type() { return flag_oncore; }
