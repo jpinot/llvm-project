@@ -54,8 +54,10 @@ void PlatformRemoteAppleWatch::Terminate() {
   PlatformDarwin::Terminate();
 }
 
-PlatformSP PlatformRemoteAppleWatch::CreateInstance(bool force,
-                                                    const ArchSpec *arch) {
+PlatformSP
+PlatformRemoteAppleWatch::CreateInstance(bool force, const ArchSpec *arch,
+                                         const Debugger *debugger,
+                                         const ScriptedMetadata *metadata) {
   Log *log = GetLog(LLDBLog::Platform);
   if (log) {
     const char *arch_name;
@@ -144,7 +146,8 @@ llvm::StringRef PlatformRemoteAppleWatch::GetDescriptionStatic() {
 PlatformRemoteAppleWatch::PlatformRemoteAppleWatch()
     : PlatformRemoteDarwinDevice() {}
 
-std::vector<ArchSpec> PlatformRemoteAppleWatch::GetSupportedArchitectures() {
+std::vector<ArchSpec>
+PlatformRemoteAppleWatch::GetSupportedArchitectures(const ArchSpec &host_info) {
   ArchSpec system_arch(GetSystemArchitecture());
 
   const ArchSpec::Core system_core = system_arch.GetCore();

@@ -39,13 +39,13 @@ DominatingValue<RValue>::saved_type::save(CodeGenFunction &CGF, RValue rv) {
 
     // These automatically dominate and don't need to be saved.
     if (!DominatingLLVMValue::needsSaving(V))
-      return saved_type(V, ScalarLiteral);
+      return saved_type(V, nullptr, ScalarLiteral);
 
     // Everything else needs an alloca.
     Address addr =
       CGF.CreateDefaultAlignTempAlloca(V->getType(), "saved-rvalue");
     CGF.Builder.CreateStore(V, addr);
-    return saved_type(addr.getPointer(), ScalarAddress);
+    return saved_type(addr.getPointer(), nullptr, ScalarAddress);
   }
 
   if (rv.isComplex()) {
@@ -55,19 +55,19 @@ DominatingValue<RValue>::saved_type::save(CodeGenFunction &CGF, RValue rv) {
     Address addr = CGF.CreateDefaultAlignTempAlloca(ComplexTy, "saved-complex");
     CGF.Builder.CreateStore(V.first, CGF.Builder.CreateStructGEP(addr, 0));
     CGF.Builder.CreateStore(V.second, CGF.Builder.CreateStructGEP(addr, 1));
-    return saved_type(addr.getPointer(), ComplexAddress);
+    return saved_type(addr.getPointer(), nullptr, ComplexAddress);
   }
 
   assert(rv.isAggregate());
   Address V = rv.getAggregateAddress(); // TODO: volatile?
   if (!DominatingLLVMValue::needsSaving(V.getPointer()))
-    return saved_type(V.getPointer(), AggregateLiteral,
+    return saved_type(V.getPointer(), V.getElementType(), AggregateLiteral,
                       V.getAlignment().getQuantity());
 
   Address addr =
     CGF.CreateTempAlloca(V.getType(), CGF.getPointerAlign(), "saved-rvalue");
   CGF.Builder.CreateStore(V.getPointer(), addr);
-  return saved_type(addr.getPointer(), AggregateAddress,
+  return saved_type(addr.getPointer(), V.getElementType(), AggregateAddress,
                     V.getAlignment().getQuantity());
 }
 
@@ -76,8 +76,9 @@ DominatingValue<RValue>::saved_type::save(CodeGenFunction &CGF, RValue rv) {
 /// point.
 RValue DominatingValue<RValue>::saved_type::restore(CodeGenFunction &CGF) {
   auto getSavingAddress = [&](llvm::Value *value) {
-    auto alignment = cast<llvm::AllocaInst>(value)->getAlignment();
-    return Address(value, CharUnits::fromQuantity(alignment));
+    auto *AI = cast<llvm::AllocaInst>(value);
+    return Address(value, AI->getAllocatedType(),
+                   CharUnits::fromQuantity(AI->getAlign().value()));
   };
   switch (K) {
   case ScalarLiteral:
@@ -85,10 +86,12 @@ RValue DominatingValue<RValue>::saved_type::restore(CodeGenFunction &CGF) {
   case ScalarAddress:
     return RValue::get(CGF.Builder.CreateLoad(getSavingAddress(Value)));
   case AggregateLiteral:
-    return RValue::getAggregate(Address(Value, CharUnits::fromQuantity(Align)));
+    return RValue::getAggregate(
+        Address(Value, ElementType, CharUnits::fromQuantity(Align)));
   case AggregateAddress: {
     auto addr = CGF.Builder.CreateLoad(getSavingAddress(Value));
-    return RValue::getAggregate(Address(addr, CharUnits::fromQuantity(Align)));
+    return RValue::getAggregate(
+        Address(addr, ElementType, CharUnits::fromQuantity(Align)));
   }
   case ComplexAddress: {
     Address address = getSavingAddress(Value);
@@ -554,7 +557,7 @@ static llvm::BasicBlock *SimplifyCleanupEntry(CodeGenFunction &CGF,
   Entry->replaceAllUsesWith(Pred);
 
   // Merge the blocks.
-  Pred->getInstList().splice(Pred->end(), Entry->getInstList());
+  Pred->splice(Pred->end(), Entry);
 
   // Kill the entry block.
   Entry->eraseFromParent();
@@ -945,7 +948,7 @@ void CodeGenFunction::PopCleanupBlock(bool FallthroughIsBranchThrough) {
       // Append the prepared cleanup prologue from above.
       llvm::BasicBlock *NormalExit = Builder.GetInsertBlock();
       for (unsigned I = 0, E = InstsToAppend.size(); I != E; ++I)
-        NormalExit->getInstList().push_back(InstsToAppend[I]);
+        InstsToAppend[I]->insertInto(NormalExit, NormalExit->end());
 
       // Optimistically hope that any fixups will continue falling through.
       for (unsigned I = FixupDepth, E = EHStack.getNumBranchFixups();
@@ -1019,8 +1022,7 @@ void CodeGenFunction::PopCleanupBlock(bool FallthroughIsBranchThrough) {
     // throwing cleanups. For funclet EH personalities, the cleanupendpad models
     // program termination when cleanups throw.
     bool PushedTerminate = false;
-    SaveAndRestore<llvm::Instruction *> RestoreCurrentFuncletPad(
-        CurrentFuncletPad);
+    SaveAndRestore RestoreCurrentFuncletPad(CurrentFuncletPad);
     llvm::CleanupPadInst *CPI = nullptr;
 
     const EHPersonality &Personality = EHPersonality::get(*this);
@@ -1352,7 +1354,8 @@ static void EmitSehScope(CodeGenFunction &CGF,
       CGF.getBundlesForFunclet(SehCppScope.getCallee());
   if (CGF.CurrentFuncletPad)
     BundleList.emplace_back("funclet", CGF.CurrentFuncletPad);
-  CGF.Builder.CreateInvoke(SehCppScope, Cont, InvokeDest, None, BundleList);
+  CGF.Builder.CreateInvoke(SehCppScope, Cont, InvokeDest, std::nullopt,
+                           BundleList);
   CGF.EmitBlock(Cont);
 }
 

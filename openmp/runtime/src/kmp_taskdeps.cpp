@@ -83,7 +83,7 @@ extern size_t __kmp_round_up_to_val(size_t size, size_t val);
 extern void __kmp_free_task_and_ancestors(kmp_int32 gtid,
                                           kmp_taskdata_t *taskdata,
                                           kmp_info_t *thread);
-kmp_task_t *kmp_init_lazy_task(int static_id, kmp_task_t *current_task,
+kmp_task_t *kmp_init_lazy_task(int static_id,
                                kmp_int32 gtid, kmp_node_info *thisRecordMap, kmp_int32 tdg_id);
 void kmp_insert_task_in_indexer(kmp_task_t *task);
 
@@ -104,6 +104,9 @@ static void __kmp_init_node(kmp_depnode_t *node) {
   KMP_ATOMIC_ST_RLX(&node->dn.nrefs, 1); // init creates the first reference
 #ifdef KMP_SUPPORT_GRAPH_OUTPUT
   node->dn.id = KMP_ATOMIC_INC(&kmp_node_id_seed);
+#endif
+#if USE_ITT_BUILD && USE_ITT_NOTIFY
+  __itt_sync_create(node, "OMP task dep node", NULL, 0);
 #endif
 }
 
@@ -762,6 +765,7 @@ kmp_int32 __kmpc_omp_task_with_deps(ident_t *loc_ref, kmp_int32 gtid,
     TaskInfo->parent_task = new_taskdata->td_parent;
 
     // Reduce task counters, since task is not executed
+    printf("NOOO \n");
     KMP_ATOMIC_DEC(&new_taskdata->td_parent->td_incomplete_child_tasks);
     if (new_taskdata->td_parent->td_taskgroup)
       KMP_ATOMIC_DEC(&new_taskdata->td_parent->td_taskgroup->count);
@@ -1127,10 +1131,14 @@ void __kmpc_execute_tdg(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 tdg_index) {
    ThisNumRoots = GlobalTdgs[tdg_index].numRoots;
    ThisRootTasks = GlobalTdgs[tdg_index].rootTasks;
    kmp_int32 ThisNumTasks = GlobalTdgs[tdg_index].numTasks;
-
+   
    kmp_info_t *thread = __kmp_threads[gtid];
    kmp_taskdata_t *parent_task = thread->th.th_current_task;
 
+   bool prealloc = false;
+   if (GlobalTdgs[tdg_index].tdgStatus == TDG_PREALLOC)
+    prealloc= true;
+   
    if (GlobalTdgs[tdg_index].rec_taskred_data) {
         __kmpc_taskred_init(gtid, GlobalTdgs[tdg_index].rec_num_taskred,
                             GlobalTdgs[tdg_index].rec_taskred_data);
@@ -1140,7 +1148,10 @@ void __kmpc_execute_tdg(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 tdg_index) {
 
    for (kmp_int32 j = 0; j < ThisNumTasks; j++) {
      kmp_taskdata_t *td = KMP_TASK_TO_TASKDATA(ThisRecordMap[j].task);
-     td->td_parent = parent_task;
+    
+     if (!prealloc)
+      td->td_parent = parent_task;
+
      ThisRecordMap[j].parent_task = parent_task;
      // kmp_taskdata_t *new_taskdata =
      KMP_ATOMIC_ST_RLX(&ThisRecordMap[j].npredecessors_counter,
@@ -1150,20 +1161,20 @@ void __kmpc_execute_tdg(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 tdg_index) {
 
      //printf ("Es: %d \n", KMP_ATOMIC_LD_RLX(&ThisRecordMap[j].parent_task->td_taskgroup->count));
      // Protect with if?
-     if (ThisRecordMap[j].parent_task->td_taskgroup){
-       KMP_ATOMIC_INC(&ThisRecordMap[j].parent_task->td_taskgroup->count);
+     kmp_taskgroup_t *parentTaskgroup =ThisRecordMap[j].parent_task->td_taskgroup;
+     if (parentTaskgroup){
+       KMP_ATOMIC_INC(&parentTaskgroup->count);
        //The taskgroup is different so we must update it
-       td->td_taskgroup = ThisRecordMap[j].parent_task->td_taskgroup;
+      if (!prealloc)
+       td->td_taskgroup = parentTaskgroup;
      }
-     else if( td->td_taskgroup!=nullptr){
+     else if( !prealloc && td->td_taskgroup!=nullptr){
       //If the parent doesnt have a taskgroup, remove it from the task
       td->td_taskgroup = nullptr;
      }
 
      if (ThisRecordMap[j].parent_task->td_flags.tasktype == TASK_EXPLICIT)
        KMP_ATOMIC_INC(&ThisRecordMap[j].parent_task->td_allocated_child_tasks);
-
-
    }
 
   for (kmp_int32 j = 0; j < ThisNumRoots; j++) {
@@ -1172,7 +1183,7 @@ void __kmpc_execute_tdg(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 tdg_index) {
       kmp_taskdata_t *parent_task = thread->th.th_current_task;
       ThisRecordMap[ThisRootTasks[j]].task = nullptr;
       kmp_task_t *task = kmp_init_lazy_task(
-          ThisRootTasks[j], KMP_TASKDATA_TO_TASK(parent_task), gtid, ThisRecordMap, GlobalTdgs[tdg_index].tdgId);
+          ThisRootTasks[j], gtid, ThisRecordMap, GlobalTdgs[tdg_index].tdgId);
       if (task == nullptr) {
         // printf("Me guardo %d \n", ThisRootTasks[j]);
         insert_to_waiting_tdg(&ThisRecordMap[ThisRootTasks[j]]);
@@ -1265,6 +1276,7 @@ void __kmpc_set_tdg(struct kmp_node_info *tdg, kmp_int32 gtid, kmp_int32 tdg_id,
       return;
     }
   }
+
   __kmp_acquire_futex_lock(&TdgLock, 0);
   kmp_int32 tdgCreationIndex = obtainTdgCreationInfo(gtid);
   if(Ntdgs > NUM_TDG_LIMIT){
@@ -1518,6 +1530,19 @@ void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 tdg_id,
           memcpy((char *)ThisRecordMap[i].private_data + CurrentOffset,
                  *AdressValue, CurrentSize);
         }
+        
+        int NumGlobals = task_static_table[Pragma].numGlobals;
+        GlobalVarInfo *Globals = task_static_table[Pragma].GlobalVars;
+        for (int j = 0; j < NumGlobals; j++){
+          int CurrentOffset = Globals[j].Offset;
+          int CurrentSize = Globals[j].Size;
+          void *GlobalVar = Globals[j].Var;
+          void **GlobalVarPointer= &GlobalVar;
+          bool IsPointer = Globals[j].IsPointer;
+          memcpy((char *)ThisRecordMap[i].private_data + CurrentOffset,
+                 (IsPointer)?GlobalVarPointer:GlobalVar, CurrentSize);
+
+        }
       }
     } else {
       __kmpc_fill_data(loc_ref, gtid, entry, args);
@@ -1567,6 +1592,7 @@ void insert_first_to_waiting_tdg(struct kmp_node_info *tdg) {
 // tasks finishes and queues their dependants
 void insert_to_waiting_tdg(struct kmp_node_info *tdg) {
   __kmp_acquire_futex_lock(&waiting_tdg_to_execute.waiting_tdg_lock, 0);
+  printf("INSERTO!! \n");
   if (!waiting_tdg_to_execute.size) {
     waiting_tdg_to_execute.head = tdg;
     waiting_tdg_to_execute.tail = tdg;
@@ -1688,6 +1714,7 @@ void __kmpc_prealloc_tasks(kmp_task_alloc_info *task_static_data,
                            kmp_int32 tdg_id) {
 
   __kmp_acquire_futex_lock(&TdgLock, 0);
+
   //If the TDG is encountered preallocation has already been performed
   for (int i = 0; i < Ntdgs; i++) {
     if (GlobalTdgs[i].tdgId == tdg_id){
@@ -1696,8 +1723,9 @@ void __kmpc_prealloc_tasks(kmp_task_alloc_info *task_static_data,
     }
   }
 
-  //Current TDG is always Ntdgs position
   GlobalTdgs[Ntdgs].tdgStatus = TDG_PREALLOC;
+
+  //Current TDG is always Ntdgs position
   __kmp_release_futex_lock(&TdgLock, 0);
 
   if (max_concurrent_tasks == 0 || max_concurrent_tasks > n_task_constructs) {
@@ -1725,7 +1753,7 @@ void __kmpc_prealloc_tasks(kmp_task_alloc_info *task_static_data,
   }
 }
 
-kmp_task_t *kmp_init_lazy_task(int static_id, kmp_task_t *current_task,
+kmp_task_t *kmp_init_lazy_task(int static_id,
                                kmp_int32 gtid, kmp_node_info *thisRecordMap, kmp_int32 tdg_id) {
 
   kmp_task_t *new_task = kmp_get_free_task_from_indexer();
@@ -1855,10 +1883,24 @@ Blocks the current task until all specifies dependences have been fulfilled.
 void __kmpc_omp_wait_deps(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 ndeps,
                           kmp_depend_info_t *dep_list, kmp_int32 ndeps_noalias,
                           kmp_depend_info_t *noalias_dep_list) {
-  KA_TRACE(10, ("__kmpc_omp_wait_deps(enter): T#%d loc=%p\n", gtid, loc_ref));
+  __kmpc_omp_taskwait_deps_51(loc_ref, gtid, ndeps, dep_list, ndeps_noalias,
+                              noalias_dep_list, false);
+}
 
+/* __kmpc_omp_taskwait_deps_51 : Function for OpenMP 5.1 nowait clause.
+                                 Placeholder for taskwait with nowait clause.
+                                 Earlier code of __kmpc_omp_wait_deps() is now
+                                 in this function.
+*/
+void __kmpc_omp_taskwait_deps_51(ident_t *loc_ref, kmp_int32 gtid,
+                                 kmp_int32 ndeps, kmp_depend_info_t *dep_list,
+                                 kmp_int32 ndeps_noalias,
+                                 kmp_depend_info_t *noalias_dep_list,
+                                 kmp_int32 has_no_wait) {
+  KA_TRACE(10, ("__kmpc_omp_taskwait_deps(enter): T#%d loc=%p nowait#%d\n",
+                gtid, loc_ref, has_no_wait));
   if (ndeps == 0 && ndeps_noalias == 0) {
-    KA_TRACE(10, ("__kmpc_omp_wait_deps(exit): T#%d has no dependences to "
+    KA_TRACE(10, ("__kmpc_omp_taskwait_deps(exit): T#%d has no dependences to "
                   "wait upon : loc=%p\n",
                   gtid, loc_ref));
     return;
@@ -1950,7 +1992,7 @@ void __kmpc_omp_wait_deps(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 ndeps,
   ignore = ignore || current_task->td_dephash == NULL;
 
   if (ignore) {
-    KA_TRACE(10, ("__kmpc_omp_wait_deps(exit): T#%d has no blocking "
+    KA_TRACE(10, ("__kmpc_omp_taskwait_deps(exit): T#%d has no blocking "
                   "dependences : loc=%p\n",
                   gtid, loc_ref));
 #if OMPT_SUPPORT
@@ -1965,7 +2007,7 @@ void __kmpc_omp_wait_deps(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 ndeps,
   if (!__kmp_check_deps(gtid, &node, NULL, &current_task->td_dephash,
                         DEP_BARRIER, ndeps, dep_list, ndeps_noalias,
                         noalias_dep_list)) {
-    KA_TRACE(10, ("__kmpc_omp_wait_deps(exit): T#%d has no blocking "
+    KA_TRACE(10, ("__kmpc_omp_taskwait_deps(exit): T#%d has no blocking "
                   "dependences : loc=%p\n",
                   gtid, loc_ref));
 #if OMPT_SUPPORT
@@ -1986,6 +2028,7 @@ void __kmpc_omp_wait_deps(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 ndeps,
 #if OMPT_SUPPORT
   __ompt_taskwait_dep_finish(current_task, taskwait_task_data);
 #endif /* OMPT_SUPPORT */
-  KA_TRACE(10, ("__kmpc_omp_wait_deps(exit): T#%d finished waiting : loc=%p\n",
+  KA_TRACE(10, ("__kmpc_omp_taskwait_deps(exit): T#%d finished waiting : loc=%p\
+                \n",
                 gtid, loc_ref));
 }

@@ -102,6 +102,42 @@ public:
   }
 };
 
+/// Floating Point Type subclass - Float8E4M3FNType.
+class PyFloat8E4M3FNType : public PyConcreteType<PyFloat8E4M3FNType> {
+public:
+  static constexpr IsAFunctionTy isaFunction = mlirTypeIsAFloat8E4M3FN;
+  static constexpr const char *pyClassName = "Float8E4M3FNType";
+  using PyConcreteType::PyConcreteType;
+
+  static void bindDerived(ClassTy &c) {
+    c.def_static(
+        "get",
+        [](DefaultingPyMlirContext context) {
+          MlirType t = mlirFloat8E4M3FNTypeGet(context->get());
+          return PyFloat8E4M3FNType(context->getRef(), t);
+        },
+        py::arg("context") = py::none(), "Create a float8_e4m3fn type.");
+  }
+};
+
+/// Floating Point Type subclass - Float8M5E2Type.
+class PyFloat8E5M2Type : public PyConcreteType<PyFloat8E5M2Type> {
+public:
+  static constexpr IsAFunctionTy isaFunction = mlirTypeIsAFloat8E5M2;
+  static constexpr const char *pyClassName = "Float8E5M2Type";
+  using PyConcreteType::PyConcreteType;
+
+  static void bindDerived(ClassTy &c) {
+    c.def_static(
+        "get",
+        [](DefaultingPyMlirContext context) {
+          MlirType t = mlirFloat8E5M2TypeGet(context->get());
+          return PyFloat8E5M2Type(context->getRef(), t);
+        },
+        py::arg("context") = py::none(), "Create a float8_e5m2 type.");
+  }
+};
+
 /// Floating Point Type subclass - BF16Type.
 class PyBF16Type : public PyConcreteType<PyBF16Type> {
 public:
@@ -301,6 +337,15 @@ public:
           return shape;
         },
         "Returns the shape of the ranked shaped type as a list of integers.");
+    c.def_static(
+        "get_dynamic_size", []() { return mlirShapedTypeGetDynamicSize(); },
+        "Returns the value used to indicate dynamic dimensions in shaped "
+        "types.");
+    c.def_static(
+        "get_dynamic_stride_or_offset",
+        []() { return mlirShapedTypeGetDynamicStrideOrOffset(); },
+        "Returns the value used to indicate dynamic strides or offsets in "
+        "shaped types.");
   }
 
 private:
@@ -381,7 +426,7 @@ public:
         [](PyRankedTensorType &self) -> llvm::Optional<PyAttribute> {
           MlirAttribute encoding = mlirRankedTensorTypeGetEncoding(self.get());
           if (mlirAttributeIsNull(encoding))
-            return llvm::None;
+            return std::nullopt;
           return PyAttribute(self.getContext(), encoding);
         });
   }
@@ -608,11 +653,54 @@ public:
   }
 };
 
+static MlirStringRef toMlirStringRef(const std::string &s) {
+  return mlirStringRefCreate(s.data(), s.size());
+}
+
+/// Opaque Type subclass - OpaqueType.
+class PyOpaqueType : public PyConcreteType<PyOpaqueType> {
+public:
+  static constexpr IsAFunctionTy isaFunction = mlirTypeIsAOpaque;
+  static constexpr const char *pyClassName = "OpaqueType";
+  using PyConcreteType::PyConcreteType;
+
+  static void bindDerived(ClassTy &c) {
+    c.def_static(
+        "get",
+        [](std::string dialectNamespace, std::string typeData,
+           DefaultingPyMlirContext context) {
+          MlirType type = mlirOpaqueTypeGet(context->get(),
+                                            toMlirStringRef(dialectNamespace),
+                                            toMlirStringRef(typeData));
+          return PyOpaqueType(context->getRef(), type);
+        },
+        py::arg("dialect_namespace"), py::arg("buffer"),
+        py::arg("context") = py::none(),
+        "Create an unregistered (opaque) dialect type.");
+    c.def_property_readonly(
+        "dialect_namespace",
+        [](PyOpaqueType &self) {
+          MlirStringRef stringRef = mlirOpaqueTypeGetDialectNamespace(self);
+          return py::str(stringRef.data, stringRef.length);
+        },
+        "Returns the dialect namespace for the Opaque type as a string.");
+    c.def_property_readonly(
+        "data",
+        [](PyOpaqueType &self) {
+          MlirStringRef stringRef = mlirOpaqueTypeGetData(self);
+          return py::str(stringRef.data, stringRef.length);
+        },
+        "Returns the data for the Opaque type as a string.");
+  }
+};
+
 } // namespace
 
 void mlir::python::populateIRTypes(py::module &m) {
   PyIntegerType::bind(m);
   PyIndexType::bind(m);
+  PyFloat8E4M3FNType::bind(m);
+  PyFloat8E5M2Type::bind(m);
   PyBF16Type::bind(m);
   PyF16Type::bind(m);
   PyF32Type::bind(m);
@@ -627,4 +715,5 @@ void mlir::python::populateIRTypes(py::module &m) {
   PyUnrankedMemRefType::bind(m);
   PyTupleType::bind(m);
   PyFunctionType::bind(m);
+  PyOpaqueType::bind(m);
 }

@@ -12,6 +12,7 @@
 //===---------------------------------------------------------------------===//
 
 #include "lsan_common.h"
+#include "lsan_thread.h"
 #include "sanitizer_common/sanitizer_platform.h"
 
 #if CAN_SANITIZE_LEAKS && SANITIZER_FUCHSIA
@@ -52,7 +53,16 @@ void ProcessPlatformSpecificAllocations(Frontier *frontier) {}
 // behavior and causes rare race conditions.
 void HandleLeaks() {}
 
+// This is defined differently in asan_fuchsia.cpp and lsan_fuchsia.cpp.
+bool UseExitcodeOnLeak();
+
 int ExitHook(int status) {
+  if (common_flags()->detect_leaks && common_flags()->leak_check_at_exit) {
+    if (UseExitcodeOnLeak())
+      DoLeakCheck();
+    else
+      DoRecoverableLeakCheckVoid();
+  }
   return status == 0 && HasReportedLeaks() ? common_flags()->exitcode : status;
 }
 
@@ -137,7 +147,7 @@ void LockStuffAndStopTheWorld(StopTheWorldCallback callback,
         // just for the allocator cache, and to call ForEachExtraStackRange,
         // which ASan needs.
         if (flags()->use_stacks) {
-          GetThreadRegistryLocked()->RunCallbackForEachThreadLocked(
+          GetLsanThreadRegistryLocked()->RunCallbackForEachThreadLocked(
               [](ThreadContextBase *tctx, void *arg) {
                 ForEachExtraStackRange(tctx->os_id, ForEachExtraStackRangeCb,
                                        arg);

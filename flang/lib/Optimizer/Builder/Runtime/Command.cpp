@@ -13,6 +13,18 @@
 
 using namespace Fortran::runtime;
 
+// Certain runtime intrinsics should only be run when select parameters of the
+// intrisic are supplied. In certain cases one of these parameters may not be
+// given, however the intrinsic needs to be run due to another required
+// parameter being supplied. In this case the missing parameter is assigned to
+// have an "absent" value. This typically happens in IntrinsicCall.cpp. For this
+// reason the extra indirection with `isAbsent` is needed for testing whether a
+// given parameter is actually present (so that parameters with "value" absent
+// are not considered as present).
+inline bool isAbsent(mlir::Value val) {
+  return mlir::isa_and_nonnull<fir::AbsentOp>(val.getDefiningOp());
+}
+
 mlir::Value fir::runtime::genCommandArgumentCount(fir::FirOpBuilder &builder,
                                                   mlir::Location loc) {
   auto argumentCountFunc =
@@ -20,51 +32,63 @@ mlir::Value fir::runtime::genCommandArgumentCount(fir::FirOpBuilder &builder,
   return builder.create<fir::CallOp>(loc, argumentCountFunc).getResult(0);
 }
 
-void fir::runtime::genGetCommandArgument(fir::FirOpBuilder &builder,
-                                         mlir::Location loc, mlir::Value number,
-                                         mlir::Value value, mlir::Value length,
-                                         mlir::Value status,
-                                         mlir::Value errmsg) {
-  auto argumentValueFunc =
-      fir::runtime::getRuntimeFunc<mkRTKey(ArgumentValue)>(loc, builder);
-  auto argumentLengthFunc =
-      fir::runtime::getRuntimeFunc<mkRTKey(ArgumentLength)>(loc, builder);
+mlir::Value fir::runtime::genGetCommand(fir::FirOpBuilder &builder,
+                                        mlir::Location loc, mlir::Value command,
+                                        mlir::Value length,
+                                        mlir::Value errmsg) {
+  auto runtimeFunc =
+      fir::runtime::getRuntimeFunc<mkRTKey(GetCommand)>(loc, builder);
+  mlir::FunctionType runtimeFuncTy = runtimeFunc.getFunctionType();
+  mlir::Value sourceFile = fir::factory::locationToFilename(builder, loc);
+  mlir::Value sourceLine =
+      fir::factory::locationToLineNo(builder, loc, runtimeFuncTy.getInput(4));
+  llvm::SmallVector<mlir::Value> args =
+      fir::runtime::createArguments(builder, loc, runtimeFuncTy, command,
+                                    length, errmsg, sourceFile, sourceLine);
+  return builder.create<fir::CallOp>(loc, runtimeFunc, args).getResult(0);
+}
 
-  auto isPresent = [&](mlir::Value val) -> bool {
-    return !mlir::isa_and_nonnull<fir::AbsentOp>(val.getDefiningOp());
-  };
+mlir::Value fir::runtime::genGetCommandArgument(
+    fir::FirOpBuilder &builder, mlir::Location loc, mlir::Value number,
+    mlir::Value value, mlir::Value length, mlir::Value errmsg) {
+  auto runtimeFunc =
+      fir::runtime::getRuntimeFunc<mkRTKey(GetCommandArgument)>(loc, builder);
+  mlir::FunctionType runtimeFuncTy = runtimeFunc.getFunctionType();
+  mlir::Value sourceFile = fir::factory::locationToFilename(builder, loc);
+  mlir::Value sourceLine =
+      fir::factory::locationToLineNo(builder, loc, runtimeFuncTy.getInput(5));
+  llvm::SmallVector<mlir::Value> args =
+      fir::runtime::createArguments(builder, loc, runtimeFuncTy, number, value,
+                                    length, errmsg, sourceFile, sourceLine);
+  return builder.create<fir::CallOp>(loc, runtimeFunc, args).getResult(0);
+}
 
-  mlir::Value valueResult;
-  // Run `ArgumentValue` intrisc only if we have either "value", "status" or
-  // "errmsg" `ArgumentValue` "requires" existing values for its arguments
-  // "value" and "errmsg". So in the case they aren't given, but the user has
-  // requested "status", we have to assign "absent" values to them before
-  // calling `ArgumentValue`. This happens in IntrinsicCall.cpp. For this reason
-  // we need extra indirection with `isPresent` for testing whether "value" or
-  // "errmsg" is present.
-  if (isPresent(value) || status || isPresent(errmsg)) {
-    llvm::SmallVector<mlir::Value> args = fir::runtime::createArguments(
-        builder, loc, argumentValueFunc.getType(), number, value, errmsg);
-    valueResult =
-        builder.create<fir::CallOp>(loc, argumentValueFunc, args).getResult(0);
-  }
+mlir::Value fir::runtime::genEnvVariableValue(
+    fir::FirOpBuilder &builder, mlir::Location loc, mlir::Value name,
+    mlir::Value value, mlir::Value trimName, mlir::Value errmsg) {
+  auto valueFunc =
+      fir::runtime::getRuntimeFunc<mkRTKey(EnvVariableValue)>(loc, builder);
+  mlir::FunctionType valueFuncTy = valueFunc.getFunctionType();
+  mlir::Value sourceFile = fir::factory::locationToFilename(builder, loc);
+  mlir::Value sourceLine =
+      fir::factory::locationToLineNo(builder, loc, valueFuncTy.getInput(5));
+  llvm::SmallVector<mlir::Value> args =
+      fir::runtime::createArguments(builder, loc, valueFuncTy, name, value,
+                                    trimName, errmsg, sourceFile, sourceLine);
+  return builder.create<fir::CallOp>(loc, valueFunc, args).getResult(0);
+}
 
-  // Only save result of ArgumentValue if "status" parameter has been given
-  if (status) {
-    const mlir::Value statusLoaded = builder.create<fir::LoadOp>(loc, status);
-    mlir::Value resultCast =
-        builder.createConvert(loc, statusLoaded.getType(), valueResult);
-    builder.create<fir::StoreOp>(loc, resultCast, status);
-  }
-
-  if (length) {
-    llvm::SmallVector<mlir::Value> args = fir::runtime::createArguments(
-        builder, loc, argumentLengthFunc.getType(), number);
-    mlir::Value result =
-        builder.create<fir::CallOp>(loc, argumentLengthFunc, args).getResult(0);
-    const mlir::Value valueLoaded = builder.create<fir::LoadOp>(loc, length);
-    mlir::Value resultCast =
-        builder.createConvert(loc, valueLoaded.getType(), result);
-    builder.create<fir::StoreOp>(loc, resultCast, length);
-  }
+mlir::Value fir::runtime::genEnvVariableLength(fir::FirOpBuilder &builder,
+                                               mlir::Location loc,
+                                               mlir::Value name,
+                                               mlir::Value trimName) {
+  auto lengthFunc =
+      fir::runtime::getRuntimeFunc<mkRTKey(EnvVariableLength)>(loc, builder);
+  mlir::FunctionType lengthFuncTy = lengthFunc.getFunctionType();
+  mlir::Value sourceFile = fir::factory::locationToFilename(builder, loc);
+  mlir::Value sourceLine =
+      fir::factory::locationToLineNo(builder, loc, lengthFuncTy.getInput(3));
+  llvm::SmallVector<mlir::Value> args = fir::runtime::createArguments(
+      builder, loc, lengthFuncTy, name, trimName, sourceFile, sourceLine);
+  return builder.create<fir::CallOp>(loc, lengthFunc, args).getResult(0);
 }

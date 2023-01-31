@@ -528,6 +528,9 @@
 # CHECK-LE: xxeval 32, 1, 2, 3, 2                 # encoding: [0x02,0x00,0x00,0x05,
 # CHECK-LE-SAME:                                               0xd1,0x10,0x01,0x88]
             xxeval 32, 1, 2, 3, 2
+# CHECK-BE: lxvkq 63, 31                          # encoding: [0xf3,0xff,0xfa,0xd1]
+# CHECK-LE: lxvkq 63, 31                          # encoding: [0xd1,0xfa,0xff,0xf3]
+            lxvkq 63, 31
 # CHECK-BE: vclzdm 1, 2, 3                        # encoding: [0x10,0x22,0x1f,0x84]
 # CHECK-LE: vclzdm 1, 2, 3                        # encoding: [0x84,0x1f,0x22,0x10]
             vclzdm 1, 2, 3
@@ -610,6 +613,15 @@
 # CHECK-LE: xxpermx 6, 63, 21, 34, 2              # encoding: [0x02,0x00,0x00,0x05,
 # CHECK-LE-SAME:                                               0x8c,0xa8,0xdf,0x88]
             xxpermx 6, 63, 21, 34, 2
+# CHECK-BE: brh 1, 2                              # encoding: [0x7c,0x41,0x01,0xb6]
+# CHECK-LE: brh 1, 2                              # encoding: [0xb6,0x01,0x41,0x7c]
+            brh 1, 2
+# CHECK-BE: brw 1, 2                              # encoding: [0x7c,0x41,0x01,0x36]
+# CHECK-LE: brw 1, 2                              # encoding: [0x36,0x01,0x41,0x7c]
+            brw 1, 2
+# CHECK-BE: brd 1, 2                              # encoding: [0x7c,0x41,0x01,0x76]
+# CHECK-LE: brd 1, 2                              # encoding: [0x76,0x01,0x41,0x7c]
+            brd 1, 2
 # CHECK-BE: xxblendvb 6, 63, 21, 34               # encoding: [0x05,0x00,0x00,0x00,
 # CHECK-BE-SAME:                                               0x84,0xdf,0xa8,0x8c]
 # CHECK-LE: xxblendvb 6, 63, 21, 34               # encoding: [0x00,0x00,0x00,0x05,
@@ -942,6 +954,15 @@
 # CHECK-BE: xsmincqp 2, 2, 3                      # encoding: [0xfc,0x42,0x1d,0xc8]
 # CHECK-LE: xsmincqp 2, 2, 3                      # encoding: [0xc8,0x1d,0x42,0xfc]
             xsmincqp 2, 2, 3
+# CHECK-BE: xscmpeqqp 1, 2, 2                     # encoding: [0xfc,0x22,0x10,0x88]
+# CHECK-LE: xscmpeqqp 1, 2, 2                     # encoding: [0x88,0x10,0x22,0xfc]
+            xscmpeqqp 1, 2, 2
+# CHECK-BE: xscmpgeqp 1, 2, 3                     # encoding: [0xfc,0x22,0x19,0x88]
+# CHECK-LE: xscmpgeqp 1, 2, 3                     # encoding: [0x88,0x19,0x22,0xfc]
+            xscmpgeqp 1, 2, 3
+# CHECK-BE: xscmpgtqp 1, 2, 4                     # encoding: [0xfc,0x22,0x21,0xc8]
+# CHECK-LE: xscmpgtqp 1, 2, 4                     # encoding: [0xc8,0x21,0x22,0xfc]
+            xscmpgtqp 1, 2, 4
 # CHECK-BE: vstribr 2, 2                          # encoding: [0x10,0x41,0x10,0x0d]
 # CHECK-LE: vstribr 2, 2                          # encoding: [0x0d,0x10,0x41,0x10]
             vstribr 2, 2

@@ -16,11 +16,14 @@
 #include "State.h"
 #include "Types.h"
 
-using namespace _OMP;
+using namespace ompx;
 
-#pragma omp declare target
+#pragma omp begin declare target device_type(nohost)
 
-extern uint32_t __omp_rtl_debug_kind; // defined by CGOpenMPRuntimeGPU
+// defined by CGOpenMPRuntimeGPU
+extern uint32_t __omp_rtl_debug_kind;
+extern uint32_t __omp_rtl_assume_no_thread_state;
+extern uint32_t __omp_rtl_assume_no_nested_parallelism;
 
 // TODO: We want to change the name as soon as the old runtime is gone.
 // This variable should be visibile to the plugin so we override the default
@@ -46,6 +49,12 @@ uint64_t config::getDynamicMemorySize() {
 
 bool config::isDebugMode(config::DebugKind Kind) {
   return config::getDebugKind() & Kind;
+}
+
+bool config::mayUseThreadStates() { return !__omp_rtl_assume_no_thread_state; }
+
+bool config::mayUseNestedParallelism() {
+  return !__omp_rtl_assume_no_nested_parallelism;
 }
 
 #pragma omp end declare target

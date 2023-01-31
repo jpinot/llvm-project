@@ -56,8 +56,10 @@ void PlatformRemoteAppleBridge::Terminate() {
   PlatformDarwin::Terminate();
 }
 
-PlatformSP PlatformRemoteAppleBridge::CreateInstance(bool force,
-                                                 const ArchSpec *arch) {
+PlatformSP
+PlatformRemoteAppleBridge::CreateInstance(bool force, const ArchSpec *arch,
+                                          const Debugger *debugger,
+                                          const ScriptedMetadata *metadata) {
   Log *log = GetLog(LLDBLog::Platform);
   if (log) {
     const char *arch_name;
@@ -138,7 +140,8 @@ llvm::StringRef PlatformRemoteAppleBridge::GetDescriptionStatic() {
   return "Remote BridgeOS platform plug-in.";
 }
 
-std::vector<ArchSpec> PlatformRemoteAppleBridge::GetSupportedArchitectures() {
+std::vector<ArchSpec> PlatformRemoteAppleBridge::GetSupportedArchitectures(
+    const ArchSpec &process_host_arch) {
   return {ArchSpec("arm64-apple-bridgeos")};
 }
 

@@ -44,11 +44,11 @@ public:
   enum ScopeFlags {
     /// This indicates that the scope corresponds to a function, which
     /// means that labels are set here.
-    FnScope       = 0x01,
+    FnScope = 0x01,
 
     /// This is a while, do, switch, for, etc that can have break
     /// statements embedded into it.
-    BreakScope    = 0x02,
+    BreakScope = 0x02,
 
     /// This is a while, do, for, which can have continue statements
     /// embedded into it.
@@ -141,11 +141,15 @@ public:
     /// continue block from here.
     ConditionVarScope = 0x2000000,
 
+    /// This is a scope of some OpenMP directive with
+    /// order clause which specifies concurrent
+    OpenMPOrderClauseScope = 0x4000000,
+
     /// This is the scope of OmpSs executable directive.
-    OmpSsDirectiveScope = 0x4000000,
+    OmpSsDirectiveScope = 0x8000000,
 
     /// This is the scope of some OmpSs loop directive.
-    OmpSsLoopDirectiveScope = 0x8000000,
+    OmpSsLoopDirectiveScope = 0x10000000,
   };
 
 private:
@@ -216,9 +220,19 @@ private:
   /// Used to determine if errors occurred in this scope.
   DiagnosticErrorTrap ErrorTrap;
 
-  /// A lattice consisting of undefined, a single NRVO candidate variable in
-  /// this scope, or over-defined. The bit is true when over-defined.
-  llvm::PointerIntPair<VarDecl *, 1, bool> NRVO;
+  /// A single NRVO candidate variable in this scope.
+  /// There are three possible values:
+  ///  1) pointer to VarDecl that denotes NRVO candidate itself.
+  ///  2) nullptr value means that NRVO is not allowed in this scope
+  ///     (e.g. return a function parameter).
+  ///  3) std::nullopt value means that there is no NRVO candidate in this scope
+  ///     (i.e. there are no return statements in this scope).
+  Optional<VarDecl *> NRVO;
+
+  /// Represents return slots for NRVO candidates in the current scope.
+  /// If a variable is present in this set, it means that a return slot is
+  /// available for this variable in the current scope.
+  llvm::SmallPtrSet<VarDecl *, 8> ReturnSlots;
 
   void setFlags(Scope *Parent, unsigned F);
 
@@ -310,12 +324,14 @@ public:
   bool decl_empty() const { return DeclsInScope.empty(); }
 
   void AddDecl(Decl *D) {
+    if (auto *VD = dyn_cast<VarDecl>(D))
+      if (!isa<ParmVarDecl>(VD))
+        ReturnSlots.insert(VD);
+
     DeclsInScope.insert(D);
   }
 
-  void RemoveDecl(Decl *D) {
-    DeclsInScope.erase(D);
-  }
+  void RemoveDecl(Decl *D) { DeclsInScope.erase(D); }
 
   void incrementMSManglingNumber() {
     if (Scope *MSLMP = getMSLastManglingParent()) {
@@ -370,11 +386,15 @@ public:
   }
 
   /// isFunctionScope() - Return true if this scope is a function scope.
-  bool isFunctionScope() const { return (getFlags() & Scope::FnScope); }
+  bool isFunctionScope() const { return getFlags() & Scope::FnScope; }
 
   /// isClassScope - Return true if this scope is a class/struct/union scope.
-  bool isClassScope() const {
-    return (getFlags() & Scope::ClassScope);
+  bool isClassScope() const { return getFlags() & Scope::ClassScope; }
+
+  /// Determines whether this scope is between inheritance colon and the real
+  /// class/struct definition.
+  bool isClassInheritanceScope() const {
+    return getFlags() & Scope::ClassInheritanceScope;
   }
 
   /// isInCXXInlineMethodScope - Return true if this scope is a C++ inline
@@ -431,6 +451,9 @@ public:
   bool isAtCatchScope() const {
     return getFlags() & Scope::AtCatchScope;
   }
+
+  /// isCatchScope - Return true if this scope is a C++ catch statement.
+  bool isCatchScope() const { return getFlags() & Scope::CatchScope; }
 
   /// isSwitchScope - Return true if this scope is a switch scope.
   bool isSwitchScope() const {
@@ -491,6 +514,18 @@ public:
     return P && P->isOpenMPLoopDirectiveScope();
   }
 
+  /// Determine whether this scope is some OpenMP directive with
+  /// order clause which specifies concurrent scope.
+  bool isOpenMPOrderClauseScope() const {
+    return getFlags() & Scope::OpenMPOrderClauseScope;
+  }
+
+  /// Determine whether this scope is a while/do/for statement, which can have
+  /// continue statements embedded into it.
+  bool isContinueScope() const {
+    return getFlags() & ScopeFlags::ContinueScope;
+  }
+
   /// Determine whether this scope is a loop having OmpSs loop
   /// directive attached.
   bool isOmpSsLoopScope() const {
@@ -500,6 +535,11 @@ public:
 
   /// Determine whether this scope is a C++ 'try' block.
   bool isTryScope() const { return getFlags() & Scope::TryScope; }
+
+  /// Determine whether this scope is a function-level C++ try or catch scope.
+  bool isFnTryCatchScope() const {
+    return getFlags() & ScopeFlags::FnTryCatchScope;
+  }
 
   /// Determine whether this scope is a SEH '__try' block.
   bool isSEHTryScope() const { return getFlags() & Scope::SEHTryScope; }
@@ -511,6 +551,10 @@ public:
   bool isCompoundStmtScope() const {
     return getFlags() & Scope::CompoundStmtScope;
   }
+
+  /// Determine whether this scope is a controlling scope in a
+  /// if/switch/while/for statement.
+  bool isControlScope() const { return getFlags() & Scope::ControlScope; }
 
   /// Returns if rhs has a higher scope depth than this.
   ///
@@ -534,23 +578,9 @@ public:
                                   UsingDirectives.end());
   }
 
-  void addNRVOCandidate(VarDecl *VD) {
-    if (NRVO.getInt())
-      return;
-    if (NRVO.getPointer() == nullptr) {
-      NRVO.setPointer(VD);
-      return;
-    }
-    if (NRVO.getPointer() != VD)
-      setNoNRVO();
-  }
+  void updateNRVOCandidate(VarDecl *VD);
 
-  void setNoNRVO() {
-    NRVO.setInt(true);
-    NRVO.setPointer(nullptr);
-  }
-
-  void mergeNRVOIntoParent();
+  void applyNRVO();
 
   /// Init - This is used by the parser to implement scope caching.
   void Init(Scope *parent, unsigned flags);

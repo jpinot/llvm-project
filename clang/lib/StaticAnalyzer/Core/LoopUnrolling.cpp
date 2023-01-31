@@ -24,6 +24,7 @@ using namespace clang::ast_matchers;
 
 static const int MAXIMUM_STEP_UNROLLED = 128;
 
+namespace {
 struct LoopState {
 private:
   enum Kind { Normal, Unrolled } K;
@@ -56,6 +57,7 @@ public:
     ID.AddInteger(maxStep);
   }
 };
+} // namespace
 
 // The tracked stack of loops. The stack indicates that which loops the
 // simulated element contained by. The loops are marked depending if we decided
@@ -175,7 +177,7 @@ static bool isCapturedByReference(ExplodedNode *N, const DeclRefExpr *DR) {
   const CXXRecordDecl *LambdaCXXRec = MD->getParent();
 
   // Lookup the fields of the lambda
-  llvm::DenseMap<const VarDecl *, FieldDecl *> LambdaCaptureFields;
+  llvm::DenseMap<const ValueDecl *, FieldDecl *> LambdaCaptureFields;
   FieldDecl *LambdaThisCaptureField;
   LambdaCXXRec->getCaptureFields(LambdaCaptureFields, LambdaThisCaptureField);
 
@@ -264,8 +266,8 @@ bool shouldCompletelyUnroll(const Stmt *LoopStmt, ASTContext &ASTCtx,
       Matches[0].getNodeAs<IntegerLiteral>("initNum")->getValue();
   auto CondOp = Matches[0].getNodeAs<BinaryOperator>("conditionOperator");
   if (InitNum.getBitWidth() != BoundNum.getBitWidth()) {
-    InitNum = InitNum.zextOrSelf(BoundNum.getBitWidth());
-    BoundNum = BoundNum.zextOrSelf(InitNum.getBitWidth());
+    InitNum = InitNum.zext(BoundNum.getBitWidth());
+    BoundNum = BoundNum.zext(InitNum.getBitWidth());
   }
 
   if (CondOp->getOpcode() == BO_GE || CondOp->getOpcode() == BO_LE)

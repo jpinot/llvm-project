@@ -159,7 +159,7 @@ static const EHPersonality &getObjCPersonality(const TargetInfo &Target,
   case ObjCRuntime::GNUstep:
     if (L.ObjCRuntime.getVersion() >= VersionTuple(1, 7))
       return EHPersonality::GNUstep_ObjC;
-    LLVM_FALLTHROUGH;
+    [[fallthrough]];
   case ObjCRuntime::GCC:
   case ObjCRuntime::ObjFW:
     if (L.hasSjLjExceptions())
@@ -250,7 +250,7 @@ const EHPersonality &EHPersonality::get(CodeGenFunction &CGF) {
   // For outlined finallys and filters, use the SEH personality in case they
   // contain more SEH. This mostly only affects finallys. Filters could
   // hypothetically use gnu statement expressions to sneak in nested SEH.
-  FD = FD ? FD : CGF.CurSEHParent;
+  FD = FD ? FD : CGF.CurSEHParent.getDecl();
   return get(CGF.CGM, dyn_cast_or_null<FunctionDecl>(FD));
 }
 
@@ -426,7 +426,7 @@ Address CodeGenFunction::getExceptionSlot() {
     if (ESlotAddr.isValid())
       return ESlotAddr;
     llvm::Instruction *I = CreateTempAlloca(Int8PtrTy, "exn.slot");
-    Address Addr = Address(I, getPointerAlign());
+    Address Addr = Address(I, Int8PtrTy, getPointerAlign());
     CGM.getOmpSsRuntime().setTaskExceptionSlot(Addr);
     return Addr;
   }
@@ -443,7 +443,7 @@ Address CodeGenFunction::getEHSelectorSlot() {
     if (EHSSlotAddr.isValid())
       return EHSSlotAddr;
     llvm::Instruction *I = CreateTempAlloca(Int32Ty, "ehselector.slot");
-    Address Addr = Address(I, CharUnits::fromQuantity(4));
+    Address Addr = Address(I, Int32Ty, CharUnits::fromQuantity(4));
     CGM.getOmpSsRuntime().setTaskEHSelectorSlot(Addr);
     return Addr;
   }
@@ -1246,8 +1246,7 @@ void CodeGenFunction::ExitCXXTryStmt(const CXXTryStmt &S, bool IsFnTryBlock) {
   // Wasm uses Windows-style EH instructions, but merges all catch clauses into
   // one big catchpad. So we save the old funclet pad here before we traverse
   // each catch handler.
-  SaveAndRestore<llvm::Instruction *> RestoreCurrentFuncletPad(
-      CurrentFuncletPad);
+  SaveAndRestore RestoreCurrentFuncletPad(CurrentFuncletPad);
   llvm::BasicBlock *WasmCatchStartBlock = nullptr;
   if (EHPersonality::get(*this).isWasmPersonality()) {
     auto *CatchSwitch =
@@ -1280,8 +1279,7 @@ void CodeGenFunction::ExitCXXTryStmt(const CXXTryStmt &S, bool IsFnTryBlock) {
     RunCleanupsScope CatchScope(*this);
 
     // Initialize the catch variable and set up the cleanups.
-    SaveAndRestore<llvm::Instruction *> RestoreCurrentFuncletPad(
-        CurrentFuncletPad);
+    SaveAndRestore RestoreCurrentFuncletPad(CurrentFuncletPad);
     CGM.getCXXABI().emitBeginCatch(*this, C);
 
     // Emit the PGO counter increment.
@@ -1630,8 +1628,7 @@ llvm::BasicBlock *CodeGenFunction::getTerminateFunclet() {
 
   // Create the cleanuppad using the current parent pad as its token. Use 'none'
   // if this is a top-level terminate scope, which is the common case.
-  SaveAndRestore<llvm::Instruction *> RestoreCurrentFuncletPad(
-      CurrentFuncletPad);
+  SaveAndRestore RestoreCurrentFuncletPad(CurrentFuncletPad);
   llvm::Value *ParentPad = CurrentFuncletPad;
   if (!ParentPad)
     ParentPad = llvm::ConstantTokenNone::get(CGM.getLLVMContext());
@@ -1676,7 +1673,7 @@ llvm::BasicBlock *CodeGenFunction::getEHResumeBlock(bool isCleanup) {
   llvm::Value *Sel = getSelectorFromSlot();
 
   llvm::Type *LPadType = llvm::StructType::get(Exn->getType(), Sel->getType());
-  llvm::Value *LPadVal = llvm::UndefValue::get(LPadType);
+  llvm::Value *LPadVal = llvm::PoisonValue::get(LPadType);
   LPadVal = Builder.CreateInsertValue(LPadVal, Exn, 0, "lpad.val");
   LPadVal = Builder.CreateInsertValue(LPadVal, Sel, 1, "lpad.val");
 
@@ -1893,7 +1890,7 @@ Address CodeGenFunction::recoverAddrOfEscapedLocal(CodeGenFunction &ParentCGF,
   llvm::Value *ChildVar =
       Builder.CreateBitCast(RecoverCall, ParentVar.getType());
   ChildVar->setName(ParentVar.getName());
-  return Address(ChildVar, ParentVar.getAlignment());
+  return ParentVar.withPointer(ChildVar);
 }
 
 void CodeGenFunction::EmitCapturedLocals(CodeGenFunction &ParentCGF,
@@ -1979,7 +1976,8 @@ void CodeGenFunction::EmitCapturedLocals(CodeGenFunction &ParentCGF,
           FrameRecoverFn, {ParentI8Fn, ParentFP,
                            llvm::ConstantInt::get(Int32Ty, FrameEscapeIdx)});
       ParentFP = Builder.CreateBitCast(ParentFP, CGM.VoidPtrPtrTy);
-      ParentFP = Builder.CreateLoad(Address(ParentFP, getPointerAlign()));
+      ParentFP = Builder.CreateLoad(
+          Address(ParentFP, CGM.VoidPtrTy, getPointerAlign()));
     }
   }
 
@@ -2052,7 +2050,7 @@ void CodeGenFunction::startOutlinedSEHHelper(CodeGenFunction &ParentCGF,
   SmallString<128> Name;
   {
     llvm::raw_svector_ostream OS(Name);
-    const NamedDecl *ParentSEHFn = ParentCGF.CurSEHParent;
+    GlobalDecl ParentSEHFn = ParentCGF.CurSEHParent;
     assert(ParentSEHFn && "No CurSEHParent!");
     MangleContext &Mangler = CGM.getCXXABI().getMangleContext();
     if (IsFilter)

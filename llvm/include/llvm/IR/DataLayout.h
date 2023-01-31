@@ -26,10 +26,10 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Type.h"
+#include "llvm/Support/Alignment.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/Alignment.h"
 #include "llvm/Support/TrailingObjects.h"
 #include "llvm/Support/TypeSize.h"
 #include <cassert>
@@ -473,7 +473,7 @@ public:
   /// For example, returns 5 for i36 and 10 for x86_fp80.
   TypeSize getTypeStoreSize(Type *Ty) const {
     TypeSize BaseSize = getTypeSizeInBits(Ty);
-    return {divideCeil(BaseSize.getKnownMinSize(), 8), BaseSize.isScalable()};
+    return {divideCeil(BaseSize.getKnownMinValue(), 8), BaseSize.isScalable()};
   }
 
   /// Returns the maximum number of bits that may be overwritten by
@@ -591,11 +591,11 @@ public:
   /// the result element type and Offset to be the residual offset.
   SmallVector<APInt> getGEPIndicesForOffset(Type *&ElemTy, APInt &Offset) const;
 
-  /// Get single GEP index to access Offset inside ElemTy. Returns None if
-  /// index cannot be computed, e.g. because the type is not an aggregate.
+  /// Get single GEP index to access Offset inside ElemTy. Returns std::nullopt
+  /// if index cannot be computed, e.g. because the type is not an aggregate.
   /// ElemTy is updated to be the result element type and Offset to be the
   /// residual offset.
-  Optional<APInt> getGEPIndexForOffset(Type *&ElemTy, APInt &Offset) const;
+  std::optional<APInt> getGEPIndexForOffset(Type *&ElemTy, APInt &Offset) const;
 
   /// Returns a StructLayout object, indicating the alignment of the
   /// struct, its size, and the offsets of its fields.
@@ -646,7 +646,7 @@ public:
   }
 
   ArrayRef<uint64_t> getMemberOffsets() const {
-    return llvm::makeArrayRef(getTrailingObjects<uint64_t>(), NumElements);
+    return llvm::ArrayRef(getTrailingObjects<uint64_t>(), NumElements);
   }
 
   uint64_t getElementOffset(unsigned Idx) const {
@@ -710,8 +710,12 @@ inline TypeSize DataLayout::getTypeSizeInBits(Type *Ty) const {
     VectorType *VTy = cast<VectorType>(Ty);
     auto EltCnt = VTy->getElementCount();
     uint64_t MinBits = EltCnt.getKnownMinValue() *
-                       getTypeSizeInBits(VTy->getElementType()).getFixedSize();
+                       getTypeSizeInBits(VTy->getElementType()).getFixedValue();
     return TypeSize(MinBits, EltCnt.isScalable());
+  }
+  case Type::TargetExtTyID: {
+    Type *LayoutTy = cast<TargetExtType>(Ty)->getLayoutType();
+    return getTypeSizeInBits(LayoutTy);
   }
   default:
     llvm_unreachable("DataLayout::getTypeSizeInBits(): Unsupported type");

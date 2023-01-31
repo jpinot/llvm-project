@@ -14,8 +14,11 @@
 #include "../modernize/AvoidCArraysCheck.h"
 #include "../modernize/UseOverrideCheck.h"
 #include "../readability/MagicNumbersCheck.h"
+#include "AvoidConstOrRefDataMembersCheck.h"
+#include "AvoidDoWhileCheck.h"
 #include "AvoidGotoCheck.h"
 #include "AvoidNonConstGlobalVariablesCheck.h"
+#include "AvoidReferenceCoroutineParametersCheck.h"
 #include "InitVariablesCheck.h"
 #include "InterfacesGlobalInitCheck.h"
 #include "MacroUsageCheck.h"
@@ -47,12 +50,18 @@ public:
   void addCheckFactories(ClangTidyCheckFactories &CheckFactories) override {
     CheckFactories.registerCheck<modernize::AvoidCArraysCheck>(
         "cppcoreguidelines-avoid-c-arrays");
+    CheckFactories.registerCheck<AvoidConstOrRefDataMembersCheck>(
+        "cppcoreguidelines-avoid-const-or-ref-data-members");
+    CheckFactories.registerCheck<AvoidDoWhileCheck>(
+        "cppcoreguidelines-avoid-do-while");
     CheckFactories.registerCheck<AvoidGotoCheck>(
         "cppcoreguidelines-avoid-goto");
     CheckFactories.registerCheck<readability::MagicNumbersCheck>(
         "cppcoreguidelines-avoid-magic-numbers");
     CheckFactories.registerCheck<AvoidNonConstGlobalVariablesCheck>(
         "cppcoreguidelines-avoid-non-const-global-variables");
+    CheckFactories.registerCheck<AvoidReferenceCoroutineParametersCheck>(
+        "cppcoreguidelines-avoid-reference-coroutine-parameters");
     CheckFactories.registerCheck<modernize::UseOverrideCheck>(
         "cppcoreguidelines-explicit-virtual-functions");
     CheckFactories.registerCheck<InitVariablesCheck>(

@@ -118,18 +118,14 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Analysis/SyncDependenceAnalysis.h"
-#include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Analysis/LoopInfo.h"
-#include "llvm/Analysis/PostDominators.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
 
 #include <functional>
-#include <stack>
-#include <unordered_set>
 
 #define DEBUG_TYPE "sync-dependence"
 
@@ -261,6 +257,7 @@ SyncDependenceAnalysis::SyncDependenceAnalysis(const DominatorTree &DT,
 
 SyncDependenceAnalysis::~SyncDependenceAnalysis() = default;
 
+namespace {
 // divergence propagator for reducible CFGs
 struct DivergencePropagator {
   const ModifiedPO &LoopPOT;
@@ -437,6 +434,7 @@ struct DivergencePropagator {
     return std::move(DivDesc);
   }
 };
+} // end anonymous namespace
 
 #ifndef NDEBUG
 static void printBlockSet(ConstBlockSet &Blocks, raw_ostream &Out) {

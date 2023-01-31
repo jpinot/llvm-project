@@ -39,8 +39,9 @@ LLDB_PLUGIN_DEFINE(PlatformNetBSD)
 
 static uint32_t g_initialize_count = 0;
 
-
-PlatformSP PlatformNetBSD::CreateInstance(bool force, const ArchSpec *arch) {
+PlatformSP PlatformNetBSD::CreateInstance(bool force, const ArchSpec *arch,
+                                          const Debugger *debugger,
+                                          const ScriptedMetadata *metadata) {
   Log *log = GetLog(LLDBLog::Platform);
   LLDB_LOG(log, "force = {0}, arch=({1}, {2})", force,
            arch ? arch->GetArchitectureName() : "<null>",
@@ -115,9 +116,10 @@ PlatformNetBSD::PlatformNetBSD(bool is_host)
   }
 }
 
-std::vector<ArchSpec> PlatformNetBSD::GetSupportedArchitectures() {
+std::vector<ArchSpec>
+PlatformNetBSD::GetSupportedArchitectures(const ArchSpec &process_host_arch) {
   if (m_remote_platform_sp)
-    return m_remote_platform_sp->GetSupportedArchitectures();
+    return m_remote_platform_sp->GetSupportedArchitectures(process_host_arch);
   return m_supported_architectures;
 }
 
@@ -205,9 +207,12 @@ MmapArgList PlatformNetBSD::GetMmapArgumentList(const ArchSpec &arch,
 }
 
 CompilerType PlatformNetBSD::GetSiginfoType(const llvm::Triple &triple) {
-  if (!m_type_system_up)
-    m_type_system_up.reset(new TypeSystemClang("siginfo", triple));
-  TypeSystemClang *ast = m_type_system_up.get();
+  {
+    std::lock_guard<std::mutex> guard(m_mutex);
+    if (!m_type_system)
+      m_type_system = std::make_shared<TypeSystemClang>("siginfo", triple);
+  }
+  TypeSystemClang *ast = m_type_system.get();
 
   // generic types
   CompilerType int_type = ast->GetBasicType(eBasicTypeInt);

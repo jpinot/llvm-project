@@ -196,6 +196,16 @@ def TDL_DirA : Directive<"dira"> {
 // IMPL-EMPTY:
 // IMPL-NEXT:  #endif // GEN_FLANG_CLAUSE_PARSER_KIND_MAP
 // IMPL-EMPTY:
+// IMPL-NEXT: #ifdef GEN_FLANG_CLAUSES_PARSER
+// IMPL-NEXT: #undef GEN_FLANG_CLAUSES_PARSER
+// IMPL-EMPTY:
+// IMPL-NEXT:  TYPE_PARSER(
+// IMPL-NEXT:    "clauseb" >> construct<TdlClause>(construct<TdlClause::Clauseb>(maybe(parenthesized(Parser<IntExpr>{})))) ||
+// IMPL-NEXT:    "clausea" >> construct<TdlClause>(construct<TdlClause::Clausea>())
+// IMPL-NEXT:  )
+// IMPL-EMPTY:
+// IMPL-NEXT:  #endif // GEN_FLANG_CLAUSES_PARSER
+// IMPL-EMPTY:
 // IMPL-NEXT:  #ifdef GEN_CLANG_CLAUSE_CLASS
 // IMPL-NEXT:  #undef GEN_CLANG_CLAUSE_CLASS
 // IMPL-EMPTY:
@@ -227,6 +237,7 @@ def TDL_DirA : Directive<"dira"> {
 // IMPL-EMPTY:
 // IMPL-NEXT:  #undef __IMPLICIT_CLAUSE_NO_CLASS
 // IMPL-NEXT:  #undef __IMPLICIT_CLAUSE_CLASS
+// IMPL-NEXT:  #undef __CLAUSE_NO_CLASS
 // IMPL-NEXT:  #undef __CLAUSE
 // IMPL-NEXT:  #undef CLAUSE_NO_CLASS
 // IMPL-NEXT:  #undef CLAUSE_CLASS

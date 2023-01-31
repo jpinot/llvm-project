@@ -52,7 +52,9 @@ void PlatformRemoteiOS::Terminate() {
   PlatformDarwin::Terminate();
 }
 
-PlatformSP PlatformRemoteiOS::CreateInstance(bool force, const ArchSpec *arch) {
+PlatformSP PlatformRemoteiOS::CreateInstance(bool force, const ArchSpec *arch,
+                                             const Debugger *debugger,
+                                             const ScriptedMetadata *metadata) {
   Log *log = GetLog(LLDBLog::Platform);
   if (log) {
     const char *arch_name;
@@ -134,7 +136,8 @@ llvm::StringRef PlatformRemoteiOS::GetDescriptionStatic() {
 PlatformRemoteiOS::PlatformRemoteiOS()
     : PlatformRemoteDarwinDevice() {}
 
-std::vector<ArchSpec> PlatformRemoteiOS::GetSupportedArchitectures() {
+std::vector<ArchSpec> PlatformRemoteiOS::GetSupportedArchitectures(
+    const ArchSpec &process_host_arch) {
   std::vector<ArchSpec> result;
   ARMGetSupportedArchitectures(result, llvm::Triple::IOS);
   return result;

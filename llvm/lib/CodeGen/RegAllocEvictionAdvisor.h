@@ -9,19 +9,24 @@
 #ifndef LLVM_CODEGEN_REGALLOCEVICTIONADVISOR_H
 #define LLVM_CODEGEN_REGALLOCEVICTIONADVISOR_H
 
-#include "AllocationOrder.h"
-#include "llvm/ADT/IndexedMap.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallSet.h"
-#include "llvm/CodeGen/LiveInterval.h"
-#include "llvm/CodeGen/LiveIntervals.h"
-#include "llvm/CodeGen/LiveRegMatrix.h"
-#include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/CodeGen/Register.h"
-#include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/Config/llvm-config.h"
+#include "llvm/MC/MCRegister.h"
 #include "llvm/Pass.h"
 
 namespace llvm {
+class AllocationOrder;
+class LiveInterval;
+class LiveIntervals;
+class LiveRegMatrix;
+class MachineFunction;
+class MachineRegisterInfo;
+class RegisterClassInfo;
+class TargetRegisterInfo;
+class VirtRegMap;
 
 using SmallVirtRegSet = SmallSet<Register, 16>;
 
@@ -120,9 +125,9 @@ protected:
 
   // Get the upper limit of elements in the given Order we need to analize.
   // TODO: is this heuristic,  we could consider learning it.
-  Optional<unsigned> getOrderLimit(const LiveInterval &VirtReg,
-                                   const AllocationOrder &Order,
-                                   unsigned CostPerUseLimit) const;
+  std::optional<unsigned> getOrderLimit(const LiveInterval &VirtReg,
+                                        const AllocationOrder &Order,
+                                        unsigned CostPerUseLimit) const;
 
   // Determine if it's worth trying to allocate this reg, given the
   // CostPerUseLimit
@@ -142,9 +147,6 @@ protected:
   /// Run or not the local reassignment heuristic. This information is
   /// obtained from the TargetSubtargetInfo.
   const bool EnableLocalReassign;
-
-private:
-  unsigned NextCascade = 1;
 };
 
 /// ImmutableAnalysis abstraction for fetching the Eviction Advisor. We model it
@@ -174,6 +176,8 @@ public:
   virtual std::unique_ptr<RegAllocEvictionAdvisor>
   getAdvisor(const MachineFunction &MF, const RAGreedy &RA) = 0;
   AdvisorMode getAdvisorMode() const { return Mode; }
+  virtual void logRewardIfNeeded(const MachineFunction &MF,
+                                 llvm::function_ref<float()> GetReward){};
 
 protected:
   // This analysis preserves everything, and subclasses may have additional

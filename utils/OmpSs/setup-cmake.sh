@@ -364,7 +364,10 @@ fi
 # Flags for lit
 ################################################################################
 
-LIT_ARGS="-DLLVM_LIT_ARGS=-sv --xunit-xml-output=xunit.xml --timeout=300"
+LIT_ARGS="-DLLVM_LIT_ARGS=-sv --xunit-xml-output=xunit.xml"
+# This flag has stopped working due to psutil module missing in some machines.
+# We could enable it depending on the maching though 
+# LIT_ARGS+=" --timeout=300"
 
 if [ -n "${LLVM_LIT_THREADS}" ];
 then
@@ -380,6 +383,8 @@ CMAKE_INVOCATION_EXTRA_FLAGS+=("${LIT_ARGS}")
 if [ "${ENABLE_SANITIZER}" = 1 ];
 then
   CMAKE_INVOCATION_EXTRA_FLAGS+=("-DLLVM_USE_SANITIZER=Address;Undefined")
+  # We only run sanitizers on X86, so try to shave as much compilation time as possible
+  CMAKE_INVOCATION_EXTRA_FLAGS+=("-DLLVM_TARGETS_TO_BUILD=X86")
 fi
 
 ################################################################################
@@ -456,15 +461,18 @@ fi
 info "Running cmake..."
 run cmake -G "${BUILD_SYSTEM}" ${SRCDIR}/llvm \
    -DCMAKE_INSTALL_PREFIX=${INSTALLDIR} \
+   -DCLANG_DEFAULT_PIE_ON_LINUX=OFF \
    ${LLVM_ENABLE_PROJECTS} \
    -DLLVM_ENABLE_RUNTIMES="${EXTRA_RUNTIMES}" \
    -DOPENMP_LLVM_LIT_EXECUTABLE="$(pwd)/bin/llvm-lit" \
    -DOPENMP_FILECHECK_EXECUTABLE="$(pwd)/bin/FileCheck" \
    -DOPENMP_NOT_EXECUTABLE="$(pwd)/bin/not" \
    -DOPENMP_LIT_ARGS="-sv --xunit-xml-output=xunit.xml" \
+   -DLIBOMP_OMPD_SUPPORT=OFF \
    -DLLVM_INSTALL_UTILS=ON \
    -DLLVM_ENABLE_ASSERTIONS=ON \
    -DLLVM_ENABLE_BINDINGS=OFF \
+   -DLLVM_ENABLE_LIBXML2=OFF \
    -DOPENMP_TEST_C_COMPILER_PATH="$(pwd)/bin/clang" \
    -DOPENMP_TEST_CXX_COMPILER_PATH="$(pwd)/bin/clang++" \
    "${CMAKE_INVOCATION_EXTRA_FLAGS[@]}"

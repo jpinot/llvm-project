@@ -4,6 +4,7 @@ static_library("Utils") {
     "//llvm/lib/Analysis",
     "//llvm/lib/IR",
     "//llvm/lib/Support",
+    "//llvm/lib/TargetParser",
   ]
   sources = [
     "AMDGPUEmitPrintf.cpp",
@@ -51,6 +52,8 @@ static_library("Utils") {
     "LoopUnrollRuntime.cpp",
     "LoopUtils.cpp",
     "LoopVersioning.cpp",
+    "LowerAtomic.cpp",
+    "LowerGlobalDtors.cpp",
     "LowerInvoke.cpp",
     "LowerMemIntrinsics.cpp",
     "LowerSwitch.cpp",
@@ -59,6 +62,7 @@ static_library("Utils") {
     "MemoryOpRemark.cpp",
     "MemoryTaggingSupport.cpp",
     "MetaRenamer.cpp",
+    "MisExpect.cpp",
     "ModuleUtils.cpp",
     "NameAnonGlobals.cpp",
     "PredicateInfo.cpp",

@@ -424,8 +424,8 @@ void WebAssembly::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
 void WebAssembly::AddClangCXXStdlibIncludeArgs(const ArgList &DriverArgs,
                                                ArgStringList &CC1Args) const {
 
-  if (DriverArgs.hasArg(options::OPT_nostdlibinc) ||
-      DriverArgs.hasArg(options::OPT_nostdincxx))
+  if (DriverArgs.hasArg(options::OPT_nostdlibinc, options::OPT_nostdinc,
+                        options::OPT_nostdincxx))
     return;
 
   switch (GetCXXStdlibType(DriverArgs)) {
@@ -444,6 +444,8 @@ void WebAssembly::AddCXXStdlibLibArgs(const llvm::opt::ArgList &Args,
   switch (GetCXXStdlibType(Args)) {
   case ToolChain::CST_Libcxx:
     CmdArgs.push_back("-lc++");
+    if (Args.hasArg(options::OPT_fexperimental_library))
+      CmdArgs.push_back("-lc++experimental");
     CmdArgs.push_back("-lc++abi");
     break;
   case ToolChain::CST_Libstdcxx:
@@ -528,10 +530,12 @@ void WebAssembly::addLibStdCXXIncludePaths(
 
   // First add the per-target include path if the OS is known.
   if (IsKnownOs) {
-    std::string TargetDir = LibPath + "/" + MultiarchTriple + "/c++/" + Version;
+    std::string TargetDir = LibPath + "/c++/" + Version + "/" + MultiarchTriple;
     addSystemInclude(DriverArgs, CC1Args, TargetDir);
   }
 
   // Second add the generic one.
   addSystemInclude(DriverArgs, CC1Args, LibPath + "/c++/" + Version);
+  // Third the backward one.
+  addSystemInclude(DriverArgs, CC1Args, LibPath + "/c++/" + Version + "/backward");
 }

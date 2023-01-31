@@ -22,8 +22,9 @@ public:
   static void Terminate();
 
   // lldb_private::PluginInterface functions
-  static lldb::PlatformSP CreateInstance(bool force,
-                                         const lldb_private::ArchSpec *arch);
+  static lldb::PlatformSP CreateInstance(bool force, const ArchSpec *arch,
+                                         const Debugger *debugger,
+                                         const ScriptedMetadata *metadata);
 
   static llvm::StringRef GetPluginNameStatic(bool is_host) {
     return is_host ? Platform::GetHostPlatformName() : "remote-windows";
@@ -63,7 +64,8 @@ public:
                          lldb_private::Target *target,
                          lldb_private::Status &error) override;
 
-  std::vector<ArchSpec> GetSupportedArchitectures() override {
+  std::vector<ArchSpec>
+  GetSupportedArchitectures(const ArchSpec &process_host_arch) override {
     return m_supported_architectures;
   }
 

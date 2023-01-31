@@ -10,6 +10,7 @@
 #include "../utils/Matchers.h"
 #include "../utils/OptionsUtils.h"
 #include "clang/ASTMatchers/ASTMatchers.h"
+#include <optional>
 
 using namespace clang::ast_matchers;
 using namespace clang::tidy::matchers;
@@ -21,20 +22,13 @@ namespace readability {
 const char DefaultStringNames[] =
     "::std::basic_string_view;::std::basic_string";
 
-static ast_matchers::internal::Matcher<NamedDecl>
-hasAnyNameStdString(std::vector<std::string> Names) {
-  return ast_matchers::internal::Matcher<NamedDecl>(
-      new ast_matchers::internal::HasNameMatcher(std::move(Names)));
-}
-
-static std::vector<std::string>
-removeNamespaces(const std::vector<std::string> &Names) {
-  std::vector<std::string> Result;
+static std::vector<StringRef> removeNamespaces(ArrayRef<StringRef> Names) {
+  std::vector<StringRef> Result;
   Result.reserve(Names.size());
-  for (const std::string &Name : Names) {
-    std::string::size_type ColonPos = Name.rfind(':');
+  for (StringRef Name : Names) {
+    StringRef::size_type ColonPos = Name.rfind(':');
     Result.push_back(
-        Name.substr(ColonPos == std::string::npos ? 0 : ColonPos + 1));
+        Name.drop_front(ColonPos == StringRef::npos ? 0 : ColonPos + 1));
   }
   return Result;
 }
@@ -47,7 +41,7 @@ getConstructExpr(const CXXCtorInitializer &CtorInit) {
   return dyn_cast<CXXConstructExpr>(InitExpr);
 }
 
-static llvm::Optional<SourceRange>
+static std::optional<SourceRange>
 getConstructExprArgRange(const CXXConstructExpr &Construct) {
   SourceLocation B, E;
   for (const Expr *Arg : Construct.arguments()) {
@@ -57,7 +51,7 @@ getConstructExprArgRange(const CXXConstructExpr &Construct) {
       E = Arg->getEndLoc();
   }
   if (B.isInvalid() || E.isInvalid())
-    return llvm::None;
+    return std::nullopt;
   return SourceRange(B, E);
 }
 
@@ -72,9 +66,8 @@ void RedundantStringInitCheck::storeOptions(ClangTidyOptions::OptionMap &Opts) {
 }
 
 void RedundantStringInitCheck::registerMatchers(MatchFinder *Finder) {
-  const auto HasStringTypeName = hasAnyNameStdString(StringNames);
-  const auto HasStringCtorName =
-      hasAnyNameStdString(removeNamespaces(StringNames));
+  const auto HasStringTypeName = hasAnyName(StringNames);
+  const auto HasStringCtorName = hasAnyName(removeNamespaces(StringNames));
 
   // Match string constructor.
   const auto StringConstructorExpr = expr(
@@ -162,7 +155,7 @@ void RedundantStringInitCheck::check(const MatchFinder::MatchResult &Result) {
     const CXXConstructExpr *Construct = getConstructExpr(*CtorInit);
     if (!Construct)
       return;
-    if (llvm::Optional<SourceRange> RemovalRange =
+    if (std::optional<SourceRange> RemovalRange =
             getConstructExprArgRange(*Construct))
       diag(CtorInit->getMemberLocation(), "redundant string initialization")
           << FixItHint::CreateRemoval(*RemovalRange);

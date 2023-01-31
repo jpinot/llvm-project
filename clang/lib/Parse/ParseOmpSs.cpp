@@ -21,6 +21,7 @@
 #include "llvm/ADT/PointerIntPair.h"
 
 using namespace clang;
+using namespace llvm::oss;
 
 //===----------------------------------------------------------------------===//
 // OmpSs declarative directives.
@@ -29,20 +30,40 @@ using namespace clang;
 namespace {
 // Keep the same order as in OmpSsKinds.h
 enum OmpSsDirectiveKindEx {
-  OSSD_declare = OSSD_unknown + 1,
+  OSSD_declare = llvm::oss::Directive_enumSize + 1,
   OSSD_reduction,
   OSSD_for,
+};
+
+// Helper to unify the enum class OmpSsDirectiveKind with its extension
+// the OmpSsDirectiveKindEx enum which allows to use them together as if they
+// are unsigned values.
+struct OmpSsDirectiveKindExWrapper {
+  OmpSsDirectiveKindExWrapper(unsigned Value) : Value(Value) {}
+  OmpSsDirectiveKindExWrapper(OmpSsDirectiveKind DK) : Value(unsigned(DK)) {}
+  bool operator==(OmpSsDirectiveKindExWrapper V) const {
+    return Value == V.Value;
+  }
+  bool operator!=(OmpSsDirectiveKindExWrapper V) const {
+    return Value != V.Value;
+  }
+  bool operator==(OmpSsDirectiveKind V) const { return Value == unsigned(V); }
+  bool operator!=(OmpSsDirectiveKind V) const { return Value != unsigned(V); }
+  bool operator<(OmpSsDirectiveKind V) const { return Value < unsigned(V); }
+  operator unsigned() const { return Value; }
+  operator OmpSsDirectiveKind() const { return OmpSsDirectiveKind(Value); }
+  unsigned Value;
 };
 } // namespace
 
 // Map token string to extended OSS token kind that are
 // OmpSsDirectiveKind + OmpSsDirectiveKindEx.
 static unsigned getOmpSsDirectiveKindEx(StringRef S) {
-  auto DKind = getOmpSsDirectiveKind(S);
+  OmpSsDirectiveKindExWrapper  DKind = getOmpSsDirectiveKind(S);
   if (DKind != OSSD_unknown)
     return DKind;
 
-  return llvm::StringSwitch<unsigned>(S)
+  return llvm::StringSwitch<OmpSsDirectiveKindExWrapper>(S)
       .Case("declare", OSSD_declare)
       .Case("reduction", OSSD_reduction)
       .Case("for", OSSD_for)
@@ -53,51 +74,51 @@ static OmpSsDirectiveKind parseOmpSsDirectiveKind(Parser &P) {
   // Array of foldings: F[i][0] F[i][1] ===> F[i][2].
   // E.g.: OSSD_declare OSSD_reduction ===> OSSD_declare_reduction
   // TODO: add other combined directives in topological order.
-  static const unsigned F[][3] = {
+  static const OmpSsDirectiveKindExWrapper F[][3] = {
       {OSSD_declare, OSSD_reduction, OSSD_declare_reduction},
       {OSSD_task, OSSD_for, OSSD_task_for},
       {OSSD_taskloop, OSSD_for, OSSD_taskloop_for},
   };
   Token Tok = P.getCurToken();
-  unsigned DKind =
+  OmpSsDirectiveKindExWrapper  DKind =
       Tok.isAnnotation()
           ? static_cast<unsigned>(OSSD_unknown)
           : getOmpSsDirectiveKindEx(P.getPreprocessor().getSpelling(Tok));
   if (DKind == OSSD_unknown)
     return OSSD_unknown;
 
-  for (unsigned I = 0; I < llvm::array_lengthof(F); ++I) {
-    if (DKind != F[I][0])
+  for (const auto &I : F) {
+    if (DKind != I[0])
       continue;
 
     Tok = P.getPreprocessor().LookAhead(0);
-    unsigned SDKind =
+    OmpSsDirectiveKindExWrapper  SDKind =
         Tok.isAnnotation()
             ? static_cast<unsigned>(OSSD_unknown)
             : getOmpSsDirectiveKindEx(P.getPreprocessor().getSpelling(Tok));
     if (SDKind == OSSD_unknown)
       continue;
 
-    if (SDKind == F[I][1]) {
+    if (SDKind == I[1]) {
       P.ConsumeToken();
-      DKind = F[I][2];
+      DKind = I[2];
     }
   }
-  return DKind < OSSD_unknown ? static_cast<OmpSsDirectiveKind>(DKind)
-                              : OSSD_unknown;
+  return unsigned(DKind) < llvm::oss::Directive_enumSize
+             ? static_cast<OmpSsDirectiveKind>(DKind)
+             : OSSD_unknown;
 }
 
 static ExprResult *getSingleClause(
     OmpSsClauseKind CKind,
     ExprResult &IfRes, ExprResult &FinalRes,
     ExprResult &CostRes, ExprResult &PriorityRes,
-    ExprResult &LabelRes, ExprResult &OnreadyRes) {
+    ExprResult &OnreadyRes) {
 
     if (CKind == OSSC_if) return &IfRes;
     if (CKind == OSSC_final) return &FinalRes;
     if (CKind == OSSC_cost) return &CostRes;
     if (CKind == OSSC_priority) return &PriorityRes;
-    if (CKind == OSSC_label) return &LabelRes;
     if (CKind == OSSC_onready) return &OnreadyRes;
     return nullptr;
 }
@@ -163,12 +184,12 @@ static OmpSsClauseKind getOmpSsClauseFromDependKinds(ArrayRef<OmpSsDependClauseK
 ///       | inout-clause | concurrent-clause | commutative-clause
 ///       | weakin-clause | weakout-clause | weakinout-clause
 ///       | weakconcurrent-clause | weakcommutative-clause
-static bool parseDeclareTaskClauses(
-    Parser &P,
+bool Parser::ParseDeclareTaskClauses(
     ExprResult &IfRes, ExprResult &FinalRes,
     ExprResult &CostRes, ExprResult &PriorityRes,
-    ExprResult &LabelRes, ExprResult &OnreadyRes,
-    bool &Wait,
+    ExprResult &OnreadyRes, bool &Wait,
+    unsigned &Device, SourceLocation &DeviceLoc,
+    SmallVectorImpl<Expr *> &Labels,
     SmallVectorImpl<Expr *> &Ins, SmallVectorImpl<Expr *> &Outs,
     SmallVectorImpl<Expr *> &Inouts, SmallVectorImpl<Expr *> &Concurrents,
     SmallVectorImpl<Expr *> &Commutatives, SmallVectorImpl<Expr *> &WeakIns,
@@ -178,11 +199,17 @@ static bool parseDeclareTaskClauses(
     SmallVectorImpl<Expr *> &DepInouts, SmallVectorImpl<Expr *> &DepConcurrents,
     SmallVectorImpl<Expr *> &DepCommutatives, SmallVectorImpl<Expr *> &DepWeakIns,
     SmallVectorImpl<Expr *> &DepWeakOuts, SmallVectorImpl<Expr *> &DepWeakInouts,
-    SmallVectorImpl<Expr *> &DepWeakConcurrents, SmallVectorImpl<Expr *> &DepWeakCommutatives) {
-  const Token &Tok = P.getCurToken();
+    SmallVectorImpl<Expr *> &DepWeakConcurrents, SmallVectorImpl<Expr *> &DepWeakCommutatives,
+    SmallVectorImpl<unsigned> &ReductionListSizes,
+    SmallVectorImpl<Expr *> &Reductions,
+    SmallVectorImpl<unsigned> &ReductionClauseType,
+    SmallVectorImpl<CXXScopeSpec> &ReductionCXXScopeSpecs,
+    SmallVectorImpl<DeclarationNameInfo> &ReductionIds,
+    SmallVectorImpl<Expr *> &Ndrange, SourceLocation &NdrangeLoc) {
+  const Token &Tok = getCurToken();
   bool IsError = false;
 
-  SmallVector<bool, 4> FirstClauses(OSSC_unknown + 1);
+  SmallVector<bool, 4> FirstClauses(llvm::oss::Clause_enumSize + 1);
 
   while (Tok.isNot(tok::annot_pragma_ompss_end)) {
     if (Tok.isNot(tok::identifier)
@@ -206,9 +233,9 @@ static bool parseDeclareTaskClauses(
       WeakConcurrents, WeakCommutatives);
 
     // Check if clause is allowed for the given directive.
-    if (CKind != OSSC_unknown && !isAllowedClauseForDirective(OSSD_declare_task, CKind)) {
-      P.Diag(Tok, diag::err_oss_unexpected_clause) << getOmpSsClauseName(CKind)
-                                                 << getOmpSsDirectiveName(OSSD_declare_task);
+    if (CKind != OSSC_unknown && !isAllowedClauseForDirective(OSSD_declare_task, CKind, /*Version=*/1)) {
+      Diag(Tok, diag::err_oss_unexpected_clause) << getOmpSsClauseName(CKind)
+                                                 << getOmpSsDirectiveName(OSSD_task);
       IsError = true;
     }
 
@@ -217,48 +244,59 @@ static bool parseDeclareTaskClauses(
     case OSSC_final:
     case OSSC_cost:
     case OSSC_priority:
-    case OSSC_label:
     case OSSC_onready: {
-      P.ConsumeToken();
-      if (FirstClauses[CKind]) {
-        P.Diag(Tok, diag::err_oss_more_one_clause)
-            << getOmpSsDirectiveName(OSSD_declare_task) << getOmpSsClauseName(CKind) << 0;
+      ConsumeToken();
+      if (FirstClauses[unsigned(CKind)]) {
+        Diag(Tok, diag::err_oss_more_one_clause)
+            << getOmpSsDirectiveName(OSSD_task) << getOmpSsClauseName(CKind) << 0;
         IsError = true;
       }
       SourceLocation RLoc;
-      SingleClause = getSingleClause(CKind, IfRes, FinalRes,
-                                     CostRes, PriorityRes,
-                                     LabelRes, OnreadyRes);
-      *SingleClause = P.ParseOmpSsParensExpr(getOmpSsClauseName(CKind), RLoc);
+      SingleClause = getSingleClause(
+        CKind, IfRes, FinalRes, CostRes, PriorityRes, OnreadyRes);
+      *SingleClause = ParseOmpSsParensExpr(getOmpSsClauseName(CKind), RLoc);
 
       if (SingleClause->isInvalid())
         IsError = true;
 
-      FirstClauses[CKind] = true;
+      FirstClauses[unsigned(CKind)] = true;
       break;
     }
     case OSSC_wait: {
       SourceLocation Loc = Tok.getLocation();
-      P.ConsumeToken();
-      if (FirstClauses[CKind]) {
-        P.Diag(Loc, diag::err_oss_more_one_clause)
-            << getOmpSsDirectiveName(OSSD_declare_task) << getOmpSsClauseName(CKind) << 0;
+      ConsumeToken();
+      if (FirstClauses[unsigned(CKind)]) {
+        Diag(Loc, diag::err_oss_more_one_clause)
+            << getOmpSsDirectiveName(OSSD_task) << getOmpSsClauseName(CKind) << 0;
         IsError = true;
       }
       Wait = true;
-      FirstClauses[CKind] = true;
+      FirstClauses[unsigned(CKind)] = true;
+      break;
+    }
+    case OSSC_label: {
+      ConsumeToken();
+      if (FirstClauses[unsigned(CKind)]) {
+        Diag(Tok, diag::err_oss_more_one_clause)
+            << getOmpSsDirectiveName(OSSD_task) << getOmpSsClauseName(CKind) << 0;
+        IsError = true;
+      }
+      SourceLocation RLoc;
+      if (ParseOmpSsFixedList<2>(OSSD_task, CKind, Labels, RLoc))
+        IsError = true;
+      FirstClauses[unsigned(CKind)] = true;
       break;
     }
     case OSSC_depend: {
-      P.ConsumeToken();
+      ConsumeToken();
 
-      Sema::AllowShapingsRAII AllowShapings(P.getActions(), []() { return true; });
+      Sema::AllowShapingsRAII AllowShapings(getActions(), []() { return true; });
 
       SmallVector<Expr *, 4> TmpList;
       SmallVector<OmpSsDependClauseKind, 2> DepKindsOrdered;
-      if (P.ParseOmpSsVarList(OSSD_declare_task, CKind, TmpList, VarListData))
+      if (ParseOmpSsVarList(OSSD_task, CKind, TmpList, VarListData))
         IsError = true;
-      if (!P.getActions().ActOnOmpSsDependKinds(VarListData.DepKinds, DepKindsOrdered, VarListData.DepLoc))
+      if (!getActions().ActOnOmpSsDependKinds(VarListData.DepKinds, DepKindsOrdered, VarListData.DepLoc))
         IsError = true;
 
       if (!IsError) {
@@ -272,6 +310,36 @@ static bool parseDeclareTaskClauses(
       }
       break;
     }
+    case OSSC_reduction:
+    case OSSC_weakreduction: {
+      ConsumeToken();
+
+      Sema::AllowShapingsRAII AllowShapings(getActions(), []() { return true; });
+
+      SmallVector<Expr *, 4> TmpList;
+      if (ParseOmpSsVarList(OSSD_task, CKind, TmpList, VarListData))
+        IsError = true;
+      if (!IsError) {
+        Reductions.append(TmpList.begin(), TmpList.end());
+        ReductionClauseType.push_back(unsigned(CKind));
+        ReductionListSizes.push_back(TmpList.size());
+        ReductionCXXScopeSpecs.push_back(VarListData.ReductionIdScopeSpec);
+        ReductionIds.push_back(VarListData.ReductionId);
+      }
+      break;
+    }
+    case OSSC_ndrange:
+      NdrangeLoc = Tok.getLocation();
+      ConsumeToken();
+      if (FirstClauses[unsigned(CKind)]) {
+        Diag(Tok, diag::err_oss_more_one_clause)
+            << getOmpSsDirectiveName(OSSD_task) << getOmpSsClauseName(CKind) << 0;
+        IsError = true;
+      }
+      if (ParseOmpSsVarList(OSSD_task, CKind, Ndrange, VarListData))
+        IsError = true;
+      FirstClauses[unsigned(CKind)] = true;
+      break;
     case OSSC_in:
     case OSSC_out:
     case OSSC_inout:
@@ -281,44 +349,70 @@ static bool parseDeclareTaskClauses(
     case OSSC_weakout:
     case OSSC_weakinout:
     case OSSC_weakcommutative: {
-      P.ConsumeToken();
+      ConsumeToken();
 
-      Sema::AllowShapingsRAII AllowShapings(P.getActions(), []() { return true; });
-      if (P.ParseOmpSsVarList(OSSD_declare_task, CKind, *Vars, VarListData))
+      Sema::AllowShapingsRAII AllowShapings(getActions(), []() { return true; });
+      if (ParseOmpSsVarList(OSSD_task, CKind, *Vars, VarListData))
         IsError = true;
       break;
     }
     case OSSC_unknown:
-      P.Diag(Tok, diag::warn_oss_extra_tokens_at_eol)
-          << getOmpSsDirectiveName(OSSD_declare_task);
-      P.SkipUntil(tok::annot_pragma_ompss_end, P.StopBeforeMatch);
+      Diag(Tok, diag::warn_oss_extra_tokens_at_eol)
+          << getOmpSsDirectiveName(OSSD_task);
+      SkipUntil(tok::annot_pragma_ompss_end, StopBeforeMatch);
+      break;
+    case OSSC_device:
+      if (FirstClauses[unsigned(CKind)]) {
+        Diag(Tok, diag::err_oss_more_one_clause)
+            << getOmpSsDirectiveName(OSSD_task) << getOmpSsClauseName(CKind) << 0;
+        IsError = true;
+      }
+      if (ParseOmpSsSimpleClauseImpl(CKind, SimpleData)) {
+        IsError = true;
+      } else {
+        Device = SimpleData.Type;
+        DeviceLoc = SimpleData.TypeLoc;
+      }
+      FirstClauses[unsigned(CKind)] = true;
       break;
     // Not allowed clauses
     case OSSC_default:
-      P.ParseOmpSsSimpleClauseImpl(CKind, SimpleData);
+      ParseOmpSsSimpleClauseImpl(CKind, SimpleData);
       break;
     case OSSC_chunksize:
     case OSSC_grainsize:
+    case OSSC_unroll:
     case OSSC_collapse:
+    case OSSC_on:
     case OSSC_weakconcurrent:
-    case OSSC_reduction:
-    case OSSC_weakreduction:
     case OSSC_shared:
     case OSSC_private:
     case OSSC_firstprivate: {
-      P.ConsumeToken();
+      ConsumeToken();
 
-      Sema::AllowShapingsRAII AllowShapings(P.getActions(), []() { return true; });
+      Sema::AllowShapingsRAII AllowShapings(getActions(), []() { return true; });
 
       SmallVector<Expr *, 4> TmpList;
-      P.ParseOmpSsVarList(OSSD_declare_task, CKind, TmpList, VarListData);
+      ParseOmpSsVarList(OSSD_task, CKind, TmpList, VarListData);
       break;
     }
+    case OSSC_update:
+    case OSSC_read:
+    case OSSC_write:
+    case OSSC_capture:
+    case OSSC_compare:
+    case OSSC_seq_cst:
+    case OSSC_acq_rel:
+    case OSSC_acquire:
+    case OSSC_release:
+    case OSSC_relaxed:
+      ConsumeToken();
+      break;
     }
 
     // Skip ',' if any.
     if (Tok.is(tok::comma))
-      P.ConsumeToken();
+      ConsumeToken();
   }
   return IsError;
 }
@@ -340,9 +434,14 @@ Parser::ParseOSSDeclareTaskClauses(Parser::DeclGroupPtrTy Ptr,
   ExprResult FinalRes;
   ExprResult CostRes;
   ExprResult PriorityRes;
-  ExprResult LabelRes;
   ExprResult OnreadyRes;
   bool Wait = false;
+  // This value means no clause seen
+  unsigned Device = OSSC_DEVICE_unknown + 1;
+  SourceLocation DeviceLoc;
+  SourceLocation NdrangeLoc;
+
+  SmallVector<Expr *, 2> Labels;
   SmallVector<Expr *, 4> Ins;
   SmallVector<Expr *, 4> Outs;
   SmallVector<Expr *, 4> Inouts;
@@ -363,13 +462,19 @@ Parser::ParseOSSDeclareTaskClauses(Parser::DeclGroupPtrTy Ptr,
   SmallVector<Expr *, 4> DepWeakInouts;
   SmallVector<Expr *, 4> DepWeakConcurrents;
   SmallVector<Expr *, 4> DepWeakCommutatives;
+  SmallVector<unsigned, 4> ReductionListSizes;
+  SmallVector<Expr *, 4> Reductions;
+  SmallVector<unsigned, 4> ReductionClauseType;
+  SmallVector<CXXScopeSpec, 4> ReductionCXXScopeSpecs;
+  SmallVector<DeclarationNameInfo, 4> ReductionIds;
+  SmallVector<Expr *, 4> Ndranges;
 
   bool IsError =
-      parseDeclareTaskClauses(*this,
-                              IfRes, FinalRes,
+      ParseDeclareTaskClauses(IfRes, FinalRes,
                               CostRes, PriorityRes,
-                              LabelRes, OnreadyRes,
-                              Wait,
+                              OnreadyRes, Wait,
+                              Device, DeviceLoc,
+                              Labels,
                               Ins, Outs, Inouts,
                               Concurrents, Commutatives,
                               WeakIns, WeakOuts, WeakInouts,
@@ -377,7 +482,10 @@ Parser::ParseOSSDeclareTaskClauses(Parser::DeclGroupPtrTy Ptr,
                               DepIns, DepOuts, DepInouts,
                               DepConcurrents, DepCommutatives,
                               DepWeakIns, DepWeakOuts, DepWeakInouts,
-                              DepWeakConcurrents, DepWeakCommutatives);
+                              DepWeakConcurrents, DepWeakCommutatives,
+                              ReductionListSizes, Reductions,
+                              ReductionClauseType, ReductionCXXScopeSpecs,
+                              ReductionIds, Ndranges, NdrangeLoc);
   // Need to check for extra tokens.
   if (Tok.isNot(tok::annot_pragma_ompss_end)) {
     Diag(Tok, diag::warn_oss_extra_tokens_at_eol)
@@ -393,8 +501,9 @@ Parser::ParseOSSDeclareTaskClauses(Parser::DeclGroupPtrTy Ptr,
       Ptr,
       IfRes.get(), FinalRes.get(),
       CostRes.get(), PriorityRes.get(),
-      LabelRes.get(), OnreadyRes.get(),
-      Wait,
+      OnreadyRes.get(), Wait,
+      Device, DeviceLoc,
+      Labels,
       Ins, Outs, Inouts,
       Concurrents, Commutatives,
       WeakIns, WeakOuts, WeakInouts,
@@ -403,6 +512,9 @@ Parser::ParseOSSDeclareTaskClauses(Parser::DeclGroupPtrTy Ptr,
       DepConcurrents, DepCommutatives,
       DepWeakIns, DepWeakOuts, DepWeakInouts,
       DepWeakConcurrents, DepWeakCommutatives,
+      ReductionListSizes, Reductions,
+      ReductionClauseType, ReductionCXXScopeSpecs,
+      ReductionIds, Ndranges, NdrangeLoc,
       SourceRange(Loc, EndLoc));
   return Ptr;
 }
@@ -419,7 +531,7 @@ Parser::ParseOSSDeclareTaskClauses(Parser::DeclGroupPtrTy Ptr,
 ///        annot_pragma_ompss_end
 ///
 Parser::DeclGroupPtrTy Parser::ParseOmpSsDeclarativeDirectiveWithExtDecl(
-    AccessSpecifier &AS, ParsedAttributesWithRange &Attrs, bool Delayed,
+    AccessSpecifier &AS, ParsedAttributes &Attrs, bool Delayed,
     DeclSpec::TST TagType, Decl *Tag) {
   assert(Tok.is(tok::annot_pragma_ompss) && "Not an OmpSs directive!");
   ParsingOmpSsDirectiveRAII DirScope(*this);
@@ -461,6 +573,9 @@ Parser::DeclGroupPtrTy Parser::ParseOmpSsDeclarativeDirectiveWithExtDecl(
 
   switch (DKind) {
   case OSSD_task: {
+    // Only allowed in C++ mode
+    if (!getLangOpts().CPlusPlus && getCurScope()->isClassScope())
+      break;
     // The syntax is:
     // { #pragma oss task }
     // <function-declaration-or-definition>
@@ -485,10 +600,18 @@ Parser::DeclGroupPtrTy Parser::ParseOmpSsDeclarativeDirectiveWithExtDecl(
       // Here we expect to see some function declaration.
       if (AS == AS_none) {
         assert(TagType == DeclSpec::TST_unspecified);
+        ParsedAttributes EmptyDeclSpecAttrs(AttrFactory);
         MaybeParseCXX11Attributes(Attrs);
         ParsingDeclSpec PDS(*this);
-        Ptr = ParseExternalDeclaration(Attrs, &PDS);
+        Ptr = ParseExternalDeclaration(Attrs, EmptyDeclSpecAttrs, &PDS);
       } else {
+        // Some member functions like void foo(int *x)
+        // are not late parsed because they do not need it
+        // in our case the oss directive could use
+        // a later defined class member so just force late parsing
+        // Ideally we would check if the directive uses a late defined variable but we're
+        // not gonna do it now.
+        Parser::ParsingClass::OmpSsForceDelayRAII OmpSsForceDelay(getCurrentClass());
         Ptr =
             ParseCXXClassMemberDeclarationWithPragmas(AS, Attrs, TagType, Tag);
       }
@@ -497,7 +620,16 @@ Parser::DeclGroupPtrTy Parser::ParseOmpSsDeclarativeDirectiveWithExtDecl(
       Diag(Loc, diag::err_oss_decl_in_task);
       return DeclGroupPtrTy();
     }
-    Parser::DeclGroupPtrTy Ret = ParseOSSDeclareTaskClauses(Ptr, Toks, Loc);
+
+    Parser::DeclGroupPtrTy Ret = Ptr;
+    if (AS == AS_none) {
+      Ret = ParseOSSDeclareTaskClauses(Ret, Toks, Loc);
+    } else {
+      // Store cached tokens to be parsed at the end of the class
+      getCurrentClass().OmpSsLateParsedToks.DirDGs.push_back(Ptr);
+      getCurrentClass().OmpSsLateParsedToks.DirToks.push_back(Toks);
+      getCurrentClass().OmpSsLateParsedToks.DirLocs.push_back(Loc);
+    }
 
     Actions.EndOmpSsDSABlock(nullptr);
     return Ret;
@@ -507,7 +639,7 @@ Parser::DeclGroupPtrTy Parser::ParseOmpSsDeclarativeDirectiveWithExtDecl(
 
     BalancedDelimiterTracker T(*this, tok::l_paren, tok::annot_pragma_ompss_end);
     if (T.expectAndConsume(
-        diag::err_expected_lparen_after, getOmpSsDirectiveName(DKind)))
+        diag::err_expected_lparen_after, getOmpSsDirectiveName(DKind).data()))
       break;
 
     bool IsCorrect = true;
@@ -537,10 +669,14 @@ Parser::DeclGroupPtrTy Parser::ParseOmpSsDeclarativeDirectiveWithExtDecl(
     break;
   }
   case OSSD_declare_task:
+  case OSSD_critical:
   case OSSD_task_for:
+  case OSSD_taskiter:
+  case OSSD_taskiter_while:
   case OSSD_taskloop:
   case OSSD_taskloop_for:
   case OSSD_taskwait:
+  case OSSD_atomic:
   case OSSD_release:
     Diag(Tok, diag::err_oss_unexpected_directive)
         << 1 << getOmpSsDirectiveName(DKind);
@@ -628,6 +764,8 @@ StmtResult Parser::ParseOmpSsDeclarativeOrExecutableDirective(
 
   OSSClauseList Clauses;
   OmpSsDirectiveKind DKind = parseOmpSsDirectiveKind(*this);
+  // Name of critical directive.
+  DeclarationNameInfo DirName;
   StmtResult Directive = StmtError();
   bool HasAssociatedStatement = true;
   switch (DKind) {
@@ -636,8 +774,12 @@ StmtResult Parser::ParseOmpSsDeclarativeOrExecutableDirective(
     HasAssociatedStatement = false;
     LLVM_FALLTHROUGH;
   case OSSD_task_for:
+  case OSSD_taskiter:
+  case OSSD_taskiter_while:
   case OSSD_taskloop:
   case OSSD_taskloop_for:
+  case OSSD_critical:
+  case OSSD_atomic:
   case OSSD_task: {
 
     if (isOmpSsLoopDirective(DKind))
@@ -674,18 +816,29 @@ StmtResult Parser::ParseOmpSsDeclarativeOrExecutableDirective(
     } else {
       ConsumeToken();
 
+      // Parse directive name of the 'critical' directive if any.
+      if (DKind == OSSD_critical) {
+        BalancedDelimiterTracker T(*this, tok::l_paren,
+                                   tok::annot_pragma_ompss_end);
+        if (!T.consumeOpen()) {
+          if (Tok.isAnyIdentifier()) {
+            DirName =
+                DeclarationNameInfo(Tok.getIdentifierInfo(), Tok.getLocation());
+            ConsumeAnyToken();
+          } else {
+            Diag(Tok, diag::err_oss_expected_identifier_for_critical);
+          }
+          T.consumeClose();
+        }
+      }
+
       Clauses = ParseOmpSsClauses(DKind, EndLoc);
     }
     StackClauses.push_back(Clauses);
 
-    if (isOmpSsLoopDirective(DKind)) {
-      if (Tok.isNot(tok::kw_for)) {
-        // loop clauses start by 'for'
-        // Our strategy is to just drop the tokens if we do not guess
-        // a for is comming.
-        OSSLateParsedToks.clear();
-      }
-    }
+    // Determine which taskiter is
+    if (DKind == OSSD_taskiter && Tok.is(tok::kw_while))
+      Actions.SetTaskiterKind(OSSD_taskiter_while);
 
     StmtResult AssociatedStmt;
     if (HasAssociatedStatement) {
@@ -697,11 +850,8 @@ StmtResult Parser::ParseOmpSsDeclarativeOrExecutableDirective(
     Clauses = StackClauses.back();
     StackClauses.pop_back();
 
-    Directive = Actions.ActOnOmpSsExecutableDirective(Clauses,
-                                                      DKind,
-                                                      AssociatedStmt.get(),
-                                                      Loc,
-                                                      EndLoc);
+    Directive = Actions.ActOnOmpSsExecutableDirective(
+      Clauses, DirName, DKind, AssociatedStmt.get(), Loc, EndLoc);
 
     // Exit scope.
     Actions.EndOmpSsDSABlock(Directive.get());
@@ -744,8 +894,8 @@ StmtResult Parser::ParseOmpSsDeclarativeOrExecutableDirective(
 /// Parsing of all OmpSs clauses of a directive.
 Parser::OSSClauseList Parser::ParseOmpSsClauses(OmpSsDirectiveKind DKind, SourceLocation &EndLoc) {
   OSSClauseList Clauses;
-  SmallVector<llvm::PointerIntPair<OSSClause *, 1, bool>, OSSC_unknown + 1>
-    FirstClauses(OSSC_unknown + 1);
+  SmallVector<llvm::PointerIntPair<OSSClause *, 1, bool>, llvm::oss::Clause_enumSize + 1>
+    FirstClauses(llvm::oss::Clause_enumSize + 1);
 
   while (Tok.isNot(tok::annot_pragma_ompss_end)) {
     OmpSsClauseKind CKind = getOmpSsClauseKind(PP.getSpelling(Tok));
@@ -753,10 +903,10 @@ Parser::OSSClauseList Parser::ParseOmpSsClauses(OmpSsDirectiveKind DKind, Source
     // Track which clauses have appeared so we can throw an error in case
     // a clause cannot appear again
     OSSClause *Clause =
-        ParseOmpSsClause(DKind, CKind, !FirstClauses[CKind].getInt());
-    FirstClauses[CKind].setInt(true);
+        ParseOmpSsClause(DKind, CKind, !FirstClauses[unsigned(CKind)].getInt());
+    FirstClauses[unsigned(CKind)].setInt(true);
     if (Clause) {
-      FirstClauses[CKind].setPointer(Clause);
+      FirstClauses[unsigned(CKind)].setPointer(Clause);
       Clauses.push_back(Clause);
     }
 
@@ -772,7 +922,8 @@ Parser::OSSClauseList Parser::ParseOmpSsClauses(OmpSsDirectiveKind DKind, Source
   ConsumeAnnotationToken();
 
   // 'release' does not need clause analysis
-  if (DKind != OSSD_release)
+  if (DKind != OSSD_release &&
+      DKind != OSSD_critical && DKind != OSSD_atomic)
     Actions.ActOnOmpSsAfterClauseGathering(Clauses);
 
   return Clauses;
@@ -795,7 +946,7 @@ OSSClause *Parser::ParseOmpSsClause(OmpSsDirectiveKind DKind,
   bool ErrorFound = false;
   bool WrongDirective = false;
   // Check if clause is allowed for the given directive.
-  if (CKind != OSSC_unknown && !isAllowedClauseForDirective(DKind, CKind)) {
+  if (CKind != OSSC_unknown && !isAllowedClauseForDirective(DKind, CKind, /*Version=*/1)) {
     Diag(Tok, diag::err_oss_unexpected_clause) << getOmpSsClauseName(CKind)
                                                << getOmpSsDirectiveName(DKind);
     ErrorFound = true;
@@ -807,10 +958,10 @@ OSSClause *Parser::ParseOmpSsClause(OmpSsDirectiveKind DKind,
   case OSSC_final:
   case OSSC_cost:
   case OSSC_priority:
-  case OSSC_label:
   case OSSC_onready:
   case OSSC_chunksize:
   case OSSC_grainsize:
+  case OSSC_unroll:
   case OSSC_collapse:
     if (!FirstClause) {
       Diag(Tok, diag::err_oss_more_one_clause)
@@ -820,6 +971,16 @@ OSSClause *Parser::ParseOmpSsClause(OmpSsDirectiveKind DKind,
     Clause = ParseOmpSsSingleExprClause(CKind, WrongDirective);
     break;
   case OSSC_wait:
+  case OSSC_update:
+  case OSSC_read:
+  case OSSC_write:
+  case OSSC_capture:
+  case OSSC_compare:
+  case OSSC_seq_cst:
+  case OSSC_acq_rel:
+  case OSSC_acquire:
+  case OSSC_release:
+  case OSSC_relaxed:
     if (!FirstClause) {
       Diag(Tok, diag::err_oss_more_one_clause)
           << getOmpSsDirectiveName(DKind) << getOmpSsClauseName(CKind) << 0;
@@ -828,6 +989,7 @@ OSSClause *Parser::ParseOmpSsClause(OmpSsDirectiveKind DKind,
     Clause = ParseOmpSsClause(CKind, WrongDirective);
     break;
   case OSSC_default:
+  case OSSC_device:
     // These clauses cannot appear more than once
     if (!FirstClause) {
       Diag(Tok, diag::err_oss_more_one_clause)
@@ -836,9 +998,18 @@ OSSClause *Parser::ParseOmpSsClause(OmpSsDirectiveKind DKind,
     }
     Clause = ParseOmpSsSimpleClause(CKind, WrongDirective);
     break;
+  case OSSC_label:
+    if (!FirstClause) {
+      Diag(Tok, diag::err_oss_more_one_clause)
+          << getOmpSsDirectiveName(DKind) << getOmpSsClauseName(CKind) << 0;
+      ErrorFound = true;
+    }
+    Clause = ParseOmpSsFixedListClause<2>(DKind, CKind, WrongDirective);
+    break;
   case OSSC_shared:
   case OSSC_private:
   case OSSC_firstprivate:
+  case OSSC_ndrange:
   case OSSC_depend:
   case OSSC_reduction:
   case OSSC_in:
@@ -846,6 +1017,7 @@ OSSClause *Parser::ParseOmpSsClause(OmpSsDirectiveKind DKind,
   case OSSC_inout:
   case OSSC_concurrent:
   case OSSC_commutative:
+  case OSSC_on:
   case OSSC_weakin:
   case OSSC_weakout:
   case OSSC_weakinout:
@@ -977,7 +1149,7 @@ Parser::ParseOmpSsDeclareReductionDirective(AccessSpecifier AS) {
   // Parse '('.
   BalancedDelimiterTracker T(*this, tok::l_paren, tok::annot_pragma_ompss_end);
   if (T.expectAndConsume(diag::err_expected_lparen_after,
-                         getOmpSsDirectiveName(OSSD_declare_reduction))) {
+                         getOmpSsDirectiveName(OSSD_declare_reduction).data())) {
     SkipUntil(tok::annot_pragma_ompss_end, StopBeforeMatch);
     return DeclGroupPtrTy();
   }
@@ -1178,7 +1350,6 @@ void Parser::ParseOmpSsReductionInitializerForDecl(VarDecl *OmpPrivParm) {
     T.consumeOpen();
 
     ExprVector Exprs;
-    CommaLocsTy CommaLocs;
 
     SourceLocation LParLoc = T.getOpenLocation();
     auto RunSignatureHelp = [this, OmpPrivParm, LParLoc, &Exprs]() {
@@ -1188,7 +1359,7 @@ void Parser::ParseOmpSsReductionInitializerForDecl(VarDecl *OmpPrivParm) {
       CalledSignatureHelp = true;
       return PreferredType;
     };
-    if (ParseExpressionList(Exprs, CommaLocs, [&] {
+    if (ParseExpressionList(Exprs, [&] {
           PreferredType.enterFunctionArgument(Tok.getLocation(),
                                               RunSignatureHelp);
         })) {
@@ -1201,9 +1372,6 @@ void Parser::ParseOmpSsReductionInitializerForDecl(VarDecl *OmpPrivParm) {
       SourceLocation RLoc = Tok.getLocation();
       if (!T.consumeClose())
         RLoc = T.getCloseLocation();
-
-      assert(!Exprs.empty() && Exprs.size() - 1 == CommaLocs.size() &&
-             "Unexpected number of commas!");
 
       ExprResult Initializer =
           Actions.ActOnParenListExpr(T.getOpenLocation(), RLoc, Exprs);
@@ -1227,6 +1395,73 @@ void Parser::ParseOmpSsReductionInitializerForDecl(VarDecl *OmpPrivParm) {
   }
 }
 
+/// Parses clauses with list with a max limit of N
+template<int N>
+bool Parser::ParseOmpSsFixedList(
+    OmpSsDirectiveKind DKind, OmpSsClauseKind Kind, SmallVectorImpl<Expr *> &Vars,
+    SourceLocation &RLoc) {
+  // Parse '('.
+  BalancedDelimiterTracker T(*this, tok::l_paren, tok::annot_pragma_ompss_end);
+  if (T.expectAndConsume(diag::err_expected_lparen_after,
+                         getOmpSsClauseName(Kind).data()))
+    return true;
+
+  bool IsComma = true;
+  auto Cond = [&](int i) {
+    return i < N &&
+      (IsComma
+       || (Tok.isNot(tok::r_paren)
+         && Tok.isNot(tok::colon)
+         && Tok.isNot(tok::annot_pragma_ompss_end)));
+  };
+
+  for (int i = 0; Cond(i); ++i) {
+
+    SourceLocation ELoc = Tok.getLocation();
+
+    // 1. Disable diagnostics for label clause. Emit a warning and keep going
+    // FIXME: this hides any typo correction diagnostic like:
+    // const char *blabla;
+    // #pragma oss task label(babla) <- hidden typo correction
+    if (i == 0 && Kind == OSSC_label)
+      Diags.setSuppressAllDiagnostics(true);
+
+    ExprResult Val =
+        Actions.CorrectDelayedTyposInExpr(ParseAssignmentExpression());
+
+    // See 1.
+    if (i == 0 && Kind == OSSC_label) {
+      Diags.setSuppressAllDiagnostics(false);
+
+      if (Val.isInvalid() || Val.get()->containsErrors()) {
+        Diag(ELoc, diag::warn_oss_label_error);
+        Val = ExprError();
+      }
+    }
+
+    if (Val.isUsable()) {
+      Vars.push_back(Val.get());
+    } else {
+      SkipUntil(tok::comma, tok::r_paren, tok::annot_pragma_ompss_end,
+                StopBeforeMatch);
+    }
+    // Skip ',' if any
+    IsComma = Tok.is(tok::comma);
+    if (IsComma)
+      ConsumeToken();
+    else if (Tok.isNot(tok::r_paren) &&
+             Tok.isNot(tok::annot_pragma_ompss_end))
+      Diag(Tok, diag::err_oss_expected_punc)
+          << getOmpSsClauseName(Kind);
+  }
+
+  // Parse ')'.
+  RLoc = Tok.getLocation();
+  if (!T.consumeClose())
+    RLoc = T.getCloseLocation();
+  return Vars.empty();
+}
+
 /// Parses clauses with list.
 bool Parser::ParseOmpSsVarList(OmpSsDirectiveKind DKind,
                                OmpSsClauseKind Kind,
@@ -1238,7 +1473,7 @@ bool Parser::ParseOmpSsVarList(OmpSsDirectiveKind DKind,
   // Parse '('.
   BalancedDelimiterTracker T(*this, tok::l_paren, tok::annot_pragma_ompss_end);
   if (T.expectAndConsume(diag::err_expected_lparen_after,
-                         getOmpSsClauseName(Kind)))
+                         getOmpSsClauseName(Kind).data()))
     return true;
 
   OmpSsDependClauseKind DepKind;
@@ -1342,14 +1577,35 @@ bool Parser::ParseOmpSsVarList(OmpSsDirectiveKind DKind,
   if (!T.consumeClose())
     Data.RLoc = T.getCloseLocation();
   // Do not pass to Sema when
-  //   - depend(in : )
+  //   - shared()
   //       we have nothing to analize
   //   - reduction(invalid : ...)
   //       we cannot analize anything because we need a valid reduction id
-  return (Kind == OSSC_depend
-          && DepKindIt == Data.DepKinds.end() && Vars.empty())
-          || ((Kind == OSSC_reduction
-               || Kind == OSSC_weakreduction) && InvalidReductionId);
+  return (Kind != OSSC_depend && Vars.empty()) || InvalidReductionId;
+}
+
+/// Parsing of OmpSs
+///
+///    label-clause:
+///      'label' '(' expression ' [, 'expression' ])'
+template<int N>
+OSSClause *Parser::ParseOmpSsFixedListClause(
+    OmpSsDirectiveKind DKind, OmpSsClauseKind Kind, bool ParseOnly) {
+  SourceLocation Loc = Tok.getLocation();
+  SourceLocation LOpen = ConsumeToken();
+  SourceLocation RLoc;
+  SmallVector<Expr *, 4> Vars;
+
+  if (ParseOmpSsFixedList<N>(DKind, Kind, Vars, RLoc)) {
+    return nullptr;
+  }
+
+  if (ParseOnly) {
+    return nullptr;
+  }
+  return Actions.ActOnOmpSsFixedListClause(
+      Kind, Vars, Loc, LOpen, RLoc);
+  return nullptr;
 }
 
 /// Parsing of OmpSs
@@ -1392,6 +1648,7 @@ OSSClause *Parser::ParseOmpSsVarListClause(OmpSsDirectiveKind DKind,
     return Kind == OSSC_depend || Kind == OSSC_reduction
      || Kind == OSSC_in || Kind == OSSC_out || Kind == OSSC_inout
      || Kind == OSSC_concurrent || Kind == OSSC_commutative
+     || Kind == OSSC_on
      || Kind == OSSC_weakin || Kind == OSSC_weakout || Kind == OSSC_weakinout
      || Kind == OSSC_weakconcurrent || Kind == OSSC_weakcommutative
      || Kind == OSSC_weakreduction;
@@ -1421,27 +1678,10 @@ ExprResult Parser::ParseOmpSsParensExpr(StringRef ClauseName,
 
   SourceLocation ELoc = Tok.getLocation();
 
-  // 1. Disable diagnostics for label clause. Emit a warning and keep going
-  // FIXME: this hides any typo correction diagnostic like:
-  // const char *blabla;
-  // #pragma oss task label(babla) <- hidden typo correction
-  if (ClauseName == "label")
-    Diags.setSuppressAllDiagnostics(true);
-
   ExprResult LHS(ParseCastExpression(
       AnyCastExpr, /*isAddressOfOperand=*/false, NotTypeCast));
   ExprResult Val(ParseRHSOfBinaryExpression(LHS, prec::Conditional));
   Val = Actions.ActOnFinishFullExpr(Val.get(), ELoc, /*DiscardedValue*/ false);
-
-  // See 1.
-  if (ClauseName == "label") {
-    Diags.setSuppressAllDiagnostics(false);
-
-    if (Val.isInvalid() || Val.get()->containsErrors()) {
-      Diag(ELoc, diag::warn_oss_label_error);
-      Val = ExprError();
-    }
-  }
 
   // Parse ')'.
   RLoc = Tok.getLocation();
@@ -1462,8 +1702,6 @@ ExprResult Parser::ParseOmpSsParensExpr(StringRef ClauseName,
 ///    if-clause:
 ///      'if' '(' expression ')'
 ///
-///    label-clause:
-///      'label' '(' expression ')'
 OSSClause *Parser::ParseOmpSsSingleExprClause(OmpSsClauseKind Kind,
                                               bool ParseOnly) {
   SourceLocation Loc = ConsumeToken();
@@ -1487,7 +1725,7 @@ bool Parser::ParseOmpSsSimpleClauseImpl(OmpSsClauseKind Kind,
   // Parse '('.
   BalancedDelimiterTracker T(*this, tok::l_paren, tok::annot_pragma_ompss_end);
   if (T.expectAndConsume(diag::err_expected_lparen_after,
-                         getOmpSsClauseName(Kind)))
+                         getOmpSsClauseName(Kind).data()))
     return true;
 
   Data.Type = getOmpSsSimpleClauseType(
@@ -1510,6 +1748,9 @@ bool Parser::ParseOmpSsSimpleClauseImpl(OmpSsClauseKind Kind,
 ///    default-clause:
 ///         'default' '(' 'none' | 'shared' ')
 ///
+///    device-clause:
+///         'device' '(' 'smp' | 'cuda' | 'opencl' | 'fpga' ')
+///
 OSSClause *Parser::ParseOmpSsSimpleClause(OmpSsClauseKind Kind,
                                           bool ParseOnly) {
   OmpSsSimpleClauseDataTy Data;
@@ -1525,6 +1766,26 @@ OSSClause *Parser::ParseOmpSsSimpleClause(OmpSsClauseKind Kind,
 ///
 ///    wait-clause:
 ///         'wait'
+///    update-clause:
+///         'update'
+///    read-clause:
+///         'read'
+///    write-clause:
+///         'write'
+///    capture-clause:
+///         'capture'
+///    compare-clause:
+///         'compare'
+///    seq_cst-clause:
+///         'seq_cst'
+///    acq_rel-clause:
+///         'acq_rel'
+///    acquire-clause:
+///         'acquire'
+///    release-clause:
+///         'release'
+///    relaxed-clause:
+///         'relaxed'
 ///
 OSSClause *Parser::ParseOmpSsClause(OmpSsClauseKind Kind, bool ParseOnly) {
   SourceLocation Loc = Tok.getLocation();

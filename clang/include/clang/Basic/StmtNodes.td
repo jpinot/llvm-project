@@ -164,6 +164,7 @@ def FunctionParmPackExpr : StmtNode<Expr>;
 def MaterializeTemporaryExpr : StmtNode<Expr>;
 def LambdaExpr : StmtNode<Expr>;
 def CXXFoldExpr : StmtNode<Expr>;
+def CXXParenListInitExpr: StmtNode<Expr>;
 
 // C++ Coroutines TS expressions
 def CoroutineSuspendExpr : StmtNode<Expr, 1>;
@@ -269,6 +270,10 @@ def OMPMasterTaskLoopDirective : StmtNode<OMPLoopDirective>;
 def OMPMasterTaskLoopSimdDirective : StmtNode<OMPLoopDirective>;
 def OMPParallelMasterTaskLoopDirective : StmtNode<OMPLoopDirective>;
 def OMPParallelMasterTaskLoopSimdDirective : StmtNode<OMPLoopDirective>;
+def OMPMaskedTaskLoopDirective : StmtNode<OMPLoopDirective>;
+def OMPMaskedTaskLoopSimdDirective : StmtNode<OMPLoopDirective>;
+def OMPParallelMaskedTaskLoopDirective : StmtNode<OMPLoopDirective>;
+def OMPParallelMaskedTaskLoopSimdDirective : StmtNode<OMPLoopDirective>;
 def OMPDistributeDirective : StmtNode<OMPLoopDirective>;
 def OMPDistributeParallelForDirective : StmtNode<OMPLoopDirective>;
 def OMPDistributeParallelForSimdDirective : StmtNode<OMPLoopDirective>;
@@ -287,14 +292,22 @@ def OMPTargetTeamsDistributeSimdDirective : StmtNode<OMPLoopDirective>;
 def OMPInteropDirective : StmtNode<OMPExecutableDirective>;
 def OMPDispatchDirective : StmtNode<OMPExecutableDirective>;
 def OMPMaskedDirective : StmtNode<OMPExecutableDirective>;
+def OMPParallelMaskedDirective : StmtNode<OMPExecutableDirective>;
 def OMPGenericLoopDirective : StmtNode<OMPLoopDirective>;
-
+def OMPTeamsGenericLoopDirective : StmtNode<OMPLoopDirective>;
+def OMPTargetTeamsGenericLoopDirective : StmtNode<OMPLoopDirective>;
+def OMPParallelGenericLoopDirective : StmtNode<OMPLoopDirective>;
+def OMPTargetParallelGenericLoopDirective : StmtNode<OMPLoopDirective>;
+def OMPErrorDirective : StmtNode<OMPExecutableDirective>;
 // OmpSs Directives
 def OSSExecutableDirective : StmtNode<Stmt, 1>;
 def OSSLoopDirective : StmtNode<OSSExecutableDirective, 1>;
 def OSSTaskwaitDirective : StmtNode<OSSExecutableDirective>;
 def OSSReleaseDirective : StmtNode<OSSExecutableDirective>;
 def OSSTaskDirective : StmtNode<OSSExecutableDirective>;
+def OSSCriticalDirective : StmtNode<OSSExecutableDirective>;
 def OSSTaskForDirective : StmtNode<OSSLoopDirective>;
+def OSSTaskIterDirective : StmtNode<OSSLoopDirective>;
 def OSSTaskLoopDirective : StmtNode<OSSLoopDirective>;
 def OSSTaskLoopForDirective : StmtNode<OSSLoopDirective>;
+def OSSAtomicDirective : StmtNode<OSSExecutableDirective>;

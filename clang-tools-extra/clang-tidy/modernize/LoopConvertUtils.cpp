@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -398,8 +399,8 @@ static bool isAliasDecl(ASTContext *Context, const Decl *TheDecl,
     if (OpCall->getOperator() == OO_Star)
       return isDereferenceOfOpCall(OpCall, IndexVar);
     if (OpCall->getOperator() == OO_Subscript) {
-      assert(OpCall->getNumArgs() == 2);
-      return isIndexInSubscriptExpr(OpCall->getArg(1), IndexVar);
+      return OpCall->getNumArgs() == 2 &&
+             isIndexInSubscriptExpr(OpCall->getArg(1), IndexVar);
     }
     break;
   }
@@ -444,7 +445,7 @@ static bool arrayMatchesBoundExpr(ASTContext *Context,
       Context->getAsConstantArrayType(ArrayType);
   if (!ConstType)
     return false;
-  Optional<llvm::APSInt> ConditionSize =
+  std::optional<llvm::APSInt> ConditionSize =
       ConditionExpr->getIntegerConstantExpr(*Context);
   if (!ConditionSize)
     return false;
@@ -785,8 +786,8 @@ bool ForLoopIndexUseVisitor::TraverseLambdaCapture(LambdaExpr *LE,
                                                    const LambdaCapture *C,
                                                    Expr *Init) {
   if (C->capturesVariable()) {
-    const VarDecl *VDecl = C->getCapturedVar();
-    if (areSameVariable(IndexVar, cast<ValueDecl>(VDecl))) {
+    const ValueDecl *VDecl = C->getCapturedVar();
+    if (areSameVariable(IndexVar, VDecl)) {
       // FIXME: if the index is captured, it will count as an usage and the
       // alias (if any) won't work, because it is only used in case of having
       // exactly one usage.

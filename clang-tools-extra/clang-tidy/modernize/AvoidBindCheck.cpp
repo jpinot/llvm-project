@@ -627,7 +627,7 @@ static void emitCaptureList(const LambdaProperties &LP,
 
 static ArrayRef<BindArgument>
 getForwardedArgumentList(const LambdaProperties &P) {
-  ArrayRef<BindArgument> Args = makeArrayRef(P.BindArguments);
+  ArrayRef<BindArgument> Args = ArrayRef(P.BindArguments);
   if (P.Callable.Type != CT_MemberFunction)
     return Args;
 
@@ -672,7 +672,7 @@ void AvoidBindCheck::check(const MatchFinder::MatchResult &Result) {
   emitCaptureList(LP, Result, Stream);
   Stream << "]";
 
-  ArrayRef<BindArgument> FunctionCallArgs = makeArrayRef(LP.BindArguments);
+  ArrayRef<BindArgument> FunctionCallArgs = ArrayRef(LP.BindArguments);
 
   addPlaceholderArgs(LP, Stream, PermissiveParameterList);
 
@@ -699,7 +699,7 @@ void AvoidBindCheck::check(const MatchFinder::MatchResult &Result) {
         Stream << "(" << LP.Callable.UsageIdentifier << ")";
         break;
       }
-      LLVM_FALLTHROUGH;
+      [[fallthrough]];
     case CE_InitExpression:
       Stream << LP.Callable.UsageIdentifier;
       break;

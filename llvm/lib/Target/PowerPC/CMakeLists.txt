@@ -27,6 +27,7 @@ add_llvm_target(PowerPCCodeGen
   PPCCallingConv.cpp
   PPCCCState.cpp
   PPCCTRLoops.cpp
+  PPCCTRLoopsVerify.cpp
   PPCExpandAtomicPseudoInsts.cpp
   PPCHazardRecognizers.cpp
   PPCInstrInfo.cpp
@@ -73,6 +74,7 @@ add_llvm_target(PowerPCCodeGen
   SelectionDAG
   Support
   Target
+  TargetParser
   TransformUtils
   GlobalISel
 

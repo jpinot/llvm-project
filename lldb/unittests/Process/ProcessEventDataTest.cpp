@@ -16,7 +16,6 @@
 #include "lldb/Target/Thread.h"
 #include "lldb/Utility/ArchSpec.h"
 #include "lldb/Utility/Event.h"
-#include "lldb/Utility/Reproducer.h"
 #include "gtest/gtest.h"
 
 using namespace lldb_private;
@@ -27,7 +26,6 @@ namespace {
 class ProcessEventDataTest : public ::testing::Test {
 public:
   void SetUp() override {
-    llvm::cantFail(Reproducer::Initialize(ReproducerMode::Off, llvm::None));
     FileSystem::Initialize();
     HostInfo::Initialize();
     PlatformMacOSX::Initialize();
@@ -36,13 +34,13 @@ public:
     PlatformMacOSX::Terminate();
     HostInfo::Terminate();
     FileSystem::Terminate();
-    Reproducer::Terminate();
   }
 };
 
 class DummyProcess : public Process {
 public:
-  using Process::Process;
+  DummyProcess(lldb::TargetSP target_sp, lldb::ListenerSP listener_sp)
+      : Process(target_sp, listener_sp) {}
 
   bool CanDebug(lldb::TargetSP target, bool plugin_specified_by_name) override {
     return true;
@@ -82,28 +80,26 @@ public:
 
 class DummyStopInfo : public StopInfo {
 public:
-  DummyStopInfo(Thread &thread, uint64_t value)
-      : StopInfo(thread, value), m_should_stop(true),
-        m_stop_reason(eStopReasonBreakpoint) {}
+  DummyStopInfo(Thread &thread, uint64_t value) : StopInfo(thread, value) {}
 
   bool ShouldStop(Event *event_ptr) override { return m_should_stop; }
 
   StopReason GetStopReason() const override { return m_stop_reason; }
 
-  bool m_should_stop;
-  StopReason m_stop_reason;
+  bool m_should_stop = true;
+  StopReason m_stop_reason = eStopReasonBreakpoint;
 };
 
 class DummyProcessEventData : public Process::ProcessEventData {
 public:
   DummyProcessEventData(ProcessSP &process_sp, StateType state)
-      : ProcessEventData(process_sp, state), m_should_stop_hit_count(0) {}
+      : ProcessEventData(process_sp, state) {}
   bool ShouldStop(Event *event_ptr, bool &found_valid_stopinfo) override {
     m_should_stop_hit_count++;
     return false;
   }
 
-  int m_should_stop_hit_count;
+  int m_should_stop_hit_count = 0;
 };
 } // namespace
 
@@ -146,7 +142,9 @@ ThreadSP CreateThread(ProcessSP &process_sp, bool should_stop,
 TEST_F(ProcessEventDataTest, DoOnRemoval) {
   ArchSpec arch("x86_64-apple-macosx-");
 
-  Platform::SetHostPlatform(PlatformRemoteMacOSX::CreateInstance(true, &arch));
+  Platform::SetHostPlatform(
+      PlatformRemoteMacOSX::CreateInstance(true, &arch, /*debugger=*/nullptr,
+                                           /*metadata=*/nullptr));
 
   DebuggerSP debugger_sp = Debugger::CreateInstance();
   ASSERT_TRUE(debugger_sp);
@@ -186,7 +184,9 @@ TEST_F(ProcessEventDataTest, DoOnRemoval) {
 TEST_F(ProcessEventDataTest, ShouldStop) {
   ArchSpec arch("x86_64-apple-macosx-");
 
-  Platform::SetHostPlatform(PlatformRemoteMacOSX::CreateInstance(true, &arch));
+  Platform::SetHostPlatform(
+      PlatformRemoteMacOSX::CreateInstance(true, &arch, /*debugger=*/nullptr,
+                                           /*metadata=*/nullptr));
 
   DebuggerSP debugger_sp = Debugger::CreateInstance();
   ASSERT_TRUE(debugger_sp);

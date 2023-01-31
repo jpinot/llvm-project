@@ -23,7 +23,9 @@ public:
   static void Terminate();
 
   // lldb_private::PluginInterface functions
-  static lldb::PlatformSP CreateInstance(bool force, const ArchSpec *arch);
+  static lldb::PlatformSP CreateInstance(bool force, const ArchSpec *arch,
+                                         const Debugger *debugger,
+                                         const ScriptedMetadata *metadata);
 
   static llvm::StringRef GetPluginNameStatic(bool is_host) {
     return is_host ? Platform::GetHostPlatformName() : "remote-openbsd";
@@ -42,7 +44,8 @@ public:
 
   void GetStatus(Stream &strm) override;
 
-  std::vector<ArchSpec> GetSupportedArchitectures() override;
+  std::vector<ArchSpec>
+  GetSupportedArchitectures(const ArchSpec &process_host_arch) override;
 
   bool CanDebugProcess() override;
 

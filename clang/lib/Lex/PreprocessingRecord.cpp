@@ -42,7 +42,8 @@ ExternalPreprocessingRecordSource::~ExternalPreprocessingRecordSource() =
 InclusionDirective::InclusionDirective(PreprocessingRecord &PPRec,
                                        InclusionKind Kind, StringRef FileName,
                                        bool InQuotes, bool ImportedModule,
-                                       const FileEntry *File, SourceRange Range)
+                                       OptionalFileEntryRef File,
+                                       SourceRange Range)
     : PreprocessingDirective(InclusionDirectiveKind, Range), InQuotes(InQuotes),
       Kind(Kind), ImportedModule(ImportedModule), File(File) {
   char *Memory = (char *)PPRec.Allocate(FileName.size() + 1, alignof(char));
@@ -111,10 +112,9 @@ bool PreprocessingRecord::isEntityInFileID(iterator PPEI, FileID FID) {
 
     // See if the external source can see if the entity is in the file without
     // deserializing it.
-    Optional<bool> IsInFile =
-        ExternalSource->isPreprocessedEntityInFileID(LoadedIndex, FID);
-    if (IsInFile.hasValue())
-      return IsInFile.getValue();
+    if (Optional<bool> IsInFile =
+            ExternalSource->isPreprocessedEntityInFileID(LoadedIndex, FID))
+      return *IsInFile;
 
     // The external source did not provide a definite answer, go and deserialize
     // the entity to check it.
@@ -475,15 +475,9 @@ void PreprocessingRecord::MacroUndefined(const Token &Id,
 }
 
 void PreprocessingRecord::InclusionDirective(
-    SourceLocation HashLoc,
-    const Token &IncludeTok,
-    StringRef FileName,
-    bool IsAngled,
-    CharSourceRange FilenameRange,
-    const FileEntry *File,
-    StringRef SearchPath,
-    StringRef RelativePath,
-    const Module *Imported,
+    SourceLocation HashLoc, const Token &IncludeTok, StringRef FileName,
+    bool IsAngled, CharSourceRange FilenameRange, OptionalFileEntryRef File,
+    StringRef SearchPath, StringRef RelativePath, const Module *Imported,
     SrcMgr::CharacteristicKind FileType) {
   InclusionDirective::InclusionKind Kind = InclusionDirective::Include;
 

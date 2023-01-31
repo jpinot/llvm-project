@@ -25,6 +25,13 @@ struct TaskDependInfo {
   int type;                       // 1: in, 2:out, 3:inout
 };
 
+struct GlobalVarInfo {
+  GlobalValue *Var;
+  int Offset;
+  int Size;
+  bool IsPointer;
+};
+
 struct TaskAllocInfo {
   int flags;         // task flags
   int sizeOfTask;    // size of Task struct
@@ -38,6 +45,14 @@ struct TaskAllocInfo {
   SmallVector<int, 2> firstPrivateDataPositions;
   SmallVector<int, 2> firstPrivateDataOffsets;
   SmallVector<int, 2> firstPrivateDataSizes;
+  SmallVector<GlobalVarInfo , 2> globalFirstPrivateData;
+
+};
+
+struct SFUse{
+    Value *val;
+    int position;
+    bool isReverse;
 };
 
 struct TaskInfo {
@@ -76,8 +91,8 @@ public:
   void clear();
   void obtainTaskIdent(TaskInfo &TaskFound, CallInst &TaskCall);
   // static so that it can be used in cuda generation
-  static std::string get_c_struct_from_types(SmallVectorImpl<Type *> &types,
-                                      int struct_id, bool is_private, std::string name = "");
+  static std::string createStructType(SmallVectorImpl<Type *> &types,
+                                      int struct_id, std::string name);
   std::string get_task_layout(std::string LongestPrivateName,
                               std::string LongestSharedName);
   void erase_transitive_edges();

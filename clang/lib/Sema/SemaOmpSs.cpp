@@ -29,7 +29,9 @@
 #include "clang/Sema/ScopeInfo.h"
 #include "clang/Sema/SemaInternal.h"
 #include "llvm/ADT/PointerEmbeddedInt.h"
+
 using namespace clang;
+using namespace llvm::oss;
 
 namespace {
 /// Default data sharing attributes, which can be applied to directive.
@@ -37,6 +39,8 @@ enum DefaultDataSharingAttributes {
   DSA_unspecified = 0, /// Data sharing attribute not specified.
   DSA_none = 1 << 0,   /// Default data sharing attribute 'none'.
   DSA_shared = 1 << 1, /// Default data sharing attribute 'shared'.
+  DSA_private = 1 << 2, /// Default data sharing attribute 'private'.
+  DSA_firstprivate = 1 << 3, /// Default data sharing attribute 'firstprivate'.
 };
 
 /// Stack for tracking declarations used in OmpSs directives and
@@ -145,9 +149,10 @@ public:
     Stack.back().DefaultAttrLoc = Loc;
   }
   /// Set default data sharing attribute to shared.
-  void setDefaultDSAShared(SourceLocation Loc) {
+  void setDefault(
+      DefaultDataSharingAttributes DefaultAttr, SourceLocation Loc) {
     assert(!isStackEmpty());
-    Stack.back().DefaultAttr = DSA_shared;
+    Stack.back().DefaultAttr = DefaultAttr;
     Stack.back().DefaultAttrLoc = Loc;
   }
   void setThisExpr(CXXThisExpr *ThisE) {
@@ -175,6 +180,10 @@ public:
     if (!isStackEmpty())
       Ret = Stack.back().LoopICVExprs;
     return Ret;
+  }
+
+  void setCurrentDirective(OmpSsDirectiveKind DKind) {
+    Stack.back().Directive = DKind;
   }
 
   /// Set collapse value for the region.
@@ -463,6 +472,14 @@ public:
           // Record DSA as Ignored to avoid making the same node again
           Stack->addDSA(VD, E, OSSC_shared, /*Ignore=*/false, /*IsBase=*/true);
           break;
+        case DSA_private:
+          // Record DSA as Ignored to avoid making the same node again
+          Stack->addDSA(VD, E, OSSC_private, /*Ignore=*/false, /*IsBase=*/true);
+          break;
+        case DSA_firstprivate:
+          // Record DSA as Ignored to avoid making the same node again
+          Stack->addDSA(VD, E, OSSC_firstprivate, /*Ignore=*/false, /*IsBase=*/true);
+          break;
         case DSA_none:
           SemaRef.Diag(E->getExprLoc(), diag::err_oss_not_defined_dsa_when_default_none) << E->getDecl();
           // Record DSA as ignored to diagnostic only once
@@ -488,16 +505,18 @@ public:
     }
   }
 
+  void VisitLambdaExpr(LambdaExpr *LE) {
+    CXXMethodDecl *MD = LE->getCallOperator();
+    for (ParmVarDecl *param : MD->parameters()) {
+      InnerDecls.insert(param);
+    }
+    for (Expr *E : LE->capture_inits())
+      Visit(E);
+  }
+
   void VisitCXXCatchStmt(CXXCatchStmt *Node) {
     InnerDecls.insert(Node->getExceptionDecl());
     Visit(Node->getHandlerBlock());
-  }
-
-  void VisitExpr(Expr *E) {
-    for (Stmt *Child : E->children()) {
-      if (Child)
-        Visit(Child);
-    }
   }
 
   void VisitOSSClause(OSSClause *Clause) {
@@ -550,7 +569,7 @@ public:
 class OSSClauseDSAChecker final : public StmtVisitor<OSSClauseDSAChecker, void> {
   DSAStackTy *Stack;
   Sema &SemaRef;
-  OSSClause *CurClause;
+  OmpSsClauseKind CKind;
   bool ErrorFound = false;
   // Map to record that one variable has been used in a reduction/dependency.
   // Strong restriction (true) is when the variable is the symbol reduced:
@@ -577,10 +596,13 @@ public:
 
   void VisitOSSMultiDepExpr(OSSMultiDepExpr *E) {
     IsPlainDeclRef = false;
-    // Ignore iterators
-    for (auto *E : E->getDepIterators()) {
-      auto *VD = cast<VarDecl>(cast<DeclRefExpr>(E)->getDecl());
-      Stack->addDSA(VD, E, OSSC_private, /*Ignore=*/true, /*IsBase=*/true);
+
+    if (Stack) {
+      // Ignore iterators
+      for (auto *E : E->getDepIterators()) {
+        auto *VD = cast<VarDecl>(cast<DeclRefExpr>(E)->getDecl());
+        Stack->addDSA(VD, E, OSSC_private, /*Ignore=*/true, /*IsBase=*/true);
+      }
     }
 
     Visit(E->getDepExpr());
@@ -629,8 +651,12 @@ public:
   }
 
   void VisitCXXThisExpr(CXXThisExpr *ThisE) {
+    // The dep base may use this:
+    // out(this->array[i])
+    IsFirstDecl = false;
+
     // Add DSA to 'this' if is the first time we see it
-    if (!Stack->getThisExpr()) {
+    if (Stack && !Stack->getThisExpr()) {
       Stack->setThisExpr(ThisE);
     }
   }
@@ -645,8 +671,6 @@ public:
 
       SourceLocation ELoc = E->getExprLoc();
       SourceRange ERange = E->getSourceRange();
-
-      DSAStackTy::DSAVarData DVarCurrent = Stack->getCurrentDSA(VD);
 
       // inout(x)              | shared(x)        | int x;
       // inout(p[i])           | firstprivate(p)  | int *p;
@@ -672,8 +696,8 @@ public:
       // We have to emit a diagnostic if a strong restriction
       // is used in other places.
       bool IsReduction = false;
-      if (CurClause->getClauseKind() == OSSC_reduction
-          || CurClause->getClauseKind() == OSSC_weakreduction)
+      if (CKind == OSSC_reduction
+          || CKind == OSSC_weakreduction)
         IsReduction = true;
 
       bool CurIsStrongRestric = IsReduction && CurIsFirstDecl;
@@ -688,6 +712,10 @@ public:
       }
       SeenStrongRestric[VD] = SeenStrongRestric[VD] || CurIsStrongRestric;
 
+      if (!Stack)
+        return;
+
+      DSAStackTy::DSAVarData DVarCurrent = Stack->getCurrentDSA(VD);
       bool ExistsCurrent = DVarCurrent.RefExpr;
       if (!ExistsCurrent) {
         // No DSA in current directive, give assign one and done
@@ -717,10 +745,17 @@ public:
   void VisitClause(OSSClause *Clause) {
     for (Stmt *Child : Clause->children()) {
       reset();
-      CurClause = Clause;
+      CKind = Clause->getClauseKind();
       if (Child)
         Visit(Child);
     }
+  }
+
+  void VisitClauseExpr(Expr *E, OmpSsClauseKind CKind) {
+    reset();
+    this->CKind = CKind;
+    if (E)
+      Visit(E);
   }
 
   void VisitStmt(Stmt *S) {
@@ -731,7 +766,7 @@ public:
   }
 
   void reset() {
-    CurClause = nullptr;
+    CKind = OSSC_unknown;
     IsFirstDecl = true;
     IsPlainDeclRef = true;
   }
@@ -785,6 +820,10 @@ OmpSsDirectiveKind Sema::GetCurrentOmpSsDirective() const {
   return DSAStack->getCurrentDirective();
 }
 
+void Sema::SetTaskiterKind(OmpSsDirectiveKind DKind) {
+  DSAStack->setCurrentDirective(DKind);
+}
+
 bool Sema::IsEndOfTaskloop() const {
   unsigned AssociatedLoops = DSAStack->getAssociatedLoops();
   unsigned SeenAssociatedLoops = DSAStack->getSeenAssociatedLoops();
@@ -806,7 +845,7 @@ void Sema::EndOmpSsDSABlock(Stmt *CurDirective) {
 
 static std::string
 getListOfPossibleValues(OmpSsClauseKind K, unsigned First, unsigned Last,
-                        ArrayRef<unsigned> Exclude = llvm::None) {
+                        ArrayRef<unsigned> Exclude = std::nullopt) {
   SmallString<256> Buffer;
   llvm::raw_svector_ostream Out(Buffer);
   unsigned Skipped = Exclude.size();
@@ -1370,13 +1409,15 @@ void Sema::ActOnOmpSsExecutableDirectiveEnd() {
 }
 
 StmtResult Sema::ActOnOmpSsExecutableDirective(ArrayRef<OSSClause *> Clauses,
-    OmpSsDirectiveKind Kind, Stmt *AStmt, SourceLocation StartLoc, SourceLocation EndLoc) {
+    const DeclarationNameInfo &DirName, OmpSsDirectiveKind Kind, Stmt *AStmt,
+    SourceLocation StartLoc, SourceLocation EndLoc) {
 
   bool ErrorFound = false;
 
   llvm::SmallVector<OSSClause *, 8> ClausesWithImplicit;
   ClausesWithImplicit.append(Clauses.begin(), Clauses.end());
-  if (AStmt && !CurContext->isDependentContext()) {
+  if (AStmt && !CurContext->isDependentContext() &&
+      Kind != OSSD_critical && Kind != OSSD_atomic) {
     // Check default data sharing attributes for referenced variables.
     DSAAttrChecker DSAChecker(DSAStack, *this);
 
@@ -1435,14 +1476,25 @@ StmtResult Sema::ActOnOmpSsExecutableDirective(ArrayRef<OSSClause *> Clauses,
   case OSSD_task:
     Res = ActOnOmpSsTaskDirective(ClausesWithImplicit, AStmt, StartLoc, EndLoc);
     break;
+  case OSSD_critical:
+    Res = ActOnOmpSsCriticalDirective(DirName, ClausesWithImplicit, AStmt,
+                                      StartLoc, EndLoc);
+    break;
   case OSSD_task_for:
     Res = ActOnOmpSsTaskForDirective(ClausesWithImplicit, AStmt, StartLoc, EndLoc);
+    break;
+  case OSSD_taskiter:
+  case OSSD_taskiter_while:
+    Res = ActOnOmpSsTaskIterDirective(ClausesWithImplicit, AStmt, StartLoc, EndLoc);
     break;
   case OSSD_taskloop:
     Res = ActOnOmpSsTaskLoopDirective(ClausesWithImplicit, AStmt, StartLoc, EndLoc);
     break;
   case OSSD_taskloop_for:
     Res = ActOnOmpSsTaskLoopForDirective(ClausesWithImplicit, AStmt, StartLoc, EndLoc);
+    break;
+  case OSSD_atomic:
+    Res = ActOnOmpSsAtomicDirective(ClausesWithImplicit, AStmt, StartLoc, EndLoc);
     break;
   case OSSD_declare_task:
   case OSSD_declare_reduction:
@@ -1477,7 +1529,18 @@ StmtResult Sema::ActOnOmpSsTaskDirective(ArrayRef<OSSClause *> Clauses,
                                          SourceLocation EndLoc) {
   if (!AStmt)
     return StmtError();
+  setFunctionHasBranchProtectedScope();
   return OSSTaskDirective::Create(Context, StartLoc, EndLoc, Clauses, AStmt);
+}
+
+StmtResult Sema::ActOnOmpSsCriticalDirective(
+    const DeclarationNameInfo &DirName, ArrayRef<OSSClause *> Clauses,
+    Stmt *AStmt, SourceLocation StartLoc, SourceLocation EndLoc) {
+  if (!AStmt)
+    return StmtError();
+  setFunctionHasBranchProtectedScope();
+  return OSSCriticalDirective::Create(Context, DirName, StartLoc, EndLoc,
+                                      Clauses, AStmt);
 }
 
 namespace {
@@ -1657,15 +1720,15 @@ bool OmpSsIterationSpaceChecker::setStep(Expr *NewStep, bool Subtract) {
     bool IsConstZero = Result && !Result->getBoolValue();
 
     if (UB && (IsConstZero ||
-               (TestIsLessOp.getValue() ?
+               (TestIsLessOp.value() ?
                   (IsConstNeg || (IsUnsigned && Subtract)) :
                   (IsConstPos || (IsUnsigned && !Subtract))))) {
       SemaRef.Diag(NewStep->getExprLoc(),
                    diag::err_oss_loop_incr_not_compatible)
-          << LCDecl << TestIsLessOp.getValue() << NewStep->getSourceRange();
+          << LCDecl << TestIsLessOp.value() << NewStep->getSourceRange();
       SemaRef.Diag(ConditionLoc,
                    diag::note_oss_loop_cond_requres_compatible_incr)
-          << TestIsLessOp.getValue() << ConditionSrcRange;
+          << TestIsLessOp.value() << ConditionSrcRange;
       return true;
     }
     if (Subtract) {
@@ -2027,19 +2090,23 @@ void Sema::ActOnOmpSsLoopInitialization(SourceLocation ForLoc, Stmt *Init) {
         const Expr *E = ISC.getLoopDeclRefExpr();
         auto *VD = dyn_cast<VarDecl>(D);
 
+        OmpSsClauseKind CKind = OSSC_private;
+        if (DSAStack->getCurrentDirective() == OSSD_taskiter)
+          CKind = OSSC_firstprivate;
+
         DSAStackTy::DSAVarData DVar = DSAStack->getCurrentDSA(D);
-        if (DVar.CKind != OSSC_unknown && DVar.CKind != OSSC_private &&
+        if (DVar.CKind != OSSC_unknown && DVar.CKind != CKind &&
             DVar.RefExpr) {
           Diag(E->getExprLoc(), diag::err_oss_wrong_dsa)
             << getOmpSsClauseName(DVar.CKind)
-            << getOmpSsClauseName(OSSC_private);
+            << getOmpSsClauseName(CKind);
             return;
         }
 
         // Register loop control variable
         if (!CurContext->isDependentContext()) {
           DSAStack->addLoopControlVariable(VD, E);
-          DSAStack->addDSA(VD, E, OSSC_private, /*Ignore=*/true, /*IsBase=*/true);
+          DSAStack->addDSA(VD, E, CKind, /*Ignore=*/true, /*IsBase=*/true);
         }
       }
     }
@@ -2264,11 +2331,35 @@ StmtResult Sema::ActOnOmpSsTaskForDirective(
     SourceLocation StartLoc, SourceLocation EndLoc) {
   if (!AStmt)
     return StmtError();
+
   SmallVector<OSSLoopDirective::HelperExprs> B(DSAStack->getAssociatedLoops());
   if (checkOmpSsLoop(OSSD_task_for, AStmt, *this, *DSAStack, B))
     return StmtError();
 
+  setFunctionHasBranchProtectedScope();
   return OSSTaskForDirective::Create(Context, StartLoc, EndLoc, Clauses, AStmt, B);
+}
+
+StmtResult Sema::ActOnOmpSsTaskIterDirective(
+    ArrayRef<OSSClause *> Clauses, Stmt *AStmt,
+    SourceLocation StartLoc, SourceLocation EndLoc) {
+  if (!AStmt)
+    return StmtError();
+  SmallVector<OSSLoopDirective::HelperExprs> B(DSAStack->getAssociatedLoops());
+  if (isa<ForStmt>(AStmt)) {
+    // taskiter (for)
+    if (checkOmpSsLoop(OSSD_taskiter, AStmt, *this, *DSAStack, B))
+      return StmtError();
+  } else if (isa<WhileStmt>(AStmt)) {
+    // taskiter (while)
+    // do nothing
+  } else {
+    Diag(AStmt->getBeginLoc(), diag::err_oss_taskiter_for_while)
+        << getOmpSsDirectiveName(OSSD_taskiter);
+  }
+
+  setFunctionHasBranchProtectedScope();
+  return OSSTaskIterDirective::Create(Context, StartLoc, EndLoc, Clauses, AStmt, B);
 }
 
 StmtResult Sema::ActOnOmpSsTaskLoopDirective(
@@ -2276,6 +2367,7 @@ StmtResult Sema::ActOnOmpSsTaskLoopDirective(
     SourceLocation StartLoc, SourceLocation EndLoc) {
   if (!AStmt)
     return StmtError();
+
   SmallVector<OSSLoopDirective::HelperExprs> B(DSAStack->getAssociatedLoops());
   if (checkOmpSsLoop(OSSD_taskloop, AStmt, *this, *DSAStack, B))
     return StmtError();
@@ -2301,6 +2393,7 @@ StmtResult Sema::ActOnOmpSsTaskLoopDirective(
     }
   }
 
+  setFunctionHasBranchProtectedScope();
   return OSSTaskLoopDirective::Create(Context, StartLoc, EndLoc, Clauses, AStmt, B);
 }
 
@@ -2309,6 +2402,7 @@ StmtResult Sema::ActOnOmpSsTaskLoopForDirective(
     SourceLocation StartLoc, SourceLocation EndLoc) {
   if (!AStmt)
     return StmtError();
+
   SmallVector<OSSLoopDirective::HelperExprs> B(DSAStack->getAssociatedLoops());
   if (checkOmpSsLoop(OSSD_taskloop_for, AStmt, *this, *DSAStack, B))
     return StmtError();
@@ -2334,46 +2428,1888 @@ StmtResult Sema::ActOnOmpSsTaskLoopForDirective(
     }
   }
 
+  setFunctionHasBranchProtectedScope();
   return OSSTaskLoopForDirective::Create(Context, StartLoc, EndLoc, Clauses, AStmt, B);
 }
 
-static void checkOutlineDependency(Sema &S, Expr *RefExpr, bool OSSSyntax=false) {
+namespace {
+/// Helper class for checking expression in 'omp atomic [update]'
+/// construct.
+class OmpSsAtomicUpdateChecker {
+  /// Error results for atomic update expressions.
+  enum ExprAnalysisErrorCode {
+    /// A statement is not an expression statement.
+    NotAnExpression,
+    /// Expression is not builtin binary or unary operation.
+    NotABinaryOrUnaryExpression,
+    /// Unary operation is not post-/pre- increment/decrement operation.
+    NotAnUnaryIncDecExpression,
+    /// An expression is not of scalar type.
+    NotAScalarType,
+    /// A binary operation is not an assignment operation.
+    NotAnAssignmentOp,
+    /// RHS part of the binary operation is not a binary expression.
+    NotABinaryExpression,
+    /// RHS part is not additive/multiplicative/shift/biwise binary
+    /// expression.
+    NotABinaryOperator,
+    /// RHS binary operation does not have reference to the updated LHS
+    /// part.
+    NotAnUpdateExpression,
+    /// No errors is found.
+    NoError
+  };
+  /// Reference to Sema.
+  Sema &SemaRef;
+  /// A location for note diagnostics (when error is found).
+  SourceLocation NoteLoc;
+  /// 'x' lvalue part of the source atomic expression.
+  Expr *X;
+  /// 'expr' rvalue part of the source atomic expression.
+  Expr *E;
+  /// Helper expression of the form
+  /// 'OpaqueValueExpr(x) binop OpaqueValueExpr(expr)' or
+  /// 'OpaqueValueExpr(expr) binop OpaqueValueExpr(x)'.
+  Expr *UpdateExpr;
+  /// Is 'x' a LHS in a RHS part of full update expression. It is
+  /// important for non-associative operations.
+  bool IsXLHSInRHSPart;
+  BinaryOperatorKind Op;
+  SourceLocation OpLoc;
+  /// true if the source expression is a postfix unary operation, false
+  /// if it is a prefix unary operation.
+  bool IsPostfixUpdate;
+
+public:
+  OmpSsAtomicUpdateChecker(Sema &SemaRef)
+      : SemaRef(SemaRef), X(nullptr), E(nullptr), UpdateExpr(nullptr),
+        IsXLHSInRHSPart(false), Op(BO_PtrMemD), IsPostfixUpdate(false) {}
+  /// Check specified statement that it is suitable for 'atomic update'
+  /// constructs and extract 'x', 'expr' and Operation from the original
+  /// expression. If DiagId and NoteId == 0, then only check is performed
+  /// without error notification.
+  /// \param DiagId Diagnostic which should be emitted if error is found.
+  /// \param NoteId Diagnostic note for the main error message.
+  /// \return true if statement is not an update expression, false otherwise.
+  bool checkStatement(Stmt *S, unsigned DiagId = 0, unsigned NoteId = 0);
+  /// Return the 'x' lvalue part of the source atomic expression.
+  Expr *getX() const { return X; }
+  /// Return the 'expr' rvalue part of the source atomic expression.
+  Expr *getExpr() const { return E; }
+  /// Return the update expression used in calculation of the updated
+  /// value. Always has form 'OpaqueValueExpr(x) binop OpaqueValueExpr(expr)' or
+  /// 'OpaqueValueExpr(expr) binop OpaqueValueExpr(x)'.
+  Expr *getUpdateExpr() const { return UpdateExpr; }
+  /// Return true if 'x' is LHS in RHS part of full update expression,
+  /// false otherwise.
+  bool isXLHSInRHSPart() const { return IsXLHSInRHSPart; }
+
+  /// true if the source expression is a postfix unary operation, false
+  /// if it is a prefix unary operation.
+  bool isPostfixUpdate() const { return IsPostfixUpdate; }
+
+private:
+  bool checkBinaryOperation(BinaryOperator *AtomicBinOp, unsigned DiagId = 0,
+                            unsigned NoteId = 0);
+};
+
+bool OmpSsAtomicUpdateChecker::checkBinaryOperation(
+    BinaryOperator *AtomicBinOp, unsigned DiagId, unsigned NoteId) {
+  ExprAnalysisErrorCode ErrorFound = NoError;
+  SourceLocation ErrorLoc, NoteLoc;
+  SourceRange ErrorRange, NoteRange;
+  // Allowed constructs are:
+  //  x = x binop expr;
+  //  x = expr binop x;
+  if (AtomicBinOp->getOpcode() == BO_Assign) {
+    X = AtomicBinOp->getLHS();
+    if (const auto *AtomicInnerBinOp = dyn_cast<BinaryOperator>(
+            AtomicBinOp->getRHS()->IgnoreParenImpCasts())) {
+      if (AtomicInnerBinOp->isMultiplicativeOp() ||
+          AtomicInnerBinOp->isAdditiveOp() || AtomicInnerBinOp->isShiftOp() ||
+          AtomicInnerBinOp->isBitwiseOp()) {
+        Op = AtomicInnerBinOp->getOpcode();
+        OpLoc = AtomicInnerBinOp->getOperatorLoc();
+        Expr *LHS = AtomicInnerBinOp->getLHS();
+        Expr *RHS = AtomicInnerBinOp->getRHS();
+        llvm::FoldingSetNodeID XId, LHSId, RHSId;
+        X->IgnoreParenImpCasts()->Profile(XId, SemaRef.getASTContext(),
+                                          /*Canonical=*/true);
+        LHS->IgnoreParenImpCasts()->Profile(LHSId, SemaRef.getASTContext(),
+                                            /*Canonical=*/true);
+        RHS->IgnoreParenImpCasts()->Profile(RHSId, SemaRef.getASTContext(),
+                                            /*Canonical=*/true);
+        if (XId == LHSId) {
+          E = RHS;
+          IsXLHSInRHSPart = true;
+        } else if (XId == RHSId) {
+          E = LHS;
+          IsXLHSInRHSPart = false;
+        } else {
+          ErrorLoc = AtomicInnerBinOp->getExprLoc();
+          ErrorRange = AtomicInnerBinOp->getSourceRange();
+          NoteLoc = X->getExprLoc();
+          NoteRange = X->getSourceRange();
+          ErrorFound = NotAnUpdateExpression;
+        }
+      } else {
+        ErrorLoc = AtomicInnerBinOp->getExprLoc();
+        ErrorRange = AtomicInnerBinOp->getSourceRange();
+        NoteLoc = AtomicInnerBinOp->getOperatorLoc();
+        NoteRange = SourceRange(NoteLoc, NoteLoc);
+        ErrorFound = NotABinaryOperator;
+      }
+    } else {
+      NoteLoc = ErrorLoc = AtomicBinOp->getRHS()->getExprLoc();
+      NoteRange = ErrorRange = AtomicBinOp->getRHS()->getSourceRange();
+      ErrorFound = NotABinaryExpression;
+    }
+  } else {
+    ErrorLoc = AtomicBinOp->getExprLoc();
+    ErrorRange = AtomicBinOp->getSourceRange();
+    NoteLoc = AtomicBinOp->getOperatorLoc();
+    NoteRange = SourceRange(NoteLoc, NoteLoc);
+    ErrorFound = NotAnAssignmentOp;
+  }
+  if (ErrorFound != NoError && DiagId != 0 && NoteId != 0) {
+    SemaRef.Diag(ErrorLoc, DiagId) << ErrorRange;
+    SemaRef.Diag(NoteLoc, NoteId) << ErrorFound << NoteRange;
+    return true;
+  }
+  if (SemaRef.CurContext->isDependentContext())
+    E = X = UpdateExpr = nullptr;
+  return ErrorFound != NoError;
+}
+
+bool OmpSsAtomicUpdateChecker::checkStatement(Stmt *S, unsigned DiagId,
+                                               unsigned NoteId) {
+  ExprAnalysisErrorCode ErrorFound = NoError;
+  SourceLocation ErrorLoc, NoteLoc;
+  SourceRange ErrorRange, NoteRange;
+  // Allowed constructs are:
+  //  x++;
+  //  x--;
+  //  ++x;
+  //  --x;
+  //  x binop= expr;
+  //  x = x binop expr;
+  //  x = expr binop x;
+  if (auto *AtomicBody = dyn_cast<Expr>(S)) {
+    AtomicBody = AtomicBody->IgnoreParenImpCasts();
+    if (AtomicBody->getType()->isScalarType() ||
+        AtomicBody->isInstantiationDependent()) {
+      if (const auto *AtomicCompAssignOp = dyn_cast<CompoundAssignOperator>(
+              AtomicBody->IgnoreParenImpCasts())) {
+        // Check for Compound Assignment Operation
+        Op = BinaryOperator::getOpForCompoundAssignment(
+            AtomicCompAssignOp->getOpcode());
+        OpLoc = AtomicCompAssignOp->getOperatorLoc();
+        E = AtomicCompAssignOp->getRHS();
+        X = AtomicCompAssignOp->getLHS()->IgnoreParens();
+        IsXLHSInRHSPart = true;
+      } else if (auto *AtomicBinOp = dyn_cast<BinaryOperator>(
+                     AtomicBody->IgnoreParenImpCasts())) {
+        // Check for Binary Operation
+        if (checkBinaryOperation(AtomicBinOp, DiagId, NoteId))
+          return true;
+      } else if (const auto *AtomicUnaryOp = dyn_cast<UnaryOperator>(
+                     AtomicBody->IgnoreParenImpCasts())) {
+        // Check for Unary Operation
+        if (AtomicUnaryOp->isIncrementDecrementOp()) {
+          IsPostfixUpdate = AtomicUnaryOp->isPostfix();
+          Op = AtomicUnaryOp->isIncrementOp() ? BO_Add : BO_Sub;
+          OpLoc = AtomicUnaryOp->getOperatorLoc();
+          X = AtomicUnaryOp->getSubExpr()->IgnoreParens();
+          E = SemaRef.ActOnIntegerConstant(OpLoc, /*uint64_t Val=*/1).get();
+          IsXLHSInRHSPart = true;
+        } else {
+          ErrorFound = NotAnUnaryIncDecExpression;
+          ErrorLoc = AtomicUnaryOp->getExprLoc();
+          ErrorRange = AtomicUnaryOp->getSourceRange();
+          NoteLoc = AtomicUnaryOp->getOperatorLoc();
+          NoteRange = SourceRange(NoteLoc, NoteLoc);
+        }
+      } else if (!AtomicBody->isInstantiationDependent()) {
+        ErrorFound = NotABinaryOrUnaryExpression;
+        NoteLoc = ErrorLoc = AtomicBody->getExprLoc();
+        NoteRange = ErrorRange = AtomicBody->getSourceRange();
+      }
+    } else {
+      ErrorFound = NotAScalarType;
+      NoteLoc = ErrorLoc = AtomicBody->getBeginLoc();
+      NoteRange = ErrorRange = SourceRange(NoteLoc, NoteLoc);
+    }
+  } else {
+    ErrorFound = NotAnExpression;
+    NoteLoc = ErrorLoc = S->getBeginLoc();
+    NoteRange = ErrorRange = SourceRange(NoteLoc, NoteLoc);
+  }
+  if (ErrorFound != NoError && DiagId != 0 && NoteId != 0) {
+    SemaRef.Diag(ErrorLoc, DiagId) << ErrorRange;
+    SemaRef.Diag(NoteLoc, NoteId) << ErrorFound << NoteRange;
+    return true;
+  }
+  if (SemaRef.CurContext->isDependentContext())
+    E = X = UpdateExpr = nullptr;
+  if (ErrorFound == NoError && E && X) {
+    // Build an update expression of form 'OpaqueValueExpr(x) binop
+    // OpaqueValueExpr(expr)' or 'OpaqueValueExpr(expr) binop
+    // OpaqueValueExpr(x)' and then cast it to the type of the 'x' expression.
+    auto *OVEX = new (SemaRef.getASTContext())
+        OpaqueValueExpr(X->getExprLoc(), X->getType(), VK_PRValue);
+    auto *OVEExpr = new (SemaRef.getASTContext())
+        OpaqueValueExpr(E->getExprLoc(), E->getType(), VK_PRValue);
+    ExprResult Update =
+        SemaRef.CreateBuiltinBinOp(OpLoc, Op, IsXLHSInRHSPart ? OVEX : OVEExpr,
+                                   IsXLHSInRHSPart ? OVEExpr : OVEX);
+    if (Update.isInvalid())
+      return true;
+    Update = SemaRef.PerformImplicitConversion(Update.get(), X->getType(),
+                                               Sema::AA_Casting);
+    if (Update.isInvalid())
+      return true;
+    UpdateExpr = Update.get();
+  }
+  return ErrorFound != NoError;
+}
+
+/// Get the node id of the fixed point of an expression \a S.
+llvm::FoldingSetNodeID getNodeId(ASTContext &Context, const Expr *S) {
+  llvm::FoldingSetNodeID Id;
+  S->IgnoreParenImpCasts()->Profile(Id, Context, true);
+  return Id;
+}
+
+/// Check if two expressions are same.
+bool checkIfTwoExprsAreSame(ASTContext &Context, const Expr *LHS,
+                            const Expr *RHS) {
+  return getNodeId(Context, LHS) == getNodeId(Context, RHS);
+}
+
+class OmpSsAtomicCompareChecker {
+public:
+  /// All kinds of errors that can occur in `atomic compare`
+  enum ErrorTy {
+    /// Empty compound statement.
+    NoStmt = 0,
+    /// More than one statement in a compound statement.
+    MoreThanOneStmt,
+    /// Not an assignment binary operator.
+    NotAnAssignment,
+    /// Not a conditional operator.
+    NotCondOp,
+    /// Wrong false expr. According to the spec, 'x' should be at the false
+    /// expression of a conditional expression.
+    WrongFalseExpr,
+    /// The condition of a conditional expression is not a binary operator.
+    NotABinaryOp,
+    /// Invalid binary operator (not <, >, or ==).
+    InvalidBinaryOp,
+    /// Invalid comparison (not x == e, e == x, x ordop expr, or expr ordop x).
+    InvalidComparison,
+    /// X is not a lvalue.
+    XNotLValue,
+    /// Not a scalar.
+    NotScalar,
+    /// Not an integer.
+    NotInteger,
+    /// 'else' statement is not expected.
+    UnexpectedElse,
+    /// Not an equality operator.
+    NotEQ,
+    /// Invalid assignment (not v == x).
+    InvalidAssignment,
+    /// Not if statement
+    NotIfStmt,
+    /// More than two statements in a compund statement.
+    MoreThanTwoStmts,
+    /// Not a compound statement.
+    NotCompoundStmt,
+    /// No else statement.
+    NoElse,
+    /// Not 'if (r)'.
+    InvalidCondition,
+    /// No error.
+    NoError,
+  };
+
+  struct ErrorInfoTy {
+    ErrorTy Error;
+    SourceLocation ErrorLoc;
+    SourceRange ErrorRange;
+    SourceLocation NoteLoc;
+    SourceRange NoteRange;
+  };
+
+  OmpSsAtomicCompareChecker(Sema &S) : ContextRef(S.getASTContext()) {}
+
+  /// Check if statement \a S is valid for <tt>atomic compare</tt>.
+  bool checkStmt(Stmt *S, ErrorInfoTy &ErrorInfo);
+
+  Expr *getX() const { return X; }
+  Expr *getE() const { return E; }
+  Expr *getD() const { return D; }
+  Expr *getCond() const { return C; }
+  bool isXBinopExpr() const { return IsXBinopExpr; }
+
+protected:
+  /// Reference to ASTContext
+  ASTContext &ContextRef;
+  /// 'x' lvalue part of the source atomic expression.
+  Expr *X = nullptr;
+  /// 'expr' or 'e' rvalue part of the source atomic expression.
+  Expr *E = nullptr;
+  /// 'd' rvalue part of the source atomic expression.
+  Expr *D = nullptr;
+  /// 'cond' part of the source atomic expression. It is in one of the following
+  /// forms:
+  /// expr ordop x
+  /// x ordop expr
+  /// x == e
+  /// e == x
+  Expr *C = nullptr;
+  /// True if the cond expr is in the form of 'x ordop expr'.
+  bool IsXBinopExpr = true;
+
+  /// Check if it is a valid conditional update statement (cond-update-stmt).
+  bool checkCondUpdateStmt(IfStmt *S, ErrorInfoTy &ErrorInfo);
+
+  /// Check if it is a valid conditional expression statement (cond-expr-stmt).
+  bool checkCondExprStmt(Stmt *S, ErrorInfoTy &ErrorInfo);
+
+  /// Check if all captured values have right type.
+  bool checkType(ErrorInfoTy &ErrorInfo) const;
+
+  static bool CheckValue(const Expr *E, ErrorInfoTy &ErrorInfo,
+                         bool ShouldBeLValue, bool ShouldBeInteger = false) {
+    if (E->isInstantiationDependent())
+      return true;
+
+    if (ShouldBeLValue && !E->isLValue()) {
+      ErrorInfo.Error = ErrorTy::XNotLValue;
+      ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = E->getExprLoc();
+      ErrorInfo.ErrorRange = ErrorInfo.NoteRange = E->getSourceRange();
+      return false;
+    }
+
+    QualType QTy = E->getType();
+    if (!QTy->isScalarType()) {
+      ErrorInfo.Error = ErrorTy::NotScalar;
+      ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = E->getExprLoc();
+      ErrorInfo.ErrorRange = ErrorInfo.NoteRange = E->getSourceRange();
+      return false;
+    }
+    if (ShouldBeInteger && !QTy->isIntegerType()) {
+      ErrorInfo.Error = ErrorTy::NotInteger;
+      ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = E->getExprLoc();
+      ErrorInfo.ErrorRange = ErrorInfo.NoteRange = E->getSourceRange();
+      return false;
+    }
+
+    return true;
+  }
+  };
+
+bool OmpSsAtomicCompareChecker::checkCondUpdateStmt(IfStmt *S,
+                                                     ErrorInfoTy &ErrorInfo) {
+  auto *Then = S->getThen();
+  if (auto *CS = dyn_cast<CompoundStmt>(Then)) {
+    if (CS->body_empty()) {
+      ErrorInfo.Error = ErrorTy::NoStmt;
+      ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = CS->getBeginLoc();
+      ErrorInfo.ErrorRange = ErrorInfo.NoteRange = CS->getSourceRange();
+      return false;
+    }
+    if (CS->size() > 1) {
+      ErrorInfo.Error = ErrorTy::MoreThanOneStmt;
+      ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = CS->getBeginLoc();
+      ErrorInfo.ErrorRange = ErrorInfo.NoteRange = S->getSourceRange();
+      return false;
+    }
+    Then = CS->body_front();
+  }
+
+  auto *BO = dyn_cast<BinaryOperator>(Then);
+  if (!BO) {
+    ErrorInfo.Error = ErrorTy::NotAnAssignment;
+    ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = Then->getBeginLoc();
+    ErrorInfo.ErrorRange = ErrorInfo.NoteRange = Then->getSourceRange();
+    return false;
+  }
+  if (BO->getOpcode() != BO_Assign) {
+    ErrorInfo.Error = ErrorTy::NotAnAssignment;
+    ErrorInfo.ErrorLoc = BO->getExprLoc();
+    ErrorInfo.NoteLoc = BO->getOperatorLoc();
+    ErrorInfo.ErrorRange = ErrorInfo.NoteRange = BO->getSourceRange();
+    return false;
+  }
+
+  X = BO->getLHS();
+
+  auto *Cond = dyn_cast<BinaryOperator>(S->getCond());
+  if (!Cond) {
+    ErrorInfo.Error = ErrorTy::NotABinaryOp;
+    ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = S->getCond()->getExprLoc();
+    ErrorInfo.ErrorRange = ErrorInfo.NoteRange = S->getCond()->getSourceRange();
+    return false;
+  }
+
+  switch (Cond->getOpcode()) {
+  case BO_EQ: {
+    C = Cond;
+    D = BO->getRHS();
+    if (checkIfTwoExprsAreSame(ContextRef, X, Cond->getLHS())) {
+      E = Cond->getRHS();
+    } else if (checkIfTwoExprsAreSame(ContextRef, X, Cond->getRHS())) {
+      E = Cond->getLHS();
+    } else {
+      ErrorInfo.Error = ErrorTy::InvalidComparison;
+      ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = Cond->getExprLoc();
+      ErrorInfo.ErrorRange = ErrorInfo.NoteRange = Cond->getSourceRange();
+      return false;
+    }
+    break;
+  }
+  case BO_LT:
+  case BO_GT: {
+    E = BO->getRHS();
+    if (checkIfTwoExprsAreSame(ContextRef, X, Cond->getLHS()) &&
+        checkIfTwoExprsAreSame(ContextRef, E, Cond->getRHS())) {
+      C = Cond;
+    } else if (checkIfTwoExprsAreSame(ContextRef, E, Cond->getLHS()) &&
+               checkIfTwoExprsAreSame(ContextRef, X, Cond->getRHS())) {
+      C = Cond;
+      IsXBinopExpr = false;
+    } else {
+      ErrorInfo.Error = ErrorTy::InvalidComparison;
+      ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = Cond->getExprLoc();
+      ErrorInfo.ErrorRange = ErrorInfo.NoteRange = Cond->getSourceRange();
+      return false;
+    }
+    break;
+  }
+  default:
+    ErrorInfo.Error = ErrorTy::InvalidBinaryOp;
+    ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = Cond->getExprLoc();
+    ErrorInfo.ErrorRange = ErrorInfo.NoteRange = Cond->getSourceRange();
+    return false;
+  }
+
+  if (S->getElse()) {
+    ErrorInfo.Error = ErrorTy::UnexpectedElse;
+    ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = S->getElse()->getBeginLoc();
+    ErrorInfo.ErrorRange = ErrorInfo.NoteRange = S->getElse()->getSourceRange();
+    return false;
+  }
+
+  return true;
+}
+
+bool OmpSsAtomicCompareChecker::checkCondExprStmt(Stmt *S,
+                                                   ErrorInfoTy &ErrorInfo) {
+  auto *BO = dyn_cast<BinaryOperator>(S);
+  if (!BO) {
+    ErrorInfo.Error = ErrorTy::NotAnAssignment;
+    ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = S->getBeginLoc();
+    ErrorInfo.ErrorRange = ErrorInfo.NoteRange = S->getSourceRange();
+    return false;
+  }
+  if (BO->getOpcode() != BO_Assign) {
+    ErrorInfo.Error = ErrorTy::NotAnAssignment;
+    ErrorInfo.ErrorLoc = BO->getExprLoc();
+    ErrorInfo.NoteLoc = BO->getOperatorLoc();
+    ErrorInfo.ErrorRange = ErrorInfo.NoteRange = BO->getSourceRange();
+    return false;
+  }
+
+  X = BO->getLHS();
+
+  auto *CO = dyn_cast<ConditionalOperator>(BO->getRHS()->IgnoreParenImpCasts());
+  if (!CO) {
+    ErrorInfo.Error = ErrorTy::NotCondOp;
+    ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = BO->getRHS()->getExprLoc();
+    ErrorInfo.ErrorRange = ErrorInfo.NoteRange = BO->getRHS()->getSourceRange();
+    return false;
+  }
+
+  if (!checkIfTwoExprsAreSame(ContextRef, X, CO->getFalseExpr())) {
+    ErrorInfo.Error = ErrorTy::WrongFalseExpr;
+    ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = CO->getFalseExpr()->getExprLoc();
+    ErrorInfo.ErrorRange = ErrorInfo.NoteRange =
+        CO->getFalseExpr()->getSourceRange();
+    return false;
+  }
+
+  auto *Cond = dyn_cast<BinaryOperator>(CO->getCond());
+  if (!Cond) {
+    ErrorInfo.Error = ErrorTy::NotABinaryOp;
+    ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = CO->getCond()->getExprLoc();
+    ErrorInfo.ErrorRange = ErrorInfo.NoteRange =
+        CO->getCond()->getSourceRange();
+    return false;
+  }
+
+  switch (Cond->getOpcode()) {
+  case BO_EQ: {
+    C = Cond;
+    D = CO->getTrueExpr();
+    if (checkIfTwoExprsAreSame(ContextRef, X, Cond->getLHS())) {
+      E = Cond->getRHS();
+    } else if (checkIfTwoExprsAreSame(ContextRef, X, Cond->getRHS())) {
+      E = Cond->getLHS();
+    } else {
+      ErrorInfo.Error = ErrorTy::InvalidComparison;
+      ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = Cond->getExprLoc();
+      ErrorInfo.ErrorRange = ErrorInfo.NoteRange = Cond->getSourceRange();
+      return false;
+    }
+    break;
+  }
+  case BO_LT:
+  case BO_GT: {
+    E = CO->getTrueExpr();
+    if (checkIfTwoExprsAreSame(ContextRef, X, Cond->getLHS()) &&
+        checkIfTwoExprsAreSame(ContextRef, E, Cond->getRHS())) {
+      C = Cond;
+    } else if (checkIfTwoExprsAreSame(ContextRef, E, Cond->getLHS()) &&
+               checkIfTwoExprsAreSame(ContextRef, X, Cond->getRHS())) {
+      C = Cond;
+      IsXBinopExpr = false;
+    } else {
+      ErrorInfo.Error = ErrorTy::InvalidComparison;
+      ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = Cond->getExprLoc();
+      ErrorInfo.ErrorRange = ErrorInfo.NoteRange = Cond->getSourceRange();
+      return false;
+    }
+    break;
+  }
+  default:
+    ErrorInfo.Error = ErrorTy::InvalidBinaryOp;
+    ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = Cond->getExprLoc();
+    ErrorInfo.ErrorRange = ErrorInfo.NoteRange = Cond->getSourceRange();
+    return false;
+  }
+
+  return true;
+}
+
+bool OmpSsAtomicCompareChecker::checkType(ErrorInfoTy &ErrorInfo) const {
+  // 'x' and 'e' cannot be nullptr
+  assert(X && E && "X and E cannot be nullptr");
+
+  if (!CheckValue(X, ErrorInfo, true))
+    return false;
+
+  if (!CheckValue(E, ErrorInfo, false))
+    return false;
+
+  if (D && !CheckValue(D, ErrorInfo, false))
+    return false;
+
+  return true;
+}
+
+bool OmpSsAtomicCompareChecker::checkStmt(
+    Stmt *S, OmpSsAtomicCompareChecker::ErrorInfoTy &ErrorInfo) {
+  auto *CS = dyn_cast<CompoundStmt>(S);
+  if (CS) {
+    if (CS->body_empty()) {
+      ErrorInfo.Error = ErrorTy::NoStmt;
+      ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = CS->getBeginLoc();
+      ErrorInfo.ErrorRange = ErrorInfo.NoteRange = CS->getSourceRange();
+      return false;
+    }
+
+    if (CS->size() != 1) {
+      ErrorInfo.Error = ErrorTy::MoreThanOneStmt;
+      ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = CS->getBeginLoc();
+      ErrorInfo.ErrorRange = ErrorInfo.NoteRange = CS->getSourceRange();
+      return false;
+    }
+    S = CS->body_front();
+  }
+
+  auto Res = false;
+
+  if (auto *IS = dyn_cast<IfStmt>(S)) {
+    // Check if the statement is in one of the following forms
+    // (cond-update-stmt):
+    // if (expr ordop x) { x = expr; }
+    // if (x ordop expr) { x = expr; }
+    // if (x == e) { x = d; }
+    Res = checkCondUpdateStmt(IS, ErrorInfo);
+  } else {
+    // Check if the statement is in one of the following forms (cond-expr-stmt):
+    // x = expr ordop x ? expr : x;
+    // x = x ordop expr ? expr : x;
+    // x = x == e ? d : x;
+    Res = checkCondExprStmt(S, ErrorInfo);
+  }
+
+  if (!Res)
+    return false;
+
+  return checkType(ErrorInfo);
+}
+
+class OmpSsAtomicCompareCaptureChecker final
+    : public OmpSsAtomicCompareChecker {
+public:
+  OmpSsAtomicCompareCaptureChecker(Sema &S) : OmpSsAtomicCompareChecker(S) {}
+
+  Expr *getV() const { return V; }
+  Expr *getR() const { return R; }
+  bool isFailOnly() const { return IsFailOnly; }
+  bool isPostfixUpdate() const { return IsPostfixUpdate; }
+
+  /// Check if statement \a S is valid for <tt>atomic compare capture</tt>.
+  bool checkStmt(Stmt *S, ErrorInfoTy &ErrorInfo);
+
+private:
+  bool checkType(ErrorInfoTy &ErrorInfo);
+
+  // NOTE: Form 3, 4, 5 in the following comments mean the 3rd, 4th, and 5th
+  // form of 'conditional-update-capture-atomic' structured block on the v5.2
+  // spec p.p. 82:
+  // (1) { v = x; cond-update-stmt }
+  // (2) { cond-update-stmt v = x; }
+  // (3) if(x == e) { x = d; } else { v = x; }
+  // (4) { r = x == e; if(r) { x = d; } }
+  // (5) { r = x == e; if(r) { x = d; } else { v = x; } }
+
+  /// Check if it is valid 'if(x == e) { x = d; } else { v = x; }' (form 3)
+  bool checkForm3(IfStmt *S, ErrorInfoTy &ErrorInfo);
+
+  /// Check if it is valid '{ r = x == e; if(r) { x = d; } }',
+  /// or '{ r = x == e; if(r) { x = d; } else { v = x; } }' (form 4 and 5)
+  bool checkForm45(Stmt *S, ErrorInfoTy &ErrorInfo);
+
+  /// 'v' lvalue part of the source atomic expression.
+  Expr *V = nullptr;
+  /// 'r' lvalue part of the source atomic expression.
+  Expr *R = nullptr;
+  /// If 'v' is only updated when the comparison fails.
+  bool IsFailOnly = false;
+  /// If original value of 'x' must be stored in 'v', not an updated one.
+  bool IsPostfixUpdate = false;
+};
+
+bool OmpSsAtomicCompareCaptureChecker::checkType(ErrorInfoTy &ErrorInfo) {
+  if (!OmpSsAtomicCompareChecker::checkType(ErrorInfo))
+    return false;
+
+  if (V && !CheckValue(V, ErrorInfo, true))
+    return false;
+
+  if (R && !CheckValue(R, ErrorInfo, true, true))
+    return false;
+
+  return true;
+}
+
+bool OmpSsAtomicCompareCaptureChecker::checkForm3(IfStmt *S,
+                                                   ErrorInfoTy &ErrorInfo) {
+  IsFailOnly = true;
+
+  auto *Then = S->getThen();
+  if (auto *CS = dyn_cast<CompoundStmt>(Then)) {
+    if (CS->body_empty()) {
+      ErrorInfo.Error = ErrorTy::NoStmt;
+      ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = CS->getBeginLoc();
+      ErrorInfo.ErrorRange = ErrorInfo.NoteRange = CS->getSourceRange();
+      return false;
+    }
+    if (CS->size() > 1) {
+      ErrorInfo.Error = ErrorTy::MoreThanOneStmt;
+      ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = CS->getBeginLoc();
+      ErrorInfo.ErrorRange = ErrorInfo.NoteRange = CS->getSourceRange();
+      return false;
+    }
+    Then = CS->body_front();
+  }
+
+  auto *BO = dyn_cast<BinaryOperator>(Then);
+  if (!BO) {
+    ErrorInfo.Error = ErrorTy::NotAnAssignment;
+    ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = Then->getBeginLoc();
+    ErrorInfo.ErrorRange = ErrorInfo.NoteRange = Then->getSourceRange();
+    return false;
+  }
+  if (BO->getOpcode() != BO_Assign) {
+    ErrorInfo.Error = ErrorTy::NotAnAssignment;
+    ErrorInfo.ErrorLoc = BO->getExprLoc();
+    ErrorInfo.NoteLoc = BO->getOperatorLoc();
+    ErrorInfo.ErrorRange = ErrorInfo.NoteRange = BO->getSourceRange();
+    return false;
+  }
+
+  X = BO->getLHS();
+  D = BO->getRHS();
+
+  auto *Cond = dyn_cast<BinaryOperator>(S->getCond());
+  if (!Cond) {
+    ErrorInfo.Error = ErrorTy::NotABinaryOp;
+    ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = S->getCond()->getExprLoc();
+    ErrorInfo.ErrorRange = ErrorInfo.NoteRange = S->getCond()->getSourceRange();
+    return false;
+  }
+  if (Cond->getOpcode() != BO_EQ) {
+    ErrorInfo.Error = ErrorTy::NotEQ;
+    ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = Cond->getExprLoc();
+    ErrorInfo.ErrorRange = ErrorInfo.NoteRange = Cond->getSourceRange();
+    return false;
+  }
+
+  if (checkIfTwoExprsAreSame(ContextRef, X, Cond->getLHS())) {
+    E = Cond->getRHS();
+  } else if (checkIfTwoExprsAreSame(ContextRef, X, Cond->getRHS())) {
+    E = Cond->getLHS();
+  } else {
+    ErrorInfo.Error = ErrorTy::InvalidComparison;
+    ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = Cond->getExprLoc();
+    ErrorInfo.ErrorRange = ErrorInfo.NoteRange = Cond->getSourceRange();
+    return false;
+  }
+
+  C = Cond;
+
+  if (!S->getElse()) {
+    ErrorInfo.Error = ErrorTy::NoElse;
+    ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = S->getBeginLoc();
+    ErrorInfo.ErrorRange = ErrorInfo.NoteRange = S->getSourceRange();
+    return false;
+  }
+
+  auto *Else = S->getElse();
+  if (auto *CS = dyn_cast<CompoundStmt>(Else)) {
+    if (CS->body_empty()) {
+      ErrorInfo.Error = ErrorTy::NoStmt;
+      ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = CS->getBeginLoc();
+      ErrorInfo.ErrorRange = ErrorInfo.NoteRange = CS->getSourceRange();
+      return false;
+    }
+    if (CS->size() > 1) {
+      ErrorInfo.Error = ErrorTy::MoreThanOneStmt;
+      ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = CS->getBeginLoc();
+      ErrorInfo.ErrorRange = ErrorInfo.NoteRange = S->getSourceRange();
+      return false;
+    }
+    Else = CS->body_front();
+  }
+
+  auto *ElseBO = dyn_cast<BinaryOperator>(Else);
+  if (!ElseBO) {
+    ErrorInfo.Error = ErrorTy::NotAnAssignment;
+    ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = Else->getBeginLoc();
+    ErrorInfo.ErrorRange = ErrorInfo.NoteRange = Else->getSourceRange();
+    return false;
+  }
+  if (ElseBO->getOpcode() != BO_Assign) {
+    ErrorInfo.Error = ErrorTy::NotAnAssignment;
+    ErrorInfo.ErrorLoc = ElseBO->getExprLoc();
+    ErrorInfo.NoteLoc = ElseBO->getOperatorLoc();
+    ErrorInfo.ErrorRange = ErrorInfo.NoteRange = ElseBO->getSourceRange();
+    return false;
+  }
+
+  if (!checkIfTwoExprsAreSame(ContextRef, X, ElseBO->getRHS())) {
+    ErrorInfo.Error = ErrorTy::InvalidAssignment;
+    ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = ElseBO->getRHS()->getExprLoc();
+    ErrorInfo.ErrorRange = ErrorInfo.NoteRange =
+        ElseBO->getRHS()->getSourceRange();
+    return false;
+  }
+
+  V = ElseBO->getLHS();
+
+  return checkType(ErrorInfo);
+}
+
+bool OmpSsAtomicCompareCaptureChecker::checkForm45(Stmt *S,
+                                                    ErrorInfoTy &ErrorInfo) {
+  // We don't check here as they should be already done before call this
+  // function.
+  auto *CS = cast<CompoundStmt>(S);
+  assert(CS->size() == 2 && "CompoundStmt size is not expected");
+  auto *S1 = cast<BinaryOperator>(CS->body_front());
+  auto *S2 = cast<IfStmt>(CS->body_back());
+  assert(S1->getOpcode() == BO_Assign && "unexpected binary operator");
+
+  if (!checkIfTwoExprsAreSame(ContextRef, S1->getLHS(), S2->getCond())) {
+    ErrorInfo.Error = ErrorTy::InvalidCondition;
+    ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = S2->getCond()->getExprLoc();
+    ErrorInfo.ErrorRange = ErrorInfo.NoteRange = S1->getLHS()->getSourceRange();
+    return false;
+  }
+
+  R = S1->getLHS();
+
+  auto *Then = S2->getThen();
+  if (auto *ThenCS = dyn_cast<CompoundStmt>(Then)) {
+    if (ThenCS->body_empty()) {
+      ErrorInfo.Error = ErrorTy::NoStmt;
+      ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = ThenCS->getBeginLoc();
+      ErrorInfo.ErrorRange = ErrorInfo.NoteRange = ThenCS->getSourceRange();
+      return false;
+    }
+    if (ThenCS->size() > 1) {
+      ErrorInfo.Error = ErrorTy::MoreThanOneStmt;
+      ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = ThenCS->getBeginLoc();
+      ErrorInfo.ErrorRange = ErrorInfo.NoteRange = ThenCS->getSourceRange();
+      return false;
+    }
+    Then = ThenCS->body_front();
+  }
+
+  auto *ThenBO = dyn_cast<BinaryOperator>(Then);
+  if (!ThenBO) {
+    ErrorInfo.Error = ErrorTy::NotAnAssignment;
+    ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = S2->getBeginLoc();
+    ErrorInfo.ErrorRange = ErrorInfo.NoteRange = S2->getSourceRange();
+    return false;
+  }
+  if (ThenBO->getOpcode() != BO_Assign) {
+    ErrorInfo.Error = ErrorTy::NotAnAssignment;
+    ErrorInfo.ErrorLoc = ThenBO->getExprLoc();
+    ErrorInfo.NoteLoc = ThenBO->getOperatorLoc();
+    ErrorInfo.ErrorRange = ErrorInfo.NoteRange = ThenBO->getSourceRange();
+    return false;
+  }
+
+  X = ThenBO->getLHS();
+  D = ThenBO->getRHS();
+
+  auto *BO = cast<BinaryOperator>(S1->getRHS()->IgnoreImpCasts());
+  if (BO->getOpcode() != BO_EQ) {
+    ErrorInfo.Error = ErrorTy::NotEQ;
+    ErrorInfo.ErrorLoc = BO->getExprLoc();
+    ErrorInfo.NoteLoc = BO->getOperatorLoc();
+    ErrorInfo.ErrorRange = ErrorInfo.NoteRange = BO->getSourceRange();
+    return false;
+  }
+
+  C = BO;
+
+  if (checkIfTwoExprsAreSame(ContextRef, X, BO->getLHS())) {
+    E = BO->getRHS();
+  } else if (checkIfTwoExprsAreSame(ContextRef, X, BO->getRHS())) {
+    E = BO->getLHS();
+  } else {
+    ErrorInfo.Error = ErrorTy::InvalidComparison;
+    ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = BO->getExprLoc();
+    ErrorInfo.ErrorRange = ErrorInfo.NoteRange = BO->getSourceRange();
+    return false;
+  }
+
+  if (S2->getElse()) {
+    IsFailOnly = true;
+
+    auto *Else = S2->getElse();
+    if (auto *ElseCS = dyn_cast<CompoundStmt>(Else)) {
+      if (ElseCS->body_empty()) {
+        ErrorInfo.Error = ErrorTy::NoStmt;
+        ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = ElseCS->getBeginLoc();
+        ErrorInfo.ErrorRange = ErrorInfo.NoteRange = ElseCS->getSourceRange();
+        return false;
+      }
+      if (ElseCS->size() > 1) {
+        ErrorInfo.Error = ErrorTy::MoreThanOneStmt;
+        ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = ElseCS->getBeginLoc();
+        ErrorInfo.ErrorRange = ErrorInfo.NoteRange = ElseCS->getSourceRange();
+        return false;
+      }
+      Else = ElseCS->body_front();
+    }
+
+    auto *ElseBO = dyn_cast<BinaryOperator>(Else);
+    if (!ElseBO) {
+      ErrorInfo.Error = ErrorTy::NotAnAssignment;
+      ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = Else->getBeginLoc();
+      ErrorInfo.ErrorRange = ErrorInfo.NoteRange = Else->getSourceRange();
+      return false;
+    }
+    if (ElseBO->getOpcode() != BO_Assign) {
+      ErrorInfo.Error = ErrorTy::NotAnAssignment;
+      ErrorInfo.ErrorLoc = ElseBO->getExprLoc();
+      ErrorInfo.NoteLoc = ElseBO->getOperatorLoc();
+      ErrorInfo.ErrorRange = ErrorInfo.NoteRange = ElseBO->getSourceRange();
+      return false;
+    }
+    if (!checkIfTwoExprsAreSame(ContextRef, X, ElseBO->getRHS())) {
+      ErrorInfo.Error = ErrorTy::InvalidAssignment;
+      ErrorInfo.ErrorLoc = ElseBO->getRHS()->getExprLoc();
+      ErrorInfo.NoteLoc = X->getExprLoc();
+      ErrorInfo.ErrorRange = ElseBO->getRHS()->getSourceRange();
+      ErrorInfo.NoteRange = X->getSourceRange();
+      return false;
+    }
+
+    V = ElseBO->getLHS();
+  }
+
+  return checkType(ErrorInfo);
+}
+
+bool OmpSsAtomicCompareCaptureChecker::checkStmt(Stmt *S,
+                                                  ErrorInfoTy &ErrorInfo) {
+  // if(x == e) { x = d; } else { v = x; }
+  if (auto *IS = dyn_cast<IfStmt>(S))
+    return checkForm3(IS, ErrorInfo);
+
+  auto *CS = dyn_cast<CompoundStmt>(S);
+  if (!CS) {
+    ErrorInfo.Error = ErrorTy::NotCompoundStmt;
+    ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = S->getBeginLoc();
+    ErrorInfo.ErrorRange = ErrorInfo.NoteRange = S->getSourceRange();
+    return false;
+  }
+  if (CS->body_empty()) {
+    ErrorInfo.Error = ErrorTy::NoStmt;
+    ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = CS->getBeginLoc();
+    ErrorInfo.ErrorRange = ErrorInfo.NoteRange = CS->getSourceRange();
+    return false;
+  }
+
+  // { if(x == e) { x = d; } else { v = x; } }
+  if (CS->size() == 1) {
+    auto *IS = dyn_cast<IfStmt>(CS->body_front());
+    if (!IS) {
+      ErrorInfo.Error = ErrorTy::NotIfStmt;
+      ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = CS->body_front()->getBeginLoc();
+      ErrorInfo.ErrorRange = ErrorInfo.NoteRange =
+          CS->body_front()->getSourceRange();
+      return false;
+    }
+
+    return checkForm3(IS, ErrorInfo);
+  } else if (CS->size() == 2) {
+    auto *S1 = CS->body_front();
+    auto *S2 = CS->body_back();
+
+    Stmt *UpdateStmt = nullptr;
+    Stmt *CondUpdateStmt = nullptr;
+    Stmt *CondExprStmt = nullptr;
+
+    if (auto *BO = dyn_cast<BinaryOperator>(S1)) {
+      // It could be one of the following cases:
+      // { v = x; cond-update-stmt }
+      // { v = x; cond-expr-stmt }
+      // { cond-expr-stmt; v = x; }
+      // form 45
+      if (isa<BinaryOperator>(BO->getRHS()->IgnoreImpCasts()) ||
+          isa<ConditionalOperator>(BO->getRHS()->IgnoreImpCasts())) {
+        // check if form 45
+        if (isa<IfStmt>(S2))
+          return checkForm45(CS, ErrorInfo);
+        // { cond-expr-stmt; v = x; }
+        CondExprStmt = S1;
+        UpdateStmt = S2;
+      } else {
+        IsPostfixUpdate = true;
+        UpdateStmt = S1;
+        if (isa<IfStmt>(S2)) {
+          // { v = x; cond-update-stmt }
+          CondUpdateStmt = S2;
+        } else {
+          // { v = x; cond-expr-stmt }
+          CondExprStmt = S2;
+        }
+      }
+    } else {
+      // { cond-update-stmt v = x; }
+      UpdateStmt = S2;
+      CondUpdateStmt = S1;
+    }
+
+    auto CheckCondUpdateStmt = [this, &ErrorInfo](Stmt *CUS) {
+      auto *IS = dyn_cast<IfStmt>(CUS);
+      if (!IS) {
+        ErrorInfo.Error = ErrorTy::NotIfStmt;
+        ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = CUS->getBeginLoc();
+        ErrorInfo.ErrorRange = ErrorInfo.NoteRange = CUS->getSourceRange();
+        return false;
+      }
+
+      return checkCondUpdateStmt(IS, ErrorInfo);
+    };
+
+    // CheckUpdateStmt has to be called *after* CheckCondUpdateStmt.
+    auto CheckUpdateStmt = [this, &ErrorInfo](Stmt *US) {
+      auto *BO = dyn_cast<BinaryOperator>(US);
+      if (!BO) {
+        ErrorInfo.Error = ErrorTy::NotAnAssignment;
+        ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = US->getBeginLoc();
+        ErrorInfo.ErrorRange = ErrorInfo.NoteRange = US->getSourceRange();
+        return false;
+      }
+      if (BO->getOpcode() != BO_Assign) {
+        ErrorInfo.Error = ErrorTy::NotAnAssignment;
+        ErrorInfo.ErrorLoc = BO->getExprLoc();
+        ErrorInfo.NoteLoc = BO->getOperatorLoc();
+        ErrorInfo.ErrorRange = ErrorInfo.NoteRange = BO->getSourceRange();
+        return false;
+      }
+      if (!checkIfTwoExprsAreSame(ContextRef, this->X, BO->getRHS())) {
+        ErrorInfo.Error = ErrorTy::InvalidAssignment;
+        ErrorInfo.ErrorLoc = BO->getRHS()->getExprLoc();
+        ErrorInfo.NoteLoc = this->X->getExprLoc();
+        ErrorInfo.ErrorRange = BO->getRHS()->getSourceRange();
+        ErrorInfo.NoteRange = this->X->getSourceRange();
+        return false;
+      }
+
+      this->V = BO->getLHS();
+
+      return true;
+    };
+
+    if (CondUpdateStmt && !CheckCondUpdateStmt(CondUpdateStmt))
+      return false;
+    if (CondExprStmt && !checkCondExprStmt(CondExprStmt, ErrorInfo))
+      return false;
+    if (!CheckUpdateStmt(UpdateStmt))
+      return false;
+  } else {
+    ErrorInfo.Error = ErrorTy::MoreThanTwoStmts;
+    ErrorInfo.ErrorLoc = ErrorInfo.NoteLoc = CS->getBeginLoc();
+    ErrorInfo.ErrorRange = ErrorInfo.NoteRange = CS->getSourceRange();
+    return false;
+  }
+
+  return checkType(ErrorInfo);
+}
+} // namespace
+
+StmtResult Sema::ActOnOmpSsAtomicDirective(ArrayRef<OSSClause *> Clauses,
+                                            Stmt *AStmt,
+                                            SourceLocation StartLoc,
+                                            SourceLocation EndLoc) {
+  if (!AStmt)
+    return StmtError();
+
+  // 1.2.2 OmpSs-2 Language Terminology
+  // Structured block - An executable statement with a single entry at the
+  // top and a single exit at the bottom.
+  // The point of exit cannot be a branch out of the structured block.
+  // longjmp() and throw() must not violate the entry/exit criteria.
+  OmpSsClauseKind AtomicKind = OSSC_unknown;
+  SourceLocation AtomicKindLoc;
+  OmpSsClauseKind MemOrderKind = OSSC_unknown;
+  SourceLocation MemOrderLoc;
+  bool MutexClauseEncountered = false;
+  llvm::SmallSet<OmpSsClauseKind, 2> EncounteredAtomicKinds;
+  for (const OSSClause *C : Clauses) {
+    switch (C->getClauseKind()) {
+    case OSSC_read:
+    case OSSC_write:
+    case OSSC_update:
+      MutexClauseEncountered = true;
+      [[fallthrough]];
+    case OSSC_capture:
+    case OSSC_compare: {
+      if (AtomicKind != OSSC_unknown && MutexClauseEncountered) {
+        Diag(C->getBeginLoc(), diag::err_oss_atomic_several_clauses)
+            << SourceRange(C->getBeginLoc(), C->getEndLoc());
+        Diag(AtomicKindLoc, diag::note_oss_previous_mem_order_clause)
+            << getOmpSsClauseName(AtomicKind);
+      } else {
+        AtomicKind = C->getClauseKind();
+        AtomicKindLoc = C->getBeginLoc();
+        if (!EncounteredAtomicKinds.insert(C->getClauseKind()).second) {
+          Diag(C->getBeginLoc(), diag::err_oss_atomic_several_clauses)
+              << SourceRange(C->getBeginLoc(), C->getEndLoc());
+          Diag(AtomicKindLoc, diag::note_oss_previous_mem_order_clause)
+              << getOmpSsClauseName(AtomicKind);
+        }
+      }
+      break;
+    }
+    case OSSC_seq_cst:
+    case OSSC_acq_rel:
+    case OSSC_acquire:
+    case OSSC_release:
+    case OSSC_relaxed: {
+      if (MemOrderKind != OSSC_unknown) {
+        Diag(C->getBeginLoc(), diag::err_oss_several_mem_order_clauses)
+            << getOmpSsDirectiveName(OSSD_atomic) << 0
+            << SourceRange(C->getBeginLoc(), C->getEndLoc());
+        Diag(MemOrderLoc, diag::note_oss_previous_mem_order_clause)
+            << getOmpSsClauseName(MemOrderKind);
+      } else {
+        MemOrderKind = C->getClauseKind();
+        MemOrderLoc = C->getBeginLoc();
+      }
+      break;
+    }
+    default:
+      llvm_unreachable("unknown clause is encountered");
+    }
+  }
+  bool IsCompareCapture = false;
+  if (EncounteredAtomicKinds.contains(OSSC_compare) &&
+      EncounteredAtomicKinds.contains(OSSC_capture)) {
+    IsCompareCapture = true;
+    AtomicKind = OSSC_compare;
+  }
+  // OmpSs-2, 2.17.7 atomic Construct, Restrictions
+  // If atomic-clause is read then memory-order-clause must not be acq_rel or
+  // release.
+  // If atomic-clause is write then memory-order-clause must not be acq_rel or
+  // acquire.
+  // If atomic-clause is update or not present then memory-order-clause must not
+  // be acq_rel or acquire.
+  if ((AtomicKind == OSSC_read &&
+       (MemOrderKind == OSSC_acq_rel || MemOrderKind == OSSC_release)) ||
+      ((AtomicKind == OSSC_write || AtomicKind == OSSC_update ||
+        AtomicKind == OSSC_unknown) &&
+       (MemOrderKind == OSSC_acq_rel || MemOrderKind == OSSC_acquire))) {
+    SourceLocation Loc = AtomicKindLoc;
+    if (AtomicKind == OSSC_unknown)
+      Loc = StartLoc;
+    Diag(Loc, diag::err_oss_atomic_incompatible_mem_order_clause)
+        << getOmpSsClauseName(AtomicKind)
+        << (AtomicKind == OSSC_unknown ? 1 : 0)
+        << getOmpSsClauseName(MemOrderKind);
+    Diag(MemOrderLoc, diag::note_oss_previous_mem_order_clause)
+        << getOmpSsClauseName(MemOrderKind);
+  }
+
+  Stmt *Body = AStmt;
+  if (auto *EWC = dyn_cast<ExprWithCleanups>(Body))
+    Body = EWC->getSubExpr();
+
+  Expr *X = nullptr;
+  Expr *V = nullptr;
+  Expr *E = nullptr;
+  Expr *UE = nullptr;
+  Expr *D = nullptr;
+  Expr *CE = nullptr;
+  Expr *R = nullptr;
+  bool IsXLHSInRHSPart = false;
+  bool IsPostfixUpdate = false;
+  bool IsFailOnly = false;
+  // OmpSs-2 [2.12.6, atomic Construct]
+  // In the next expressions:
+  // * x and v (as applicable) are both l-value expressions with scalar type.
+  // * During the execution of an atomic region, multiple syntactic
+  // occurrences of x must designate the same storage location.
+  // * Neither of v and expr (as applicable) may access the storage location
+  // designated by x.
+  // * Neither of x and expr (as applicable) may access the storage location
+  // designated by v.
+  // * expr is an expression with scalar type.
+  // * binop is one of +, *, -, /, &, ^, |, <<, or >>.
+  // * binop, binop=, ++, and -- are not overloaded operators.
+  // * The expression x binop expr must be numerically equivalent to x binop
+  // (expr). This requirement is satisfied if the operators in expr have
+  // precedence greater than binop, or by using parentheses around expr or
+  // subexpressions of expr.
+  // * The expression expr binop x must be numerically equivalent to (expr)
+  // binop x. This requirement is satisfied if the operators in expr have
+  // precedence equal to or greater than binop, or by using parentheses around
+  // expr or subexpressions of expr.
+  // * For forms that allow multiple occurrences of x, the number of times
+  // that x is evaluated is unspecified.
+  if (AtomicKind == OSSC_read) {
+    enum {
+      NotAnExpression,
+      NotAnAssignmentOp,
+      NotAScalarType,
+      NotAnLValue,
+      NoError
+    } ErrorFound = NoError;
+    SourceLocation ErrorLoc, NoteLoc;
+    SourceRange ErrorRange, NoteRange;
+    // If clause is read:
+    //  v = x;
+    if (const auto *AtomicBody = dyn_cast<Expr>(Body)) {
+      const auto *AtomicBinOp =
+          dyn_cast<BinaryOperator>(AtomicBody->IgnoreParenImpCasts());
+      if (AtomicBinOp && AtomicBinOp->getOpcode() == BO_Assign) {
+        X = AtomicBinOp->getRHS()->IgnoreParenImpCasts();
+        V = AtomicBinOp->getLHS()->IgnoreParenImpCasts();
+        if ((X->isInstantiationDependent() || X->getType()->isScalarType()) &&
+            (V->isInstantiationDependent() || V->getType()->isScalarType())) {
+          if (!X->isLValue() || !V->isLValue()) {
+            const Expr *NotLValueExpr = X->isLValue() ? V : X;
+            ErrorFound = NotAnLValue;
+            ErrorLoc = AtomicBinOp->getExprLoc();
+            ErrorRange = AtomicBinOp->getSourceRange();
+            NoteLoc = NotLValueExpr->getExprLoc();
+            NoteRange = NotLValueExpr->getSourceRange();
+          }
+        } else if (!X->isInstantiationDependent() ||
+                   !V->isInstantiationDependent()) {
+          const Expr *NotScalarExpr =
+              (X->isInstantiationDependent() || X->getType()->isScalarType())
+                  ? V
+                  : X;
+          ErrorFound = NotAScalarType;
+          ErrorLoc = AtomicBinOp->getExprLoc();
+          ErrorRange = AtomicBinOp->getSourceRange();
+          NoteLoc = NotScalarExpr->getExprLoc();
+          NoteRange = NotScalarExpr->getSourceRange();
+        }
+      } else if (!AtomicBody->isInstantiationDependent()) {
+        ErrorFound = NotAnAssignmentOp;
+        ErrorLoc = AtomicBody->getExprLoc();
+        ErrorRange = AtomicBody->getSourceRange();
+        NoteLoc = AtomicBinOp ? AtomicBinOp->getOperatorLoc()
+                              : AtomicBody->getExprLoc();
+        NoteRange = AtomicBinOp ? AtomicBinOp->getSourceRange()
+                                : AtomicBody->getSourceRange();
+      }
+    } else {
+      ErrorFound = NotAnExpression;
+      NoteLoc = ErrorLoc = Body->getBeginLoc();
+      NoteRange = ErrorRange = SourceRange(NoteLoc, NoteLoc);
+    }
+    if (ErrorFound != NoError) {
+      Diag(ErrorLoc, diag::err_oss_atomic_read_not_expression_statement)
+          << ErrorRange;
+      Diag(NoteLoc, diag::note_oss_atomic_read_write)
+          << ErrorFound << NoteRange;
+      return StmtError();
+    }
+    if (CurContext->isDependentContext())
+      V = X = nullptr;
+  } else if (AtomicKind == OSSC_write) {
+    enum {
+      NotAnExpression,
+      NotAnAssignmentOp,
+      NotAScalarType,
+      NotAnLValue,
+      NoError
+    } ErrorFound = NoError;
+    SourceLocation ErrorLoc, NoteLoc;
+    SourceRange ErrorRange, NoteRange;
+    // If clause is write:
+    //  x = expr;
+    if (const auto *AtomicBody = dyn_cast<Expr>(Body)) {
+      const auto *AtomicBinOp =
+          dyn_cast<BinaryOperator>(AtomicBody->IgnoreParenImpCasts());
+      if (AtomicBinOp && AtomicBinOp->getOpcode() == BO_Assign) {
+        X = AtomicBinOp->getLHS();
+        E = AtomicBinOp->getRHS();
+        if ((X->isInstantiationDependent() || X->getType()->isScalarType()) &&
+            (E->isInstantiationDependent() || E->getType()->isScalarType())) {
+          if (!X->isLValue()) {
+            ErrorFound = NotAnLValue;
+            ErrorLoc = AtomicBinOp->getExprLoc();
+            ErrorRange = AtomicBinOp->getSourceRange();
+            NoteLoc = X->getExprLoc();
+            NoteRange = X->getSourceRange();
+          }
+        } else if (!X->isInstantiationDependent() ||
+                   !E->isInstantiationDependent()) {
+          const Expr *NotScalarExpr =
+              (X->isInstantiationDependent() || X->getType()->isScalarType())
+                  ? E
+                  : X;
+          ErrorFound = NotAScalarType;
+          ErrorLoc = AtomicBinOp->getExprLoc();
+          ErrorRange = AtomicBinOp->getSourceRange();
+          NoteLoc = NotScalarExpr->getExprLoc();
+          NoteRange = NotScalarExpr->getSourceRange();
+        }
+      } else if (!AtomicBody->isInstantiationDependent()) {
+        ErrorFound = NotAnAssignmentOp;
+        ErrorLoc = AtomicBody->getExprLoc();
+        ErrorRange = AtomicBody->getSourceRange();
+        NoteLoc = AtomicBinOp ? AtomicBinOp->getOperatorLoc()
+                              : AtomicBody->getExprLoc();
+        NoteRange = AtomicBinOp ? AtomicBinOp->getSourceRange()
+                                : AtomicBody->getSourceRange();
+      }
+    } else {
+      ErrorFound = NotAnExpression;
+      NoteLoc = ErrorLoc = Body->getBeginLoc();
+      NoteRange = ErrorRange = SourceRange(NoteLoc, NoteLoc);
+    }
+    if (ErrorFound != NoError) {
+      Diag(ErrorLoc, diag::err_oss_atomic_write_not_expression_statement)
+          << ErrorRange;
+      Diag(NoteLoc, diag::note_oss_atomic_read_write)
+          << ErrorFound << NoteRange;
+      return StmtError();
+    }
+    if (CurContext->isDependentContext())
+      E = X = nullptr;
+  } else if (AtomicKind == OSSC_update || AtomicKind == OSSC_unknown) {
+    // If clause is update:
+    //  x++;
+    //  x--;
+    //  ++x;
+    //  --x;
+    //  x binop= expr;
+    //  x = x binop expr;
+    //  x = expr binop x;
+    OmpSsAtomicUpdateChecker Checker(*this);
+    if (Checker.checkStatement(
+            Body,
+            (AtomicKind == OSSC_update)
+                ? diag::err_oss_atomic_update_not_expression_statement
+                : diag::err_oss_atomic_not_expression_statement,
+            diag::note_oss_atomic_update))
+      return StmtError();
+    if (!CurContext->isDependentContext()) {
+      E = Checker.getExpr();
+      X = Checker.getX();
+      UE = Checker.getUpdateExpr();
+      IsXLHSInRHSPart = Checker.isXLHSInRHSPart();
+    }
+  } else if (AtomicKind == OSSC_capture) {
+    enum {
+      NotAnAssignmentOp,
+      NotACompoundStatement,
+      NotTwoSubstatements,
+      NotASpecificExpression,
+      NoError
+    } ErrorFound = NoError;
+    SourceLocation ErrorLoc, NoteLoc;
+    SourceRange ErrorRange, NoteRange;
+    if (const auto *AtomicBody = dyn_cast<Expr>(Body)) {
+      // If clause is a capture:
+      //  v = x++;
+      //  v = x--;
+      //  v = ++x;
+      //  v = --x;
+      //  v = x binop= expr;
+      //  v = x = x binop expr;
+      //  v = x = expr binop x;
+      const auto *AtomicBinOp =
+          dyn_cast<BinaryOperator>(AtomicBody->IgnoreParenImpCasts());
+      if (AtomicBinOp && AtomicBinOp->getOpcode() == BO_Assign) {
+        V = AtomicBinOp->getLHS();
+        Body = AtomicBinOp->getRHS()->IgnoreParenImpCasts();
+        OmpSsAtomicUpdateChecker Checker(*this);
+        if (Checker.checkStatement(
+                Body, diag::err_oss_atomic_capture_not_expression_statement,
+                diag::note_oss_atomic_update))
+          return StmtError();
+        E = Checker.getExpr();
+        X = Checker.getX();
+        UE = Checker.getUpdateExpr();
+        IsXLHSInRHSPart = Checker.isXLHSInRHSPart();
+        IsPostfixUpdate = Checker.isPostfixUpdate();
+      } else if (!AtomicBody->isInstantiationDependent()) {
+        ErrorLoc = AtomicBody->getExprLoc();
+        ErrorRange = AtomicBody->getSourceRange();
+        NoteLoc = AtomicBinOp ? AtomicBinOp->getOperatorLoc()
+                              : AtomicBody->getExprLoc();
+        NoteRange = AtomicBinOp ? AtomicBinOp->getSourceRange()
+                                : AtomicBody->getSourceRange();
+        ErrorFound = NotAnAssignmentOp;
+      }
+      if (ErrorFound != NoError) {
+        Diag(ErrorLoc, diag::err_oss_atomic_capture_not_expression_statement)
+            << ErrorRange;
+        Diag(NoteLoc, diag::note_oss_atomic_capture) << ErrorFound << NoteRange;
+        return StmtError();
+      }
+      if (CurContext->isDependentContext())
+        UE = V = E = X = nullptr;
+    } else {
+      // If clause is a capture:
+      //  { v = x; x = expr; }
+      //  { v = x; x++; }
+      //  { v = x; x--; }
+      //  { v = x; ++x; }
+      //  { v = x; --x; }
+      //  { v = x; x binop= expr; }
+      //  { v = x; x = x binop expr; }
+      //  { v = x; x = expr binop x; }
+      //  { x++; v = x; }
+      //  { x--; v = x; }
+      //  { ++x; v = x; }
+      //  { --x; v = x; }
+      //  { x binop= expr; v = x; }
+      //  { x = x binop expr; v = x; }
+      //  { x = expr binop x; v = x; }
+      if (auto *CS = dyn_cast<CompoundStmt>(Body)) {
+        // Check that this is { expr1; expr2; }
+        if (CS->size() == 2) {
+          Stmt *First = CS->body_front();
+          Stmt *Second = CS->body_back();
+          if (auto *EWC = dyn_cast<ExprWithCleanups>(First))
+            First = EWC->getSubExpr()->IgnoreParenImpCasts();
+          if (auto *EWC = dyn_cast<ExprWithCleanups>(Second))
+            Second = EWC->getSubExpr()->IgnoreParenImpCasts();
+          // Need to find what subexpression is 'v' and what is 'x'.
+          OmpSsAtomicUpdateChecker Checker(*this);
+          bool IsUpdateExprFound = !Checker.checkStatement(Second);
+          BinaryOperator *BinOp = nullptr;
+          if (IsUpdateExprFound) {
+            BinOp = dyn_cast<BinaryOperator>(First);
+            IsUpdateExprFound = BinOp && BinOp->getOpcode() == BO_Assign;
+          }
+          if (IsUpdateExprFound && !CurContext->isDependentContext()) {
+            //  { v = x; x++; }
+            //  { v = x; x--; }
+            //  { v = x; ++x; }
+            //  { v = x; --x; }
+            //  { v = x; x binop= expr; }
+            //  { v = x; x = x binop expr; }
+            //  { v = x; x = expr binop x; }
+            // Check that the first expression has form v = x.
+            Expr *PossibleX = BinOp->getRHS()->IgnoreParenImpCasts();
+            llvm::FoldingSetNodeID XId, PossibleXId;
+            Checker.getX()->Profile(XId, Context, /*Canonical=*/true);
+            PossibleX->Profile(PossibleXId, Context, /*Canonical=*/true);
+            IsUpdateExprFound = XId == PossibleXId;
+            if (IsUpdateExprFound) {
+              V = BinOp->getLHS();
+              X = Checker.getX();
+              E = Checker.getExpr();
+              UE = Checker.getUpdateExpr();
+              IsXLHSInRHSPart = Checker.isXLHSInRHSPart();
+              IsPostfixUpdate = true;
+            }
+          }
+          if (!IsUpdateExprFound) {
+            IsUpdateExprFound = !Checker.checkStatement(First);
+            BinOp = nullptr;
+            if (IsUpdateExprFound) {
+              BinOp = dyn_cast<BinaryOperator>(Second);
+              IsUpdateExprFound = BinOp && BinOp->getOpcode() == BO_Assign;
+            }
+            if (IsUpdateExprFound && !CurContext->isDependentContext()) {
+              //  { x++; v = x; }
+              //  { x--; v = x; }
+              //  { ++x; v = x; }
+              //  { --x; v = x; }
+              //  { x binop= expr; v = x; }
+              //  { x = x binop expr; v = x; }
+              //  { x = expr binop x; v = x; }
+              // Check that the second expression has form v = x.
+              Expr *PossibleX = BinOp->getRHS()->IgnoreParenImpCasts();
+              llvm::FoldingSetNodeID XId, PossibleXId;
+              Checker.getX()->Profile(XId, Context, /*Canonical=*/true);
+              PossibleX->Profile(PossibleXId, Context, /*Canonical=*/true);
+              IsUpdateExprFound = XId == PossibleXId;
+              if (IsUpdateExprFound) {
+                V = BinOp->getLHS();
+                X = Checker.getX();
+                E = Checker.getExpr();
+                UE = Checker.getUpdateExpr();
+                IsXLHSInRHSPart = Checker.isXLHSInRHSPart();
+                IsPostfixUpdate = false;
+              }
+            }
+          }
+          if (!IsUpdateExprFound) {
+            //  { v = x; x = expr; }
+            auto *FirstExpr = dyn_cast<Expr>(First);
+            auto *SecondExpr = dyn_cast<Expr>(Second);
+            if (!FirstExpr || !SecondExpr ||
+                !(FirstExpr->isInstantiationDependent() ||
+                  SecondExpr->isInstantiationDependent())) {
+              auto *FirstBinOp = dyn_cast<BinaryOperator>(First);
+              if (!FirstBinOp || FirstBinOp->getOpcode() != BO_Assign) {
+                ErrorFound = NotAnAssignmentOp;
+                NoteLoc = ErrorLoc = FirstBinOp ? FirstBinOp->getOperatorLoc()
+                                                : First->getBeginLoc();
+                NoteRange = ErrorRange = FirstBinOp
+                                             ? FirstBinOp->getSourceRange()
+                                             : SourceRange(ErrorLoc, ErrorLoc);
+              } else {
+                auto *SecondBinOp = dyn_cast<BinaryOperator>(Second);
+                if (!SecondBinOp || SecondBinOp->getOpcode() != BO_Assign) {
+                  ErrorFound = NotAnAssignmentOp;
+                  NoteLoc = ErrorLoc = SecondBinOp
+                                           ? SecondBinOp->getOperatorLoc()
+                                           : Second->getBeginLoc();
+                  NoteRange = ErrorRange =
+                      SecondBinOp ? SecondBinOp->getSourceRange()
+                                  : SourceRange(ErrorLoc, ErrorLoc);
+                } else {
+                  Expr *PossibleXRHSInFirst =
+                      FirstBinOp->getRHS()->IgnoreParenImpCasts();
+                  Expr *PossibleXLHSInSecond =
+                      SecondBinOp->getLHS()->IgnoreParenImpCasts();
+                  llvm::FoldingSetNodeID X1Id, X2Id;
+                  PossibleXRHSInFirst->Profile(X1Id, Context,
+                                               /*Canonical=*/true);
+                  PossibleXLHSInSecond->Profile(X2Id, Context,
+                                                /*Canonical=*/true);
+                  IsUpdateExprFound = X1Id == X2Id;
+                  if (IsUpdateExprFound) {
+                    V = FirstBinOp->getLHS();
+                    X = SecondBinOp->getLHS();
+                    E = SecondBinOp->getRHS();
+                    UE = nullptr;
+                    IsXLHSInRHSPart = false;
+                    IsPostfixUpdate = true;
+                  } else {
+                    ErrorFound = NotASpecificExpression;
+                    ErrorLoc = FirstBinOp->getExprLoc();
+                    ErrorRange = FirstBinOp->getSourceRange();
+                    NoteLoc = SecondBinOp->getLHS()->getExprLoc();
+                    NoteRange = SecondBinOp->getRHS()->getSourceRange();
+                  }
+                }
+              }
+            }
+          }
+        } else {
+          NoteLoc = ErrorLoc = Body->getBeginLoc();
+          NoteRange = ErrorRange =
+              SourceRange(Body->getBeginLoc(), Body->getBeginLoc());
+          ErrorFound = NotTwoSubstatements;
+        }
+      } else {
+        NoteLoc = ErrorLoc = Body->getBeginLoc();
+        NoteRange = ErrorRange =
+            SourceRange(Body->getBeginLoc(), Body->getBeginLoc());
+        ErrorFound = NotACompoundStatement;
+      }
+    }
+    if (ErrorFound != NoError) {
+      Diag(ErrorLoc, diag::err_oss_atomic_capture_not_compound_statement)
+          << ErrorRange;
+      Diag(NoteLoc, diag::note_oss_atomic_capture) << ErrorFound << NoteRange;
+      return StmtError();
+    }
+    if (CurContext->isDependentContext())
+      UE = V = E = X = nullptr;
+  } else if (AtomicKind == OSSC_compare) {
+    if (IsCompareCapture) {
+      OmpSsAtomicCompareCaptureChecker::ErrorInfoTy ErrorInfo;
+      OmpSsAtomicCompareCaptureChecker Checker(*this);
+      if (!Checker.checkStmt(Body, ErrorInfo)) {
+        Diag(ErrorInfo.ErrorLoc, diag::err_oss_atomic_compare_capture)
+            << ErrorInfo.ErrorRange;
+        Diag(ErrorInfo.NoteLoc, diag::note_oss_atomic_compare)
+            << ErrorInfo.Error << ErrorInfo.NoteRange;
+        return StmtError();
+      }
+      X = Checker.getX();
+      E = Checker.getE();
+      D = Checker.getD();
+      CE = Checker.getCond();
+      V = Checker.getV();
+      R = Checker.getR();
+      // We reuse IsXLHSInRHSPart to tell if it is in the form 'x ordop expr'.
+      IsXLHSInRHSPart = Checker.isXBinopExpr();
+      IsFailOnly = Checker.isFailOnly();
+      IsPostfixUpdate = Checker.isPostfixUpdate();
+    } else {
+      OmpSsAtomicCompareChecker::ErrorInfoTy ErrorInfo;
+      OmpSsAtomicCompareChecker Checker(*this);
+      if (!Checker.checkStmt(Body, ErrorInfo)) {
+        Diag(ErrorInfo.ErrorLoc, diag::err_oss_atomic_compare)
+            << ErrorInfo.ErrorRange;
+        Diag(ErrorInfo.NoteLoc, diag::note_oss_atomic_compare)
+          << ErrorInfo.Error << ErrorInfo.NoteRange;
+        return StmtError();
+      }
+      X = Checker.getX();
+      E = Checker.getE();
+      D = Checker.getD();
+      CE = Checker.getCond();
+      // We reuse IsXLHSInRHSPart to tell if it is in the form 'x ordop expr'.
+      IsXLHSInRHSPart = Checker.isXBinopExpr();
+    }
+  }
+
+  setFunctionHasBranchProtectedScope();
+
+  return OSSAtomicDirective::Create(
+      Context, StartLoc, EndLoc, Clauses, AStmt,
+      {X, V, R, E, UE, D, CE, IsXLHSInRHSPart, IsPostfixUpdate, IsFailOnly});
+}
+
+namespace {
+// This visitor looks for global variables in a expression
+// and gives an error
+class OSSGlobalFinderVisitor
+  : public ConstStmtVisitor<OSSGlobalFinderVisitor, void> {
+  Sema &S;
+  bool ErrorFound = false;
+
+public:
+  OSSGlobalFinderVisitor(Sema &S)
+    : S(S)
+      {}
+
+  //===--------------------------------------------------------------------===//
+  //                            Visitor Methods
+  //===--------------------------------------------------------------------===//
+
+  void VisitStmt(const Stmt *S) {
+    for (const Stmt *C : S->children()) {
+      if (C) {
+        Visit(C);
+      }
+    }
+  }
+
+  void VisitOSSMultiDepExpr(const OSSMultiDepExpr *E) {
+    Visit(E->getDepExpr());
+
+    for (size_t i = 0; i < E->getDepInits().size(); ++i) {
+      Visit(E->getDepInits()[i]);
+      if (E->getDepSizes()[i])
+        Visit(E->getDepSizes()[i]);
+      if (E->getDepSteps()[i])
+        Visit(E->getDepSteps()[i]);
+    }
+  }
+
+  void VisitOSSArrayShapingExpr(const OSSArrayShapingExpr *E) {
+    Visit(E->getBase());
+
+    for (const Expr *S : E->getShapes())
+      Visit(S);
+  }
+
+  void VisitOSSArraySectionExpr(const OSSArraySectionExpr *E) {
+    Visit(E->getBase());
+
+    if (E->getLowerBound())
+      Visit(E->getLowerBound());
+    if (E->getLengthUpper())
+      Visit(E->getLengthUpper());
+  }
+
+  void VisitArraySubscriptExpr(const ArraySubscriptExpr *E) {
+    Visit(E->getBase());
+    Visit(E->getIdx());
+  }
+
+  void VisitUnaryOperator(const UnaryOperator *E) {
+    Visit(E->getSubExpr());
+  }
+
+  void VisitMemberExpr(const MemberExpr *E) {
+    Visit(E->getBase());
+  }
+
+  void VisitDeclRefExpr(const DeclRefExpr *E) {
+    if (E->isTypeDependent() || E->isValueDependent() ||
+        E->containsUnexpandedParameterPack() || E->isInstantiationDependent())
+      return;
+    if (E->isNonOdrUse() == NOUR_Unevaluated)
+      return;
+    if (const VarDecl *VD = dyn_cast<VarDecl>(E->getDecl())) {
+      if (VD->hasGlobalStorage()) {
+        S.Diag(E->getExprLoc(), diag::err_oss_global_variable)
+            << E->getSourceRange();
+        ErrorFound = true;
+      }
+    }
+  }
+
+  bool isErrorFound() const { return ErrorFound; }
+};
+} // end namespace
+
+static bool checkDependency(Sema &S, Expr *RefExpr, bool OSSSyntax, bool Outline) {
   SourceLocation ELoc = RefExpr->getExprLoc();
   Expr *SimpleExpr = RefExpr->IgnoreParenCasts();
-  if (RefExpr->isTypeDependent() || RefExpr->isValueDependent() ||
-      RefExpr->containsUnexpandedParameterPack()) {
+  if (RefExpr->containsUnexpandedParameterPack()) {
+    S.Diag(RefExpr->getExprLoc(), diag::err_oss_variadic_templates_not_clause_allowed);
+    return false;
+  } else if (RefExpr->isTypeDependent() || RefExpr->isValueDependent()) {
     // It will be analyzed later.
-    return;
+    return true;
   }
+
+  if (S.RequireCompleteExprType(RefExpr, diag::err_oss_incomplete_type))
+    return false;
+
   auto *ASE = dyn_cast<ArraySubscriptExpr>(SimpleExpr);
-  if (!RefExpr->IgnoreParenImpCasts()->isLValue() ||
+  // Allow only LValues, forbid ArraySubscripts over things
+  // that are not an array like:
+  //   typedef float V __attribute__((vector_size(16)));
+  //   V a;
+  //   #pragma oss task in(a[3])
+  // and functions:
+  //   void foo() { #pragma oss task in(foo) {} }
+  if (RefExpr->IgnoreParenImpCasts()->getType()->isFunctionType() ||
+      !RefExpr->IgnoreParenImpCasts()->isLValue() ||
       (ASE &&
        !ASE->getBase()->getType().getNonReferenceType()->isPointerType() &&
        !ASE->getBase()->getType().getNonReferenceType()->isArrayType())) {
-    S.Diag(ELoc, diag::err_oss_expected_dereference_or_array_item)
-        << RefExpr->getSourceRange();
-    return;
+    if (!Outline)
+      S.Diag(ELoc, diag::err_oss_expected_addressable_lvalue_or_array_item)
+          << RefExpr->getSourceRange();
+    else
+      S.Diag(ELoc, diag::err_oss_expected_lvalue_reference_or_global_or_dereference_or_array_item)
+          << 0 << RefExpr->getSourceRange();
+    return false;
   }
-  if (isa<DeclRefExpr>(SimpleExpr) || isa<MemberExpr>(SimpleExpr)) {
-    S.Diag(ELoc, diag::err_oss_expected_dereference_or_array_item)
-        << RefExpr->getSourceRange();
-    return;
+
+  if (Outline) {
+    if (const DeclRefExpr *DRE = dyn_cast<DeclRefExpr>(RefExpr->IgnoreParenImpCasts())) {
+      if (const VarDecl *VD = dyn_cast<VarDecl>(DRE->getDecl())) {
+        if (!(VD->getType()->isReferenceType() || VD->hasGlobalStorage())) {
+          S.Diag(ELoc, diag::err_oss_expected_lvalue_reference_or_global_or_dereference_or_array_item)
+              << 0 << DRE->getSourceRange();
+          return false;
+        }
+      }
+    }
   }
+
+  class CheckCallExpr
+      : public ConstStmtVisitor<CheckCallExpr, bool> {
+  // This Visitor checks the base of the
+  // dependency is over a CallExpr, which is error.
+  // int *get();
+  // auto l = []() -> int * {...};
+  // #pragma oss task in(get()[1], l()[3])
+  public:
+    bool VisitOSSMultiDepExpr(const OSSMultiDepExpr *E) {
+      return Visit(E->getDepExpr());
+    }
+
+    bool VisitOSSArrayShapingExpr(const OSSArrayShapingExpr *E) {
+      return Visit(E->getBase());
+    }
+
+    bool VisitOSSArraySectionExpr(const OSSArraySectionExpr *E) {
+      return Visit(E->getBase());
+    }
+
+    bool VisitArraySubscriptExpr(const ArraySubscriptExpr *E) {
+      return Visit(E->getBase());
+    }
+
+    bool VisitUnaryOperator(const UnaryOperator *E) {
+      return Visit(E->getSubExpr());
+    }
+
+    bool VisitMemberExpr(const MemberExpr *E) {
+      return Visit(E->getBase());
+    }
+
+    bool VisitCallExpr(const CallExpr *E) {
+      return true;
+    }
+  };
+  CheckCallExpr CCE;
+  if (CCE.Visit(RefExpr)) {
+    S.Diag(ELoc, diag::err_oss_call_expr_support)
+        << RefExpr->getSourceRange();
+    return false;
+  }
+
+  bool InvalidArraySection = false;
   while (auto *OASE = dyn_cast<OSSArraySectionExpr>(SimpleExpr)) {
     if (!OASE->isColonForm() && !OSSSyntax) {
       S.Diag(OASE->getColonLoc(), diag::err_oss_section_invalid_form)
           << RefExpr->getSourceRange();
-      return;
+      // Only diagnose the first error
+      InvalidArraySection = true;
+      break;
     }
-    SimpleExpr = OASE->getBase()->IgnoreParenCasts();
+    SimpleExpr = OASE->getBase()->IgnoreParenImpCasts();
   }
+  if (InvalidArraySection)
+    return false;
+  return true;
 }
+
+static bool checkNdrange(
+    Sema &S, SourceLocation Loc, ArrayRef<Expr *> VL,
+    SmallVectorImpl<Expr *> &ClauseVars, bool Outline) {
+
+  ClauseVars.append(VL.begin(), VL.end());
+
+  Expr *NumDimsE = ClauseVars[0];
+  // The parameter of the collapse clause must be a constant
+  // positive integer expression.
+  ExprResult NumDimsResult =
+      S.VerifyPositiveIntegerConstant(NumDimsE, OSSC_ndrange, /*StrictlyPositive=*/true);
+  if (NumDimsResult.isInvalid())
+    return false;
+  NumDimsE = NumDimsResult.get();
+  if (!isa<ConstantExpr>(NumDimsE))
+    return true;
+
+  uint64_t NumDims = cast<ConstantExpr>(NumDimsE)->getResultAsAPSInt().getExtValue();
+  if (!(NumDims >= 1 && NumDims <= 3)) {
+    S.Diag(NumDimsE->getExprLoc(), diag::err_oss_clause_expect_constant_between)
+        << 1 << 3 << getOmpSsClauseName(OSSC_ndrange)
+        << NumDimsE->getSourceRange();
+    return false;
+  }
+  if (NumDims + 1 != ClauseVars.size() &&
+      NumDims*2 + 1 != ClauseVars.size()) {
+    S.Diag(Loc, diag::err_oss_ndrange_expect_nelems)
+      << NumDims << NumDims << NumDims*2 << ClauseVars.size() - 1;
+    return false;
+  }
+  ClauseVars[0] = NumDimsE;
+  bool ErrorFound = false;
+  for (size_t i = 1; i < ClauseVars.size(); ++i) {
+    // TODO: check global[i] >= local[i]
+    ExprResult Res = S.CheckNonNegativeIntegerValue(
+      ClauseVars[i], OSSC_ndrange, /*StrictlyPositive=*/true, Outline);
+    if (Res.isInvalid())
+      ErrorFound = true;
+    ClauseVars[i] = Res.get();
+  }
+  return !ErrorFound;
+}
+
+namespace {
+/// Data for the reduction-based clauses.
+struct ReductionData {
+  /// List of original reduction items.
+  SmallVector<Expr *, 8> Vars;
+  /// LHS expressions for the reduction_op expressions.
+  SmallVector<Expr *, 8> LHSs;
+  /// RHS expressions for the reduction_op expressions.
+  SmallVector<Expr *, 8> RHSs;
+  /// Reduction operation expression.
+  SmallVector<Expr *, 8> ReductionOps;
+  /// Reduction operation kind. BO_Comma stands for UDR
+  SmallVector<BinaryOperatorKind, 8> ReductionKinds;
+  ReductionData() = delete;
+  /// Reserves required memory for the reduction data.
+  ReductionData(unsigned Size) {
+    Vars.reserve(Size);
+    LHSs.reserve(Size);
+    RHSs.reserve(Size);
+    ReductionOps.reserve(Size);
+    ReductionKinds.reserve(Size);
+  }
+  /// Stores reduction item and reduction operation only (required for dependent
+  /// reduction item).
+  void push(Expr *Item, Expr *ReductionOp) {
+    Vars.emplace_back(Item);
+    LHSs.emplace_back(nullptr);
+    RHSs.emplace_back(nullptr);
+    ReductionOps.emplace_back(ReductionOp);
+    ReductionKinds.emplace_back(BO_Comma);
+  }
+  /// Stores reduction data.
+  void push(Expr *Item, Expr *LHS, Expr *RHS, Expr *ReductionOp,
+            BinaryOperatorKind BOK) {
+    Vars.emplace_back(Item);
+    LHSs.emplace_back(LHS);
+    RHSs.emplace_back(RHS);
+    ReductionOps.emplace_back(ReductionOp);
+    ReductionKinds.emplace_back(BOK);
+  }
+};
+} // namespace
+
+// Fwd declaration
+static bool actOnOSSReductionKindClause(
+    Sema &S, DSAStackTy *Stack, OmpSsClauseKind ClauseKind,
+    ArrayRef<Expr *> VarList, CXXScopeSpec &ReductionIdScopeSpec,
+    const DeclarationNameInfo &ReductionId, ArrayRef<Expr *> UnresolvedReductions,
+    ReductionData &RD, bool Outline);
 
 Sema::DeclGroupPtrTy Sema::ActOnOmpSsDeclareTaskDirective(
     DeclGroupPtrTy DG,
     Expr *If, Expr *Final, Expr *Cost, Expr *Priority,
-    Expr *Label, Expr *Onready,
-    bool Wait,
+    Expr *Onready, bool Wait,
+    unsigned Device, SourceLocation DeviceLoc,
+    ArrayRef<Expr *> Labels,
     ArrayRef<Expr *> Ins, ArrayRef<Expr *> Outs, ArrayRef<Expr *> Inouts,
     ArrayRef<Expr *> Concurrents, ArrayRef<Expr *> Commutatives,
     ArrayRef<Expr *> WeakIns, ArrayRef<Expr *> WeakOuts,
@@ -2384,7 +4320,14 @@ Sema::DeclGroupPtrTy Sema::ActOnOmpSsDeclareTaskDirective(
     ArrayRef<Expr *> DepWeakIns, ArrayRef<Expr *> DepWeakOuts,
     ArrayRef<Expr *> DepWeakInouts,
     ArrayRef<Expr *> DepWeakConcurrents, ArrayRef<Expr *> DepWeakCommutatives,
-    SourceRange SR) {
+    ArrayRef<unsigned> ReductionListSizes,
+    ArrayRef<Expr *> Reductions,
+    ArrayRef<unsigned> ReductionClauseType,
+    ArrayRef<CXXScopeSpec> ReductionCXXScopeSpecs,
+    ArrayRef<DeclarationNameInfo> ReductionIds,
+    ArrayRef<Expr *> Ndranges, SourceLocation NdrangeLoc,
+    SourceRange SR,
+    ArrayRef<Expr *> UnresolvedReductions) {
   if (!DG || DG.get().isNull())
     return DeclGroupPtrTy();
 
@@ -2406,6 +4349,15 @@ Sema::DeclGroupPtrTy Sema::ActOnOmpSsDeclareTaskDirective(
         || isa<CXXDestructorDecl>(MD)
         || MD->isOverloadedOperator()) {
       Diag(ADecl->getLocation(), diag::err_oss_function_expected) << 1;
+      return DeclGroupPtrTy();
+    }
+    // Member tasks outlines with device != smp are
+    // not supported
+    const unsigned DeviceNotSeen = OSSC_DEVICE_unknown + 1;
+    if (!(Device == OSSC_DEVICE_smp
+        || Device == DeviceNotSeen)) {
+      Diag(DeviceLoc, diag::err_oss_member_device_no_smp)
+        << getOmpSsSimpleClauseTypeName(OSSC_device, Device);
       return DeclGroupPtrTy();
     }
   }
@@ -2435,7 +4387,14 @@ Sema::DeclGroupPtrTy Sema::ActOnOmpSsDeclareTaskDirective(
     ++ParI;
   }
 
-  ExprResult IfRes, FinalRes, CostRes, PriorityRes, LabelRes, OnreadyRes;
+  // Add dummy to catch potential instantiations of the class that contains us
+  // or our associated function
+  ADecl->addAttr(OSSTaskDeclSentinelAttr::CreateImplicit(Context, SR));
+
+  ExprResult IfRes, FinalRes, CostRes, PriorityRes, OnreadyRes;
+  SmallVector<Expr *, 2> LabelsRes;
+  SmallVector<Expr *, 4> NdrangesRes;
+  OSSTaskDeclAttr::DeviceType DevType = OSSTaskDeclAttr::DeviceType::Unknown;
   if (If) {
     IfRes = VerifyBooleanConditionWithCleanups(If, If->getExprLoc());
   }
@@ -2444,84 +4403,173 @@ Sema::DeclGroupPtrTy Sema::ActOnOmpSsDeclareTaskDirective(
   }
   if (Cost) {
     CostRes = CheckNonNegativeIntegerValue(
-      Cost, OSSC_cost, /*StrictlyPositive=*/false);
+      Cost, OSSC_cost, /*StrictlyPositive=*/false, /*Outline=*/true);
   }
   if (Priority) {
-    PriorityRes = CheckSignedIntegerValue(Priority);
+    PriorityRes = CheckSignedIntegerValue(Priority, /*Outline=*/true);
   }
-  if (Label) {
-    LabelRes = CheckIsConstCharPtrConvertibleExpr(Label);
+  if (!Labels.empty()) {
+    LabelsRes.push_back(
+      CheckIsConstCharPtrConvertibleExpr(Labels[0], /*ConstConstraint=*/true).get());
+    if (Labels.size() == 2)
+      LabelsRes.push_back(
+        CheckIsConstCharPtrConvertibleExpr(Labels[1], /*ConstConstraint=*/false).get());
   }
   if (Onready) {
     OnreadyRes = Onready;
   }
+  switch (Device) {
+  case OSSC_DEVICE_smp:
+    DevType = OSSTaskDeclAttr::DeviceType::Smp;
+    break;
+  case OSSC_DEVICE_cuda:
+    DevType = OSSTaskDeclAttr::DeviceType::Cuda;
+    break;
+  case OSSC_DEVICE_opencl:
+    DevType = OSSTaskDeclAttr::DeviceType::Opencl;
+    break;
+  case OSSC_DEVICE_fpga:
+    DevType = OSSTaskDeclAttr::DeviceType::Fpga;
+    break;
+  case OSSC_DEVICE_unknown:
+    Diag(DeviceLoc, diag::err_oss_unexpected_clause_value)
+        << getListOfPossibleValues(OSSC_device, /*First=*/0,
+                                   /*Last=*/OSSC_DEVICE_unknown)
+        << getOmpSsClauseName(OSSC_device);
+  }
+  OSSClauseDSAChecker OSSClauseChecker(/*Stack=*/nullptr, *this);
   for (Expr *RefExpr : Ins) {
-    checkOutlineDependency(*this, RefExpr, /*OSSSyntax=*/true);
+    checkDependency(*this, RefExpr, /*OSSSyntax=*/true, /*Outline=*/true);
+    OSSClauseChecker.VisitClauseExpr(RefExpr, OSSC_in);
   }
   for (Expr *RefExpr : Outs) {
-    checkOutlineDependency(*this, RefExpr, /*OSSSyntax=*/true);
+    checkDependency(*this, RefExpr, /*OSSSyntax=*/true, /*Outline=*/true);
+    OSSClauseChecker.VisitClauseExpr(RefExpr, OSSC_out);
   }
   for (Expr *RefExpr : Inouts) {
-    checkOutlineDependency(*this, RefExpr, /*OSSSyntax=*/true);
+    checkDependency(*this, RefExpr, /*OSSSyntax=*/true, /*Outline=*/true);
+    OSSClauseChecker.VisitClauseExpr(RefExpr, OSSC_inout);
   }
   for (Expr *RefExpr : Concurrents) {
-    checkOutlineDependency(*this, RefExpr, /*OSSSyntax=*/true);
+    checkDependency(*this, RefExpr, /*OSSSyntax=*/true, /*Outline=*/true);
+    OSSClauseChecker.VisitClauseExpr(RefExpr, OSSC_concurrent);
   }
   for (Expr *RefExpr : Commutatives) {
-    checkOutlineDependency(*this, RefExpr, /*OSSSyntax=*/true);
+    checkDependency(*this, RefExpr, /*OSSSyntax=*/true, /*Outline=*/true);
+    OSSClauseChecker.VisitClauseExpr(RefExpr, OSSC_commutative);
   }
   for (Expr *RefExpr : WeakIns) {
-    checkOutlineDependency(*this, RefExpr, /*OSSSyntax=*/true);
+    checkDependency(*this, RefExpr, /*OSSSyntax=*/true, /*Outline=*/true);
+    OSSClauseChecker.VisitClauseExpr(RefExpr, OSSC_weakin);
   }
   for (Expr *RefExpr : WeakOuts) {
-    checkOutlineDependency(*this, RefExpr, /*OSSSyntax=*/true);
+    checkDependency(*this, RefExpr, /*OSSSyntax=*/true, /*Outline=*/true);
+    OSSClauseChecker.VisitClauseExpr(RefExpr, OSSC_weakout);
   }
   for (Expr *RefExpr : WeakInouts) {
-    checkOutlineDependency(*this, RefExpr, /*OSSSyntax=*/true);
+    checkDependency(*this, RefExpr, /*OSSSyntax=*/true, /*Outline=*/true);
+    OSSClauseChecker.VisitClauseExpr(RefExpr, OSSC_weakinout);
   }
   for (Expr *RefExpr : WeakConcurrents) {
-    checkOutlineDependency(*this, RefExpr, /*OSSSyntax=*/true);
+    checkDependency(*this, RefExpr, /*OSSSyntax=*/true, /*Outline=*/true);
+    OSSClauseChecker.VisitClauseExpr(RefExpr, OSSC_weakconcurrent);
   }
   for (Expr *RefExpr : WeakCommutatives) {
-    checkOutlineDependency(*this, RefExpr, /*OSSSyntax=*/true);
+    checkDependency(*this, RefExpr, /*OSSSyntax=*/true, /*Outline=*/true);
+    OSSClauseChecker.VisitClauseExpr(RefExpr, OSSC_weakcommutative);
   }
   for (Expr *RefExpr : DepIns) {
-    checkOutlineDependency(*this, RefExpr);
+    checkDependency(*this, RefExpr, /*OSSSyntax=*/false, /*Outline=*/true);
+    OSSClauseChecker.VisitClauseExpr(RefExpr, OSSC_in);
   }
   for (Expr *RefExpr : DepOuts) {
-    checkOutlineDependency(*this, RefExpr);
+    checkDependency(*this, RefExpr, /*OSSSyntax=*/false, /*Outline=*/true);
+    OSSClauseChecker.VisitClauseExpr(RefExpr, OSSC_out);
   }
   for (Expr *RefExpr : DepInouts) {
-    checkOutlineDependency(*this, RefExpr);
+    checkDependency(*this, RefExpr, /*OSSSyntax=*/false, /*Outline=*/true);
+    OSSClauseChecker.VisitClauseExpr(RefExpr, OSSC_inout);
   }
   for (Expr *RefExpr : DepConcurrents) {
-    checkOutlineDependency(*this, RefExpr);
+    checkDependency(*this, RefExpr, /*OSSSyntax=*/false, /*Outline=*/true);
+    OSSClauseChecker.VisitClauseExpr(RefExpr, OSSC_concurrent);
   }
   for (Expr *RefExpr : DepCommutatives) {
-    checkOutlineDependency(*this, RefExpr);
+    checkDependency(*this, RefExpr, /*OSSSyntax=*/false, /*Outline=*/true);
+    OSSClauseChecker.VisitClauseExpr(RefExpr, OSSC_commutative);
   }
   for (Expr *RefExpr : DepWeakIns) {
-    checkOutlineDependency(*this, RefExpr);
+    checkDependency(*this, RefExpr, /*OSSSyntax=*/false, /*Outline=*/true);
+    OSSClauseChecker.VisitClauseExpr(RefExpr, OSSC_weakin);
   }
   for (Expr *RefExpr : DepWeakOuts) {
-    checkOutlineDependency(*this, RefExpr);
+    checkDependency(*this, RefExpr, /*OSSSyntax=*/false, /*Outline=*/true);
+    OSSClauseChecker.VisitClauseExpr(RefExpr, OSSC_weakout);
   }
   for (Expr *RefExpr : DepWeakInouts) {
-    checkOutlineDependency(*this, RefExpr);
+    checkDependency(*this, RefExpr, /*OSSSyntax=*/false, /*Outline=*/true);
+    OSSClauseChecker.VisitClauseExpr(RefExpr, OSSC_weakinout);
   }
   for (Expr *RefExpr : DepWeakConcurrents) {
-    checkOutlineDependency(*this, RefExpr);
+    checkDependency(*this, RefExpr, /*OSSSyntax=*/false, /*Outline=*/true);
+    OSSClauseChecker.VisitClauseExpr(RefExpr, OSSC_weakconcurrent);
   }
   for (Expr *RefExpr : DepWeakCommutatives) {
-    checkOutlineDependency(*this, RefExpr);
+    checkDependency(*this, RefExpr, /*OSSSyntax=*/false, /*Outline=*/true);
+    OSSClauseChecker.VisitClauseExpr(RefExpr, OSSC_weakcommutative);
   }
+  ReductionData RD(Reductions.size());
+  SmallVector<NestedNameSpecifierLoc, 4> ReductionNSLoc;
+  auto UnresolvedReductions_it = UnresolvedReductions.begin();
+  auto Reductions_it = Reductions.begin();
+  for (size_t i = 0; i < ReductionListSizes.size(); ++i) {
+    ArrayRef<Expr *> TmpList(Reductions_it, Reductions_it + ReductionListSizes[i]);
+    OmpSsClauseKind CKind = (OmpSsClauseKind)ReductionClauseType[i];
+    CXXScopeSpec ScopeSpec = ReductionCXXScopeSpecs[i];
+    // UnresolvedReductions is std::nullopt when parsing the first time. Pass
+    // std::nullopt.
+    // In instantiation we will get an array with all the info for the reductions, build
+    // the subarray associated to each reduction list (like with TmpList
+    if (UnresolvedReductions.empty()) {
+      actOnOSSReductionKindClause(
+        *this, DSAStack, CKind, TmpList, ScopeSpec, ReductionIds[i],
+        std::nullopt, RD, /*Outline=*/true);
+    } else {
+      actOnOSSReductionKindClause(
+        *this, DSAStack, CKind, TmpList, ScopeSpec, ReductionIds[i],
+        ArrayRef<Expr *>(UnresolvedReductions_it, UnresolvedReductions_it + ReductionListSizes[i]),
+        RD, /*Outline=*/true);
+    }
+
+    for (Expr *RefExpr : TmpList)
+      OSSClauseChecker.VisitClauseExpr(RefExpr, CKind);
+
+    ReductionNSLoc.push_back(ReductionCXXScopeSpecs[i].getWithLocInContext(Context));
+    Reductions_it += ReductionListSizes[i];
+    UnresolvedReductions_it += ReductionListSizes[i];
+  }
+  if (!Ndranges.empty()) {
+    if (!(DevType == OSSTaskDeclAttr::DeviceType::Cuda
+        || DevType == OSSTaskDeclAttr::DeviceType::Opencl))
+      Diag(DeviceLoc, diag::err_oss_ndrange_incompatible_device);
+
+    checkNdrange(*this, NdrangeLoc, Ndranges, NdrangesRes, /*Outline=*/true);
+  }
+
+  // FIXME: the specs says the underlying type of a enum
+  // is implementation defined. I do this to be able to compile
+  // but it has to be done in a better way. TableGen does not
+  // have a BinaryOperatorKind type.
+  SmallVector<unsigned, 4> TmpReductionKinds;
+  for (BinaryOperatorKind &b : RD.ReductionKinds)
+    TmpReductionKinds.push_back(b);
 
   auto *NewAttr = OSSTaskDeclAttr::CreateImplicit(
     Context,
     IfRes.get(), FinalRes.get(), CostRes.get(), PriorityRes.get(),
-    LabelRes.get(),
-    Wait,
+    Wait, DevType,
     OnreadyRes.get(),
+    const_cast<Expr **>(LabelsRes.data()), LabelsRes.size(),
     const_cast<Expr **>(Ins.data()), Ins.size(),
     const_cast<Expr **>(Outs.data()), Outs.size(),
     const_cast<Expr **>(Inouts.data()), Inouts.size(),
@@ -2542,7 +4590,18 @@ Sema::DeclGroupPtrTy Sema::ActOnOmpSsDeclareTaskDirective(
     const_cast<Expr **>(DepWeakInouts.data()), DepWeakInouts.size(),
     const_cast<Expr **>(DepWeakConcurrents.data()), DepWeakConcurrents.size(),
     const_cast<Expr **>(DepWeakCommutatives.data()), DepWeakCommutatives.size(),
+    const_cast<unsigned *>(ReductionListSizes.data()), ReductionListSizes.size(),
+    const_cast<Expr **>(RD.Vars.data()), RD.Vars.size(),
+    const_cast<Expr **>(RD.LHSs.data()), RD.LHSs.size(),
+    const_cast<Expr **>(RD.RHSs.data()), RD.RHSs.size(),
+    const_cast<Expr **>(RD.ReductionOps.data()), RD.ReductionOps.size(),
+    const_cast<unsigned *>(TmpReductionKinds.data()), RD.ReductionKinds.size(),
+    const_cast<unsigned *>(ReductionClauseType.data()), ReductionClauseType.size(),
+    const_cast<NestedNameSpecifierLoc *>(ReductionNSLoc.data()), ReductionNSLoc.size(),
+    const_cast<DeclarationNameInfo *>(ReductionIds.data()), ReductionIds.size(),
+    const_cast<Expr **>(NdrangesRes.data()), NdrangesRes.size(),
     SR);
+  ADecl->dropAttr<OSSTaskDeclSentinelAttr>();
   ADecl->addAttr(NewAttr);
   return DG;
 }
@@ -3043,55 +5102,11 @@ buildDeclareReductionRef(Sema &SemaRef, SourceLocation Loc, SourceRange Range,
   return ExprEmpty();
 }
 
-namespace {
-/// Data for the reduction-based clauses.
-struct ReductionData {
-  /// List of original reduction items.
-  SmallVector<Expr *, 8> Vars;
-  /// LHS expressions for the reduction_op expressions.
-  SmallVector<Expr *, 8> LHSs;
-  /// RHS expressions for the reduction_op expressions.
-  SmallVector<Expr *, 8> RHSs;
-  /// Reduction operation expression.
-  SmallVector<Expr *, 8> ReductionOps;
-  /// Reduction operation kind. BO_Comma stands for UDR
-  SmallVector<BinaryOperatorKind, 8> ReductionKinds;
-  ReductionData() = delete;
-  /// Reserves required memory for the reduction data.
-  ReductionData(unsigned Size) {
-    Vars.reserve(Size);
-    LHSs.reserve(Size);
-    RHSs.reserve(Size);
-    ReductionOps.reserve(Size);
-    ReductionKinds.reserve(Size);
-  }
-  /// Stores reduction item and reduction operation only (required for dependent
-  /// reduction item).
-  void push(Expr *Item, Expr *ReductionOp) {
-    Vars.emplace_back(Item);
-    LHSs.emplace_back(nullptr);
-    RHSs.emplace_back(nullptr);
-    ReductionOps.emplace_back(ReductionOp);
-    ReductionKinds.emplace_back(BO_Comma);
-  }
-  /// Stores reduction data.
-  void push(Expr *Item, Expr *LHS, Expr *RHS, Expr *ReductionOp,
-            BinaryOperatorKind BOK) {
-    Vars.emplace_back(Item);
-    LHSs.emplace_back(LHS);
-    RHSs.emplace_back(RHS);
-    ReductionOps.emplace_back(ReductionOp);
-    ReductionKinds.emplace_back(BOK);
-  }
-};
-} // namespace
-
 static bool actOnOSSReductionKindClause(
     Sema &S, DSAStackTy *Stack, OmpSsClauseKind ClauseKind,
-    ArrayRef<Expr *> VarList, SourceLocation StartLoc, SourceLocation LParenLoc,
-    SourceLocation ColonLoc, SourceLocation EndLoc,
-    CXXScopeSpec &ReductionIdScopeSpec, const DeclarationNameInfo &ReductionId,
-    ArrayRef<Expr *> UnresolvedReductions, ReductionData &RD) {
+    ArrayRef<Expr *> VarList, CXXScopeSpec &ReductionIdScopeSpec,
+    const DeclarationNameInfo &ReductionId, ArrayRef<Expr *> UnresolvedReductions,
+    ReductionData &RD, bool Outline) {
   DeclarationName DN = ReductionId.getName();
   OverloadedOperatorKind OOK = DN.getCXXOverloadedOperator();
   BinaryOperatorKind BOK = BO_Comma;
@@ -3242,6 +5257,18 @@ static bool actOnOSSReductionKindClause(
     if (!Type.isPODType(S.Context)) {
       S.Diag(ELoc, diag::err_oss_non_pod_reduction);
       continue;
+    }
+
+    if (Outline) {
+      if (const DeclRefExpr *DRE = dyn_cast<DeclRefExpr>(RefExpr->IgnoreParenImpCasts())) {
+        if (const VarDecl *VD = dyn_cast<VarDecl>(DRE->getDecl())) {
+          if (!(VD->getType()->isReferenceType() || VD->hasGlobalStorage())) {
+            S.Diag(ELoc, diag::err_oss_expected_lvalue_reference_or_global_or_dereference_or_array_item)
+              << 1 << DRE->getSourceRange();
+            return false;
+          }
+        }
+      }
     }
 
     // Try to find 'declare reduction' corresponding construct before using
@@ -3472,9 +5499,8 @@ Sema::ActOnOmpSsReductionClause(OmpSsClauseKind Kind, ArrayRef<Expr *> VarList,
                        ArrayRef<Expr *> UnresolvedReductions) {
   ReductionData RD(VarList.size());
   if (actOnOSSReductionKindClause(*this, DSAStack, Kind, VarList,
-                                  StartLoc, LParenLoc, ColonLoc, EndLoc,
                                   ReductionIdScopeSpec, ReductionId,
-                                  UnresolvedReductions, RD))
+                                  UnresolvedReductions, RD, /*Outline=*/false))
     return nullptr;
   return OSSReductionClause::Create(
       Context, StartLoc, LParenLoc, ColonLoc, EndLoc, RD.Vars,
@@ -3495,96 +5521,8 @@ Sema::ActOnOmpSsDependClause(ArrayRef<OmpSsDependClauseKind> DepKinds, SourceLoc
     return nullptr;
 
   for (Expr *RefExpr : VarList) {
-    SourceLocation ELoc = RefExpr->getExprLoc();
-    Expr *SimpleExpr = RefExpr->IgnoreParenCasts();
-    if (RefExpr->containsUnexpandedParameterPack()) {
-      Diag(RefExpr->getExprLoc(), diag::err_oss_variadic_templates_not_clause_allowed);
-      continue;
-    } else if (RefExpr->isTypeDependent() || RefExpr->isValueDependent()) {
-      // It will be analyzed later.
-      ClauseVars.push_back(RefExpr);
-      continue;
-    }
-
-    if (RequireCompleteExprType(RefExpr, diag::err_oss_incomplete_type))
-      continue;
-
-    // TODO: check with OSSArraySectionExpr
-    auto *ASE = dyn_cast<ArraySubscriptExpr>(SimpleExpr);
-    // Allow only LValues, forbid ArraySubscripts over things
-    // that are not an array like:
-    //   typedef float V __attribute__((vector_size(16)));
-    //   V a;
-    //   #pragma oss task in(a[3])
-    // and functions:
-    //   void foo() { #pragma oss task in(foo) {} }
-    if (RefExpr->IgnoreParenImpCasts()->getType()->isFunctionType() ||
-        !RefExpr->IgnoreParenImpCasts()->isLValue() ||
-        (ASE &&
-         !ASE->getBase()->getType().getNonReferenceType()->isPointerType() &&
-         !ASE->getBase()->getType().getNonReferenceType()->isArrayType())) {
-      Diag(ELoc, diag::err_oss_expected_addressable_lvalue_or_array_item)
-          << RefExpr->getSourceRange();
-      continue;
-    }
-
-    class CheckCallExpr
-        : public ConstStmtVisitor<CheckCallExpr, bool> {
-    // This Visitor checks the base of the
-    // dependency is over a CallExpr, which is error.
-    // int *get();
-    // auto l = []() -> int * {...};
-    // #pragma oss task in(get()[1], l()[3])
-    public:
-      bool VisitOSSMultiDepExpr(const OSSMultiDepExpr *E) {
-        return Visit(E->getDepExpr());
-      }
-
-      bool VisitOSSArrayShapingExpr(const OSSArrayShapingExpr *E) {
-        return Visit(E->getBase());
-      }
-
-      bool VisitOSSArraySectionExpr(const OSSArraySectionExpr *E) {
-        return Visit(E->getBase());
-      }
-
-      bool VisitArraySubscriptExpr(const ArraySubscriptExpr *E) {
-        return Visit(E->getBase());
-      }
-
-      bool VisitUnaryOperator(const UnaryOperator *E) {
-        return Visit(E->getSubExpr());
-      }
-
-      bool VisitMemberExpr(const MemberExpr *E) {
-        return Visit(E->getBase());
-      }
-
-      bool VisitCallExpr(const CallExpr *E) {
-        return true;
-      }
-    };
-    CheckCallExpr CCE;
-    if (CCE.Visit(RefExpr)) {
-      Diag(ELoc, diag::err_oss_call_expr_support)
-          << RefExpr->getSourceRange();
-      continue;
-    }
-
-    bool InvalidArraySection = false;
-    while (auto *OASE = dyn_cast<OSSArraySectionExpr>(SimpleExpr)) {
-      if (!OASE->isColonForm() && !OSSSyntax) {
-        Diag(OASE->getColonLoc(), diag::err_oss_section_invalid_form)
-            << RefExpr->getSourceRange();
-        // Only diagnose the first error
-        InvalidArraySection = true;
-        break;
-      }
-      SimpleExpr = OASE->getBase()->IgnoreParenImpCasts();
-    }
-    if (InvalidArraySection)
-      continue;
-    ClauseVars.push_back(RefExpr->IgnoreParenImpCasts());
+    if (checkDependency(*this, RefExpr, OSSSyntax, /*Outline=*/false))
+      ClauseVars.push_back(RefExpr->IgnoreParenImpCasts());
   }
   return OSSDependClause::Create(Context, StartLoc, LParenLoc, EndLoc,
                                  DepKinds, DepKindsOrdered,
@@ -3611,6 +5549,9 @@ Sema::ActOnOmpSsVarListClause(
     break;
   case OSSC_firstprivate:
     Res = ActOnOmpSsFirstprivateClause(Vars, StartLoc, LParenLoc, EndLoc);
+    break;
+  case OSSC_ndrange:
+    Res = ActOnOmpSsNdrangeClause(Vars, StartLoc, LParenLoc, EndLoc);
     break;
   case OSSC_depend:
     Res = ActOnOmpSsDependClause(DepKinds, DepLoc, ColonLoc, Vars,
@@ -3639,6 +5580,10 @@ Sema::ActOnOmpSsVarListClause(
     break;
   case OSSC_commutative:
     Res = ActOnOmpSsDependClause({ OSSC_DEPEND_mutexinoutset }, DepLoc, ColonLoc, Vars,
+                                 StartLoc, LParenLoc, EndLoc, /*OSSSyntax=*/true);
+    break;
+  case OSSC_on:
+    Res = ActOnOmpSsDependClause({ OSSC_DEPEND_inout }, DepLoc, ColonLoc, Vars,
                                  StartLoc, LParenLoc, EndLoc, /*OSSSyntax=*/true);
     break;
   case OSSC_weakin:
@@ -3672,6 +5617,24 @@ Sema::ActOnOmpSsVarListClause(
 }
 
 OSSClause *
+Sema::ActOnOmpSsFixedListClause(
+  OmpSsClauseKind Kind, ArrayRef<Expr *> Vars,
+  SourceLocation StartLoc, SourceLocation LParenLoc,
+  SourceLocation EndLoc) {
+
+  OSSClause *Res = nullptr;
+  switch (Kind) {
+  case OSSC_label:
+    Res = ActOnOmpSsLabelClause(Vars, StartLoc, LParenLoc, EndLoc);
+    break;
+  default:
+    llvm_unreachable("Clause is not allowed.");
+  }
+
+  return Res;
+}
+
+OSSClause *
 Sema::ActOnOmpSsSimpleClause(OmpSsClauseKind Kind,
                              unsigned Argument,
                              SourceLocation ArgumentLoc,
@@ -3682,7 +5645,12 @@ Sema::ActOnOmpSsSimpleClause(OmpSsClauseKind Kind,
   switch (Kind) {
   case OSSC_default:
     Res =
-    ActOnOmpSsDefaultClause(static_cast<OmpSsDefaultClauseKind>(Argument),
+    ActOnOmpSsDefaultClause(static_cast<llvm::oss::DefaultKind>(Argument),
+                                 ArgumentLoc, StartLoc, LParenLoc, EndLoc);
+    break;
+  case OSSC_device:
+    Res =
+    ActOnOmpSsDeviceClause(static_cast<OmpSsDeviceClauseKind>(Argument),
                                  ArgumentLoc, StartLoc, LParenLoc, EndLoc);
     break;
   default:
@@ -3691,27 +5659,62 @@ Sema::ActOnOmpSsSimpleClause(OmpSsClauseKind Kind,
   return Res;
 }
 
-OSSClause *Sema::ActOnOmpSsDefaultClause(OmpSsDefaultClauseKind Kind,
+OSSClause *Sema::ActOnOmpSsDefaultClause(llvm::oss::DefaultKind Kind,
+                                          SourceLocation KindKwLoc,
+                                          SourceLocation StartLoc,
+                                          SourceLocation LParenLoc,
+                                          SourceLocation EndLoc) {
+  if (Kind == OSS_DEFAULT_unknown) {
+    Diag(KindKwLoc, diag::err_oss_unexpected_clause_value)
+        << getListOfPossibleValues(OSSC_default, /*First=*/0,
+                                   /*Last=*/unsigned(OSS_DEFAULT_unknown))
+        << getOmpSsClauseName(OSSC_default);
+    return nullptr;
+  }
+
+  switch (Kind) {
+  case OSS_DEFAULT_none:
+    DSAStack->setDefaultDSANone(KindKwLoc);
+    break;
+  case OSS_DEFAULT_shared:
+    DSAStack->setDefault(DSA_shared, KindKwLoc);
+    break;
+  case OSS_DEFAULT_private:
+    DSAStack->setDefault(DSA_private, KindKwLoc);
+    break;
+  case OSS_DEFAULT_firstprivate:
+    DSAStack->setDefault(DSA_firstprivate, KindKwLoc);
+    break;
+  default:
+    llvm_unreachable("DSA unexpected in OmpSs-2 default clause");
+  }
+  return new (Context)
+      OSSDefaultClause(Kind, KindKwLoc, StartLoc, LParenLoc, EndLoc);
+}
+
+OSSClause *Sema::ActOnOmpSsDeviceClause(OmpSsDeviceClauseKind Kind,
                                           SourceLocation KindKwLoc,
                                           SourceLocation StartLoc,
                                           SourceLocation LParenLoc,
                                           SourceLocation EndLoc) {
   switch (Kind) {
-  case OSSC_DEFAULT_none:
-    DSAStack->setDefaultDSANone(KindKwLoc);
+  case OSSC_DEVICE_smp:
+  case OSSC_DEVICE_opencl:
+  case OSSC_DEVICE_cuda:
     break;
-  case OSSC_DEFAULT_shared:
-    DSAStack->setDefaultDSAShared(KindKwLoc);
+  case OSSC_DEVICE_fpga:
+    Diag(KindKwLoc, diag::err_oss_inline_device_not_supported)
+      << getOmpSsSimpleClauseTypeName(OSSC_device, Kind);
     break;
-  case OSSC_DEFAULT_unknown:
+  case OSSC_DEVICE_unknown:
     Diag(KindKwLoc, diag::err_oss_unexpected_clause_value)
-        << getListOfPossibleValues(OSSC_default, /*First=*/0,
-                                   /*Last=*/OSSC_DEFAULT_unknown)
-        << getOmpSsClauseName(OSSC_default);
+        << getListOfPossibleValues(OSSC_device, /*First=*/0,
+                                   /*Last=*/OSSC_DEVICE_unknown)
+        << getOmpSsClauseName(OSSC_device);
     return nullptr;
   }
   return new (Context)
-      OSSDefaultClause(Kind, KindKwLoc, StartLoc, LParenLoc, EndLoc);
+      OSSDeviceClause(Kind, KindKwLoc, StartLoc, LParenLoc, EndLoc);
 }
 
 ExprResult Sema::PerformOmpSsImplicitIntegerConversion(SourceLocation Loc,
@@ -3954,10 +5957,24 @@ Sema::ActOnOmpSsFirstprivateClause(ArrayRef<Expr *> Vars,
                                        ClauseVars, PrivateCopies, Inits);
 }
 
+OSSClause *
+Sema::ActOnOmpSsNdrangeClause(ArrayRef<Expr *> Vars,
+                       SourceLocation StartLoc,
+                       SourceLocation LParenLoc,
+                       SourceLocation EndLoc) {
+  SmallVector<Expr *, 4> ClauseVars;
+  if (!checkNdrange(*this, StartLoc, Vars, ClauseVars, /*Outline=*/false))
+    return nullptr;
+
+  return OSSNdrangeClause::Create(
+      Context, StartLoc, LParenLoc, EndLoc, ClauseVars);
+}
+
 ExprResult Sema::CheckNonNegativeIntegerValue(Expr *ValExpr,
                                       OmpSsClauseKind CKind,
-                                      bool StrictlyPositive) {
-  ExprResult Res = CheckSignedIntegerValue(ValExpr);
+                                      bool StrictlyPositive,
+                                      bool Outline) {
+  ExprResult Res = CheckSignedIntegerValue(ValExpr, Outline);
   if (Res.isInvalid())
     return ExprError();
 
@@ -3997,7 +6014,7 @@ ExprResult Sema::VerifyBooleanConditionWithCleanups(
   return Condition;
 }
 
-ExprResult Sema::CheckIsConstCharPtrConvertibleExpr(Expr *E) {
+ExprResult Sema::CheckIsConstCharPtrConvertibleExpr(Expr *E, bool ConstConstraint) {
   const QualType &ConstCharPtrTy =
       Context.getPointerType(Context.CharTy.withConst());
 
@@ -4011,6 +6028,23 @@ ExprResult Sema::CheckIsConstCharPtrConvertibleExpr(Expr *E) {
                          /*DirectInit=*/false);
     if (!LabelVD->hasInit())
       return ExprError();
+
+    if (ConstConstraint) {
+      if (auto *DRE = dyn_cast<DeclRefExpr>(E)) {
+        if (auto *VD = dyn_cast<VarDecl>(DRE->getDecl())) {
+          bool IsClassType;
+          // Only allow these cases
+          // const char* const k1 = "hola";
+          // const char k2[] = "hola";
+          if (!(VD->hasGlobalStorage()
+              && isConstNotMutableType(*this, VD->getType(), /*AcceptIfMutable*/ false, &IsClassType))
+              || !VD->hasInit() || !isa<StringLiteral>(VD->getInit()->IgnoreParenImpCasts())) {
+            Diag(E->getExprLoc(), diag::err_oss_non_const_variable);
+            return ExprError();
+          }
+        }
+      }
+    }
 
     return LabelVD->getInit();
   }
@@ -4036,10 +6070,8 @@ ExprResult Sema::VerifyPositiveIntegerConstant(
         << E->getSourceRange();
     return ExprError();
   }
-  if (CKind == OSSC_collapse && DSAStack->getAssociatedLoops() == 1) {
+  if (CKind == OSSC_collapse && DSAStack->getAssociatedLoops() == 1)
     DSAStack->setAssociatedLoops(Result.getExtValue());
-    DSAStack->setSeenAssociatedLoops(0);
-  }
   return ICE;
 }
 
@@ -4072,14 +6104,14 @@ OSSClause *Sema::ActOnOmpSsCostClause(Expr *E,
   // The parameter of the cost() clause must be > 0
   // expression.
   ExprResult Res = CheckNonNegativeIntegerValue(
-    E, OSSC_cost, /*StrictlyPositive=*/false);
+    E, OSSC_cost, /*StrictlyPositive=*/false, /*Outline=*/false);
   if (Res.isInvalid())
     return nullptr;
 
   return new (Context) OSSCostClause(Res.get(), StartLoc, LParenLoc, EndLoc);
 }
 
-ExprResult Sema::CheckSignedIntegerValue(Expr *ValExpr) {
+ExprResult Sema::CheckSignedIntegerValue(Expr *ValExpr, bool Outline) {
   if (!ValExpr->isTypeDependent() && !ValExpr->isValueDependent() &&
       !ValExpr->isInstantiationDependent() &&
       !ValExpr->containsUnexpandedParameterPack()) {
@@ -4088,6 +6120,12 @@ ExprResult Sema::CheckSignedIntegerValue(Expr *ValExpr) {
         PerformOmpSsImplicitIntegerConversion(Loc, ValExpr);
     if (Value.isInvalid())
       return ExprError();
+    if (Outline) {
+      OSSGlobalFinderVisitor GlobalFinderVisitor(*this);
+      GlobalFinderVisitor.Visit(ValExpr);
+      if (GlobalFinderVisitor.isErrorFound())
+        return ExprError();
+    }
     return Value.get();
   }
   return ValExpr;
@@ -4099,22 +6137,35 @@ OSSClause *Sema::ActOnOmpSsPriorityClause(Expr *E,
                                       SourceLocation EndLoc) {
   // The parameter of the priority() clause must be integer signed
   // expression.
-  ExprResult Res = CheckSignedIntegerValue(E);
+  ExprResult Res = CheckSignedIntegerValue(E, /*Outline=*/false);
   if (Res.isInvalid())
     return nullptr;
 
   return new (Context) OSSPriorityClause(Res.get(), StartLoc, LParenLoc, EndLoc);
 }
 
-OSSClause *Sema::ActOnOmpSsLabelClause(Expr *E,
+OSSClause *Sema::ActOnOmpSsLabelClause(ArrayRef<Expr *> VarList,
                                        SourceLocation StartLoc,
                                        SourceLocation LParenLoc,
                                        SourceLocation EndLoc) {
-  ExprResult Res = CheckIsConstCharPtrConvertibleExpr(E);
-  if (Res.isInvalid())
+  SmallVector<Expr *, 2> ClauseVars;
+  ExprResult LabelRes;
+  ExprResult InstLabelRes;
+
+  LabelRes = CheckIsConstCharPtrConvertibleExpr(
+    VarList[0], /*ConstConstraint=*/true);
+  ClauseVars.push_back(LabelRes.get());
+
+  if (VarList.size() == 2) {
+    InstLabelRes = CheckIsConstCharPtrConvertibleExpr(
+      VarList[1], /*ConstConstraint=*/false);
+    ClauseVars.push_back(InstLabelRes.get());
+  }
+
+  if (LabelRes.isInvalid() || InstLabelRes.isInvalid())
     return nullptr;
 
-  return new (Context) OSSLabelClause(Res.get(), StartLoc, LParenLoc, EndLoc);
+  return OSSLabelClause::Create(Context, StartLoc, LParenLoc, EndLoc, ClauseVars);
 }
 
 OSSClause *Sema::ActOnOmpSsOnreadyClause(Expr *E,
@@ -4133,7 +6184,7 @@ OSSClause *Sema::ActOnOmpSsChunksizeClause(
   // The parameter of the chunksize() clause must be > 0
   // expression.
   ExprResult Res = CheckNonNegativeIntegerValue(
-    E, OSSC_chunksize, /*StrictlyPositive=*/false);
+    E, OSSC_chunksize, /*StrictlyPositive=*/false, /*Outline=*/false);
   if (Res.isInvalid())
     return nullptr;
 
@@ -4146,11 +6197,24 @@ OSSClause *Sema::ActOnOmpSsGrainsizeClause(
   // The parameter of the grainsize() clause must be > 0
   // expression.
   ExprResult Res = CheckNonNegativeIntegerValue(
-    E, OSSC_grainsize, /*StrictlyPositive=*/false);
+    E, OSSC_grainsize, /*StrictlyPositive=*/false, /*Outline=*/false);
   if (Res.isInvalid())
     return nullptr;
 
   return new (Context) OSSGrainsizeClause(Res.get(), StartLoc, LParenLoc, EndLoc);
+}
+
+OSSClause *Sema::ActOnOmpSsUnrollClause(
+    Expr *E, SourceLocation StartLoc,
+    SourceLocation LParenLoc, SourceLocation EndLoc) {
+  // The parameter of the unroll() clause must be > 0
+  // expression.
+  ExprResult Res = CheckNonNegativeIntegerValue(
+    E, OSSC_grainsize, /*StrictlyPositive=*/false, /*Outline=*/false);
+  if (Res.isInvalid())
+    return nullptr;
+
+  return new (Context) OSSUnrollClause(Res.get(), StartLoc, LParenLoc, EndLoc);
 }
 
 OSSClause *Sema::ActOnOmpSsCollapseClause(
@@ -4184,9 +6248,6 @@ OSSClause *Sema::ActOnOmpSsSingleExprClause(OmpSsClauseKind Kind, Expr *Expr,
   case OSSC_priority:
     Res = ActOnOmpSsPriorityClause(Expr, StartLoc, LParenLoc, EndLoc);
     break;
-  case OSSC_label:
-    Res = ActOnOmpSsLabelClause(Expr, StartLoc, LParenLoc, EndLoc);
-    break;
   case OSSC_onready:
     Res = ActOnOmpSsOnreadyClause(Expr, StartLoc, LParenLoc, EndLoc);
     break;
@@ -4195,6 +6256,9 @@ OSSClause *Sema::ActOnOmpSsSingleExprClause(OmpSsClauseKind Kind, Expr *Expr,
     break;
   case OSSC_grainsize:
     Res = ActOnOmpSsGrainsizeClause(Expr, StartLoc, LParenLoc, EndLoc);
+    break;
+  case OSSC_unroll:
+    Res = ActOnOmpSsUnrollClause(Expr, StartLoc, LParenLoc, EndLoc);
     break;
   case OSSC_collapse:
     Res = ActOnOmpSsCollapseClause(Expr, StartLoc, LParenLoc, EndLoc);
@@ -4213,6 +6277,36 @@ OSSClause *Sema::ActOnOmpSsClause(OmpSsClauseKind Kind,
   case OSSC_wait:
     Res = ActOnOmpSsWaitClause(StartLoc, EndLoc);
     break;
+  case OSSC_update:
+    Res = ActOnOmpSsUpdateClause(StartLoc, EndLoc);
+    break;
+  case OSSC_read:
+    Res = ActOnOmpSsReadClause(StartLoc, EndLoc);
+    break;
+  case OSSC_write:
+    Res = ActOnOmpSsWriteClause(StartLoc, EndLoc);
+    break;
+  case OSSC_capture:
+    Res = ActOnOmpSsCaptureClause(StartLoc, EndLoc);
+    break;
+  case OSSC_compare:
+    Res = ActOnOmpSsCompareClause(StartLoc, EndLoc);
+    break;
+  case OSSC_seq_cst:
+    Res = ActOnOmpSsSeqCstClause(StartLoc, EndLoc);
+    break;
+  case OSSC_acq_rel:
+    Res = ActOnOmpSsAcqRelClause(StartLoc, EndLoc);
+    break;
+  case OSSC_acquire:
+    Res = ActOnOmpSsAcquireClause(StartLoc, EndLoc);
+    break;
+  case OSSC_release:
+    Res = ActOnOmpSsReleaseClause(StartLoc, EndLoc);
+    break;
+  case OSSC_relaxed:
+    Res = ActOnOmpSsRelaxedClause(StartLoc, EndLoc);
+    break;
   default:
     llvm_unreachable("Clause is not allowed.");
   }
@@ -4223,3 +6317,54 @@ OSSClause *Sema::ActOnOmpSsWaitClause(SourceLocation StartLoc,
                                       SourceLocation EndLoc) {
   return new (Context) OSSWaitClause(StartLoc, EndLoc);
 }
+
+OSSClause *Sema::ActOnOmpSsUpdateClause(SourceLocation StartLoc,
+                                        SourceLocation EndLoc) {
+  return new (Context) OSSUpdateClause(StartLoc, EndLoc);
+}
+
+OSSClause *Sema::ActOnOmpSsReadClause(SourceLocation StartLoc,
+                                       SourceLocation EndLoc) {
+  return new (Context) OSSReadClause(StartLoc, EndLoc);
+}
+
+OSSClause *Sema::ActOnOmpSsWriteClause(SourceLocation StartLoc,
+                                        SourceLocation EndLoc) {
+  return new (Context) OSSWriteClause(StartLoc, EndLoc);
+}
+
+OSSClause *Sema::ActOnOmpSsCaptureClause(SourceLocation StartLoc,
+                                          SourceLocation EndLoc) {
+  return new (Context) OSSCaptureClause(StartLoc, EndLoc);
+}
+
+OSSClause *Sema::ActOnOmpSsCompareClause(SourceLocation StartLoc,
+                                          SourceLocation EndLoc) {
+  return new (Context) OSSCompareClause(StartLoc, EndLoc);
+}
+
+OSSClause *Sema::ActOnOmpSsSeqCstClause(SourceLocation StartLoc,
+                                         SourceLocation EndLoc) {
+  return new (Context) OSSSeqCstClause(StartLoc, EndLoc);
+}
+
+OSSClause *Sema::ActOnOmpSsAcqRelClause(SourceLocation StartLoc,
+                                         SourceLocation EndLoc) {
+  return new (Context) OSSAcqRelClause(StartLoc, EndLoc);
+}
+
+OSSClause *Sema::ActOnOmpSsAcquireClause(SourceLocation StartLoc,
+                                          SourceLocation EndLoc) {
+  return new (Context) OSSAcquireClause(StartLoc, EndLoc);
+}
+
+OSSClause *Sema::ActOnOmpSsReleaseClause(SourceLocation StartLoc,
+                                          SourceLocation EndLoc) {
+  return new (Context) OSSReleaseClause(StartLoc, EndLoc);
+}
+
+OSSClause *Sema::ActOnOmpSsRelaxedClause(SourceLocation StartLoc,
+                                          SourceLocation EndLoc) {
+  return new (Context) OSSRelaxedClause(StartLoc, EndLoc);
+}
+

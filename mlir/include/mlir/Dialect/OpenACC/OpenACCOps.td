@@ -26,6 +26,7 @@ def OpenACC_Dialect : Dialect {
   }];
 
   let useDefaultAttributePrinterParser = 1;
+  let useFoldAPI = kEmitFoldAdaptorFolder;
   let cppNamespace = "::mlir::acc";
 }
 
@@ -34,11 +35,7 @@ include "mlir/Dialect/OpenACC/AccCommon.td"
 
 // Base class for OpenACC dialect ops.
 class OpenACC_Op<string mnemonic, list<Trait> traits = []> :
-  Op<OpenACC_Dialect, mnemonic, traits> {
-
-  let printer = [{ return ::print(p, *this); }];
-  let parser = [{ return ::parse$cppClass(parser, result); }];
-}
+  Op<OpenACC_Dialect, mnemonic, traits>;
 
 // Reduction operation enumeration.
 def OpenACC_ReductionOpAdd     : I32EnumAttrCase<"redop_add", 0>;
@@ -152,6 +149,7 @@ def OpenACC_ParallelOp : OpenACC_Op<"parallel",
     /// The i-th data operand passed.
     Value getDataOperand(unsigned i);
   }];
+  let hasCustomAssemblyFormat = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -390,11 +388,11 @@ def OpenACC_LoopOp : OpenACC_Op<"loop",
   let regions = (region AnyRegion:$region);
 
   let extraClassDeclaration = [{
-    static StringRef getCollapseAttrName() { return "collapse"; }
-    static StringRef getSeqAttrName() { return "seq"; }
-    static StringRef getIndependentAttrName() { return "independent"; }
-    static StringRef getAutoAttrName() { return "auto"; }
-    static StringRef getExecutionMappingAttrName() { return "exec_mapping"; }
+    static StringRef getCollapseAttrStrName() { return "collapse"; }
+    static StringRef getSeqAttrStrName() { return "seq"; }
+    static StringRef getIndependentAttrStrName() { return "independent"; }
+    static StringRef getAutoAttrStrName() { return "auto"; }
+    static StringRef getExecutionMappingAttrStrName() { return "exec_mapping"; }
     static StringRef getGangKeyword() { return "gang"; }
     static StringRef getGangNumKeyword() { return "num"; }
     static StringRef getGangStaticKeyword() { return "static"; }
@@ -404,6 +402,7 @@ def OpenACC_LoopOp : OpenACC_Op<"loop",
     static StringRef getPrivateKeyword() { return "private"; }
     static StringRef getReductionKeyword() { return "reduction"; }
   }];
+  let hasCustomAssemblyFormat = 1;
   let hasVerifier = 1;
 }
 

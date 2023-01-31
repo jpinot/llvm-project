@@ -28,6 +28,9 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/IR/Operator.h"
+#include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/DataLayout.h"
 
 // for debug/understanding purpose
 #include <fstream>
@@ -54,149 +57,149 @@ TaskDependencyGraphPass::~TaskDependencyGraphPass() = default;
 void TaskDependencyGraphData::obtainTaskInfo(TaskInfo &TaskFound,
                                              CallInst &TaskCallInst,
                                              DominatorTree &DT) {
-
   // Get dependency info from the task call, operand 4
-  Instruction *DepStructCast =
-      dyn_cast<Instruction>(TaskCallInst.getArgOperand(4));
+  AllocaInst *DepStruct = dyn_cast<AllocaInst>(TaskCallInst.getArgOperand(4));
+  auto Array = dyn_cast<ArrayType>(DepStruct->getAllocatedType());
+  int TotalNumDeps = Array->getNumElements();
 
-  // Must be a bitcast
-  if (BitCastInst *DepStructCastType = dyn_cast<BitCastInst>(DepStructCast)) {
+  // Vector to store the dependency info of each dep
+  std::vector<std::vector<Value *>> DepInfo(
+      TotalNumDeps,
+      std::vector<Value *>(3)); // 0: Base Adress, 1 : Size , 2: Type of dep
 
-    // Get the number of dependencies
-    Instruction *DepStruct =
-        dyn_cast<Instruction>(DepStructCastType->getOperand(0));
-    auto Array =
-        dyn_cast<ArrayType>(DepStruct->getType()->getPointerElementType());
-    int TotalNumDeps = Array->getNumElements();
+  // Find instructions that target the dependency info struct, and store them
+  for (User *U : DepStruct->users()) {
+    if (GetElementPtrInst *GetDepField = dyn_cast<GetElementPtrInst>(U)) {
 
-    // Vector to store the dependency info of each dep
-    std::vector<std::vector<Value *>> DepInfo(
-        TotalNumDeps,
-        std::vector<Value *>(3)); // 0: Base Adress, 1 : Size , 2: Type of dep
+      int DepNum, DepField;
+      DepNum = DepField = 0;
 
-    // Find instructions that target the dependency info struct, and store them
-    for (User *U : DepStruct->users()) {
-      if (GetElementPtrInst *GetDepField = dyn_cast<GetElementPtrInst>(U)) {
+      if (ConstantInt *CI = dyn_cast<ConstantInt>(GetDepField->getOperand(1))) {
+        if (CI->getBitWidth() <= 64) {
+          DepNum = CI->getSExtValue();
+        }
+      }
 
-        int DepNum, DepField;
-        DepNum = DepField = 0;
-
+      if (GetDepField->getNumIndices() == 2)
         if (ConstantInt *CI =
                 dyn_cast<ConstantInt>(GetDepField->getOperand(2))) {
-          if (CI->getBitWidth() <= 64) {
-            DepNum = CI->getSExtValue();
-          }
-        }
-        if (ConstantInt *CI =
-                dyn_cast<ConstantInt>(GetDepField->getOperand(3))) {
           if (CI->getBitWidth() <= 32) {
             DepField = CI->getSExtValue();
           }
         }
-        DepInfo[DepNum][DepField] = dyn_cast<Value>(U);
-      }
+
+      DepInfo[DepNum][DepField] = dyn_cast<Value>(U);
     }
+  }
 
-    // Vector to store task dep info
-    SmallVector<TaskDependInfo, 2> AllTaskDepInfo;
+  // For the first dependency the getelement ptr for base address is omitted and
+  // alloca inst is used instead
+  DepInfo[0][0] = DepStruct;
 
-    for (int i = 0; i < TotalNumDeps; i++) {
-      // Look for the base
-      TaskDependInfo CurrentTaskDepInfo;
-      for (User *U : DepInfo[i][0]->users()) {
+  // Vector to store task dep info
+  SmallVector<TaskDependInfo, 2> AllTaskDepInfo;
 
-        Instruction *BaseUse = dyn_cast<Instruction>(U);
-        Instruction *TaskCall = dyn_cast<Instruction>(&TaskCallInst);
+  for (int i = 0; i < TotalNumDeps; i++) {
+    // Look for the base
+    TaskDependInfo CurrentTaskDepInfo;
+    for (User *U : DepInfo[i][0]->users()) {
 
-        // Check that the next task call is the one we are looking for
-        CallInst *SelectedTaskCall = nullptr;
-        Instruction *NextIns = BaseUse->getNextNode();
-        while (!SelectedTaskCall  || SelectedTaskCall->getCalledFunction()->getName()!="__kmpc_omp_task_with_deps") {
-          SelectedTaskCall = dyn_cast<CallInst>(NextIns);
-          NextIns = NextIns->getNextNode();
-        }
-        if (SelectedTaskCall != TaskCall){
-            continue;
-        }
-        
-        if (StoreInst *BaseStore = dyn_cast<StoreInst>(U)) {
-          if (PtrToIntOperator *BasePtrToInt =
-                  dyn_cast<PtrToIntOperator>(BaseStore->getValueOperand())) {
-            if (GEPOperator *GEP =
-                    dyn_cast<GEPOperator>(BasePtrToInt->getPointerOperand())) {
+      StoreInst *BaseUse = dyn_cast<StoreInst>(U);
+      if (!BaseUse)
+        continue;
+      Instruction *TaskCall = dyn_cast<Instruction>(&TaskCallInst);
 
-              if (LoadInst *BaseLoad = dyn_cast<LoadInst>(GEP->getOperand(0))) {
-                CurrentTaskDepInfo.base = BaseLoad->getPointerOperand();
-                if (LoadInst *DobleLoad =
-                        dyn_cast<LoadInst>(CurrentTaskDepInfo.base))
-                  CurrentTaskDepInfo.base = DobleLoad->getPointerOperand();
-              } else {
-                CurrentTaskDepInfo.base = GEP->getOperand(0);
-              }
+      // Check that the next task call is the one we are looking for
+      CallInst *SelectedTaskCall = nullptr;
+      Instruction *NextIns = BaseUse->getNextNode();
+      while (!SelectedTaskCall ||
+             SelectedTaskCall->getCalledFunction()->getName() !=
+                 "__kmpc_omp_task_with_deps") {
+        SelectedTaskCall = dyn_cast<CallInst>(NextIns);
+        NextIns = NextIns->getNextNode();
+      }
+      if (SelectedTaskCall != TaskCall) {
+        continue;
+      }
 
-              CurrentTaskDepInfo.isArray = true;
-              for (int i = 1; i < (int)GEP->getNumOperands(); i++) {
-                if (ConstantInt *CI =
-                        dyn_cast<ConstantInt>(GEP->getOperand(i))) {
-                  CurrentTaskDepInfo.index.push_back(CI->getZExtValue());
-                } else {
-                  llvm_unreachable(
-                      "not constant access, can not compute task "
-                      "dependencies, check that loops are correctly "
-                      "unrolled \n");
-                }
+      CurrentTaskDepInfo.base = nullptr;
+      if (StoreInst *BaseStore = dyn_cast<StoreInst>(U)) {
+        if (PtrToIntOperator *BasePtrToInt =
+                dyn_cast<PtrToIntOperator>(BaseStore->getValueOperand())) {
+          if (GEPOperator *GEP =
+                  dyn_cast<GEPOperator>(BasePtrToInt->getPointerOperand())) {
+
+            if (LoadInst *BaseLoad = dyn_cast<LoadInst>(GEP->getOperand(0))) {
+              CurrentTaskDepInfo.base = BaseLoad->getPointerOperand();
+              if (LoadInst *DobleLoad =
+                      dyn_cast<LoadInst>(CurrentTaskDepInfo.base)) {
+                CurrentTaskDepInfo.base = DobleLoad->getPointerOperand();
               }
             } else {
-              if (LoadInst *BaseLoad =
-                      dyn_cast<LoadInst>(BasePtrToInt->getPointerOperand())) {
+              CurrentTaskDepInfo.base = GEP->getOperand(0);
+            }
 
-                CurrentTaskDepInfo.base = BaseLoad->getPointerOperand();
-                if (LoadInst *DobleLoad =
-                        dyn_cast<LoadInst>(CurrentTaskDepInfo.base))
-                  CurrentTaskDepInfo.base = DobleLoad->getPointerOperand();
-                CurrentTaskDepInfo.isArray = false;
-
+            CurrentTaskDepInfo.isArray = true;
+            for (int i = 1; i < (int)GEP->getNumOperands(); i++) {
+              if (ConstantInt *CI = dyn_cast<ConstantInt>(GEP->getOperand(i))) {
+                CurrentTaskDepInfo.index.push_back(CI->getZExtValue());
               } else {
-                // Store base
-                CurrentTaskDepInfo.base = BasePtrToInt->getPointerOperand();
-                CurrentTaskDepInfo.isArray = false;
+                llvm_unreachable("not constant access, can not compute task "
+                                 "dependencies, check that loops are correctly "
+                                 "unrolled \n");
               }
+            }
+          } else {
+            if (LoadInst *BaseLoad =
+                    dyn_cast<LoadInst>(BasePtrToInt->getPointerOperand())) {
+              CurrentTaskDepInfo.base = BaseLoad->getPointerOperand();
+              if (LoadInst *DobleLoad =
+                      dyn_cast<LoadInst>(CurrentTaskDepInfo.base)) {
+
+                CurrentTaskDepInfo.base = DobleLoad->getPointerOperand();
+              }
+              CurrentTaskDepInfo.isArray = false;
+
+            } else {
+              // Store base
+              CurrentTaskDepInfo.base = BasePtrToInt->getPointerOperand();
+              CurrentTaskDepInfo.isArray = false;
             }
           }
         }
       }
-      // Store type of dep (in=1, out=2, inout=3)
-      for (User *U : DepInfo[i][2]->users()) {
-        Instruction *TypeUse = dyn_cast<Instruction>(U);
-        Instruction *TaskCall = dyn_cast<Instruction>(&TaskCallInst);
+    }
+    //  Store type of dep (in=1, out=2, inout=3)
+    for (User *U : DepInfo[i][2]->users()) {
+      Instruction *TypeUse = dyn_cast<Instruction>(U);
+      Instruction *TaskCall = dyn_cast<Instruction>(&TaskCallInst);
 
-        // Check that the next task call is the one we are looking for
-        CallInst *SelectedTaskCall = nullptr;
-        Instruction *NextIns = TypeUse->getNextNode();
-        while (!SelectedTaskCall) {
-          SelectedTaskCall = dyn_cast<CallInst>(NextIns);
-          NextIns = NextIns->getNextNode();
-        }
-        if (SelectedTaskCall->getCalledFunction() &&
-            SelectedTaskCall->getCalledFunction()->getName() ==
-                "__kmpc_omp_task_with_deps") {
-          if (SelectedTaskCall != TaskCall) {
-            continue;
-          }
-        }
-
-        if (StoreInst *TypeStore = dyn_cast<StoreInst>(U)) {
-          if (ConstantInt *CI =
-                  dyn_cast<ConstantInt>(TypeStore->getValueOperand())) {
-            CurrentTaskDepInfo.type = CI->getZExtValue();
-          } else {
-            llvm_unreachable("type is not constant, something is wrong\n");
-          }
+      // Check that the next task call is the one we are looking for
+      CallInst *SelectedTaskCall = nullptr;
+      Instruction *NextIns = TypeUse->getNextNode();
+      while (!SelectedTaskCall) {
+        SelectedTaskCall = dyn_cast<CallInst>(NextIns);
+        NextIns = NextIns->getNextNode();
+      }
+      if (SelectedTaskCall->getCalledFunction() &&
+          SelectedTaskCall->getCalledFunction()->getName() ==
+              "__kmpc_omp_task_with_deps") {
+        if (SelectedTaskCall != TaskCall) {
+          continue;
         }
       }
-      AllTaskDepInfo.push_back(CurrentTaskDepInfo);
-      TaskFound.TaskDepInfo = AllTaskDepInfo;
+
+      if (StoreInst *TypeStore = dyn_cast<StoreInst>(U)) {
+        if (ConstantInt *CI =
+                dyn_cast<ConstantInt>(TypeStore->getValueOperand())) {
+          CurrentTaskDepInfo.type = CI->getZExtValue();
+        } else {
+          llvm_unreachable("type is not constant, something is wrong\n");
+        }
+      }
     }
+    AllTaskDepInfo.push_back(CurrentTaskDepInfo);
+    TaskFound.TaskDepInfo = AllTaskDepInfo;
   }
 }
 
@@ -205,15 +208,34 @@ void TaskDependencyGraphData::obtainTaskInfo(TaskInfo &TaskFound,
 bool TaskDependencyGraphData::checkDependency(TaskDependInfo &Source,
                                               TaskDependInfo &Dest) {
 
+  int SourceNumIndex =  Source.index.size();
+  int DestNumIndex = Dest.index.size();
+
+  //Clear 0s on the right
+  for(int i = Source.index.size()-1; i >= 0; i--){
+    if(Source.index[i] == 0)
+      SourceNumIndex--;
+    else
+      break;
+  }
+
+  for(int i = Dest.index.size()-1; i >= 0; i--){
+      if(Dest.index[i] == 0)
+        DestNumIndex--;
+      else
+        break;
+  }
+  
+
   if (Source.base != Dest.base || Source.isArray != Dest.isArray ||
       Source.type == 1 || Dest.type == 2 ||
-      Source.index.size() != Dest.index.size())
+      SourceNumIndex != DestNumIndex)
     return false;
 
   if (!Source.isArray && !Dest.isArray)
     return true;
 
-  for (int i = 0; i < (int)Source.index.size(); i++) {
+  for (int i = 0; i < SourceNumIndex; i++) {
     if (Source.index[i] != Dest.index[i])
       return false;
   }
@@ -272,12 +294,16 @@ void TaskDependencyGraphData::obtainTaskIdent(TaskInfo &TaskFound,
   GlobalVariable *IdentContainer =
       dyn_cast<GlobalVariable>(TaskCall.getArgOperand(0));
   Constant *InitValue = IdentContainer->getInitializer();
-  GEPOperator *IdentGep =
-      dyn_cast<GEPOperator>(InitValue->getAggregateElement(4));
-  GlobalVariable *IdentString =
-      dyn_cast<GlobalVariable>(IdentGep->getPointerOperand());
+  GlobalVariable *IdentString = nullptr;
+  if (GEPOperator *IdentGep =
+          dyn_cast<GEPOperator>(InitValue->getAggregateElement(4)))
+    IdentString = dyn_cast<GlobalVariable>(IdentGep->getPointerOperand());
+  else
+    IdentString = dyn_cast<GlobalVariable>(InitValue->getAggregateElement(4));
+
   ConstantDataArray *IdentStringArray =
       dyn_cast<ConstantDataArray>(IdentString->getInitializer());
+
   TaskFound.ident = IdentStringArray->getAsCString();
 }
 
@@ -299,7 +325,7 @@ void TaskDependencyGraphData::print_tdg_to_dot(StringRef ModuleName, int ntdgs, 
   // size_t lastindex = fileName.find_last_of(".");
   // std::string rawFileName = fileName.substr(0, lastindex);
   std::error_code EC;
-  char FileName[10];
+  char FileName[20];
   sprintf(FileName, "tdg_%d.dot", ntdgs);
   llvm::raw_fd_ostream Tdgfile(FileName, EC);
 
@@ -501,16 +527,29 @@ TaskDependencyGraphData::get_task_layout(std::string LongestPrivateName,
             "  int enter_frame_flags;\n"
             "} ompt_frame_t;\n\n";
 
+  // Define ompt_dispatch_chunk_t
+  Result += "typedef struct ompt_dispatch_chunk_t {\n"
+  "uint64_t start;\n"
+  "uint64_t iterations;\n"
+  "} ompt_dispatch_chunk_t;\n\n";
+
+
   // Define ompt_task_info_t
   Result += "typedef struct {\n"
             "  ompt_frame_t frame;\n"
             "  ompt_data_t task_data;\n"
             "  void *scheduling_parent;\n"
             "  int thread_num;\n"
+            "  ompt_dispatch_chunk_t dispatch_chunk;\n"
             "} ompt_task_info_t;\n\n";
 
+  // Define kmp_target_data
+  Result += "typedef struct kmp_target_data {\n"
+            "void *async_handle;\n"
+            "} kmp_target_data_t;\n\n";
+
   // Define taskdata
-  Result += "struct kmp_task {\n"
+  Result += "struct kmp_taskdata {\n"
             "  int32_t td_task_id;\n"
             "  int32_t td_flags;\n"
             "  void *td_team;\n"
@@ -536,16 +575,20 @@ TaskDependencyGraphData::get_task_layout(std::string LongestPrivateName,
             "  void (*td_copy_func)(void *, void *);\n"
             "  kmp_event_t td_allow_completion_event;\n"
             "  ompt_task_info_t ompt_task_info; \n"
-            "  int is_taskgraph = 0;\n"
+            "  bool is_taskgraph = 0;\n"
+            "  bool is_taskloop = 0;\n"
+            "  double duration = 0;\n"
             "  void *indexer_node;\n"
             "  int groupID = 0;\n"
-            "  void *tdg;\n";
+            "  void *tdg;\n"
+            "  kmp_target_data_t td_target_data;\n";
 
   // Define shared data
-  Result += "  struct " + LongestSharedName + " shared_data;\n";
+  Result += "  struct " + LongestSharedName + " shared_data;\n};\n";
 
   // Define task structure
-  Result += "  void *shareds; \n"
+  Result += "struct kmp_task {"
+            "  void *shareds; \n"
             "  kmp_routine_entry_t routine;\n"
             "  int32_t part_id;\n"
             "  kmp_cmplrdata_t data1;\n"
@@ -558,67 +601,159 @@ TaskDependencyGraphData::get_task_layout(std::string LongestPrivateName,
   return Result;
 }
 
-std::string
-TaskDependencyGraphData::get_c_struct_from_types(SmallVectorImpl<Type *> &types,
-                                                 int pragma_id, bool is_private,
-                                                 std::string name) {
-  std::string Result;
-
-  // if name is not given
-  if (name.size() == 0) {
-    if (is_private)
-      Result += "struct private_data_" + std::to_string(pragma_id) + "{\n";
-    else
-      Result += "struct shared_data_" + std::to_string(pragma_id) + "{\n";
-  } else {
-    Result += "typedef struct " + name + "{\n";
-  }
-  int num_members = 0;
-  for (Type *this_type : types) {
+std::string getThisTypeName(Type *this_type, std::string var_name) {
+    std::string result = "";
     switch (this_type->getTypeID()) {
     case Type::HalfTyID:
-      Result += "  short r_" + std::to_string(num_members) + ";\n";
-      num_members++;
+      result =  "short " + var_name;
       break;
-
     case Type::BFloatTyID:
-      Result += "  short r_" + std::to_string(num_members) + ";\n";
-      num_members++;
+      result = "short " + var_name;
       break;
-
     case Type::FloatTyID:
-      Result += "  float r_" + std::to_string(num_members) + ";\n";
-      num_members++;
+      result = "float " + var_name;
       break;
-
     case Type::DoubleTyID:
-      Result += "  double r_" + std::to_string(num_members) + ";\n";
-      num_members++;
+      result = "double " + var_name;
       break;
-
     case Type::IntegerTyID:
-      Result += "  int" + std::to_string(this_type->getIntegerBitWidth()) +
-                "_t r_" + std::to_string(num_members) + ";\n";
-      num_members++;
+      result = "int" + std::to_string(this_type->getIntegerBitWidth()) + "_t " + var_name;
       break;
-
     case Type::PointerTyID:
-      Result += "  void * r_" + std::to_string(num_members) + ";\n";
-      num_members++;
+      result =  "void * " + var_name;
       break;
+    case Type::ArrayTyID:
+      {
+        SmallVector <int, 2> numElementsPerLevel;
+        ArrayType *array = dyn_cast<ArrayType>(this_type);
+        Type *containedType = array->getArrayElementType();
+        int numElements = array->getNumElements();
+        numElementsPerLevel.push_back(numElements);
+        while(containedType->isArrayTy()){
+          array =  dyn_cast<ArrayType>(containedType);
+          containedType = array->getArrayElementType();
+          numElements = array->getNumElements();
+          numElementsPerLevel.push_back(numElements);
+        }
 
+        result = getThisTypeName(containedType,"") + var_name;
+        for (int i = 0; i < (int) numElementsPerLevel.size(); i++)
+          result += "["+std::to_string(numElementsPerLevel[i])+"]";
+        break;
+      }
+    case Type::StructTyID:
+      {
+        result = "struct {\n";
+        StructType *thisStruct =  dyn_cast<StructType>(this_type);
+        std::string structVarNames = "s_";
+        for (int i = 0; i < (int) thisStruct->getNumElements(); i++){
+          result += " " +getThisTypeName(thisStruct->getElementType(i), structVarNames+ std::to_string(i))+";\n";
+        }
+        result += "} " + var_name;
+        break;
+      }
     default:
       dbgs() << "Data type not implemented or recognized "
              << this_type->getTypeID() << "\n";
       break;
     }
-  }
-  if (name.size() == 0)
-    Result += "};\n";
-  else
-    Result += "}" + name + ";\n";
+    return result;
+}
 
-  return Result;
+std::string
+TaskDependencyGraphData::createStructType(SmallVectorImpl<Type *> &types,
+                                                 int pragma_id, std::string name) {
+  std::string result;
+  result += "typedef struct " + name + "_" +  std::to_string(pragma_id) +"{\n";
+  int num_members = 0;
+  for (Type *this_type : types) {
+    result += getThisTypeName(this_type, "r_" + std::to_string(num_members)) + ";\n";
+    num_members++;
+  }
+  result += "}" + name + "_" +  std::to_string(pragma_id) + ";\n";
+
+  return result;
+}
+
+std::string getArrayInit(SmallVector <int, 2> numElementsPerLevel, int value, int level, int maxLevel){
+  std::string result;
+  result += "{";
+  if(level!= maxLevel){
+    for (int i=0 ; i < numElementsPerLevel[level]; i++){
+      result +=getArrayInit(numElementsPerLevel, value, level+1, maxLevel);
+      if(i != numElementsPerLevel[level] -1)
+        result += ", ";
+    }
+  }
+  else{
+    for (int i=0 ; i < numElementsPerLevel[level]; i++){
+      result+= std::to_string(value);
+      if(i != numElementsPerLevel[level] -1)
+        result += ", ";
+    }
+  }
+  result += "}";
+
+  return result;
+}
+
+std::string initType(Type *this_type, int value){
+  std::string result = "";
+    switch (this_type->getTypeID()) {
+    case Type::HalfTyID:
+      result =  std::to_string(value);
+      break;
+    case Type::BFloatTyID:
+      result =  std::to_string(value);
+      break;
+    case Type::FloatTyID:
+      result =  std::to_string(value);
+      break;
+    case Type::DoubleTyID:
+      result =  std::to_string(value);
+      break;
+    case Type::IntegerTyID:
+      result =  std::to_string(value);
+      break;
+    case Type::PointerTyID:
+      result =  "(void *) " + std::to_string(value);
+      break;
+    case Type::ArrayTyID:
+      {
+        SmallVector <int, 2> numElementsPerLevel;
+        ArrayType *array = dyn_cast<ArrayType>(this_type);
+        Type *containedType = array->getArrayElementType();
+        int numElements = array->getNumElements();
+        numElementsPerLevel.push_back(numElements);
+        while(containedType->isArrayTy()){
+          array =  dyn_cast<ArrayType>(containedType);
+          containedType = array->getArrayElementType();
+          numElements = array->getNumElements();
+          numElementsPerLevel.push_back(numElements);
+        }
+        result = getArrayInit(numElementsPerLevel, value, 0, numElementsPerLevel.size()-1);
+    
+        break;
+      }
+    case Type::StructTyID:
+    {
+      StructType *thisStruct = dyn_cast<StructType>(this_type);
+      result = "{";
+      for (int i=0; i < (int) thisStruct->getNumElements(); i++){
+          result += initType(thisStruct->getElementType(i), value);
+          if(i!= (int) thisStruct->getNumElements()-1)
+            result+=",";
+          else
+            result+="}";
+      }
+      break;
+    }
+    default:
+      dbgs() << "Data type not implemented or recognized "
+             << this_type->getTypeID() << "\n";
+      break;
+    }
+    return result;
 }
 
 void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName, Function &F, int ntdgs) {
@@ -681,12 +816,14 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName, Fu
                 << TasksAllocInfo[i].entryPoint->getName()
                 << "(int, void *);\n";
       }
+      Tdgfile << "struct GlobalVarInfo\n{\n";
+      Tdgfile << "  void *Var;\n  int Offset;\n  int Size;\n bool Ispointer;\n};\n";
       Tdgfile << "struct kmp_task_alloc_info\n{\n";
       Tdgfile
           << "  int flags;\n  int sizeOfTask;\n  int sizeOfShareds;\n  void* "
              "taskEntry;\n  int *sharedDataPositions;\n  int "
              "*firstPrivateDataPositions;\n  int *firstPrivateDataOffsets;\n  "
-             "int *firstPrivateDataSizes;\n  int numFirstPrivates;\n};\n";
+             "int *firstPrivateDataSizes;\n  int numFirstPrivates;\n  GlobalVarInfo *GlobalVars;\n  int numGlobals;\n};\n";
       Tdgfile << "extern  \"C\"  void  __kmpc_prealloc_tasks(struct "
                  "kmp_task_alloc_info *task_static_data, char "
                  "*preallocated_tasks, void *preallocated_nodes, unsigned int "
@@ -701,22 +838,19 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName, Fu
           longest_pragma_size = pragma_size;
           longest_pragma = i;
         }
-        Tdgfile << get_c_struct_from_types(TasksAllocInfo[i].privatesType,
-                                           FunctionTasks[i].id, true);
-        Tdgfile << get_c_struct_from_types(TasksAllocInfo[i].sharedsType,
-                                           FunctionTasks[i].id, false);
+        Tdgfile << createStructType(TasksAllocInfo[i].privatesType,
+                                           FunctionTasks[i].id, "private_data");
+        Tdgfile << createStructType(TasksAllocInfo[i].sharedsType,
+                                           FunctionTasks[i].id, "shared_data");
       }
       for (int i = 0; i < (int)FunctionTasks.size(); i++) {
         Tdgfile << "struct private_data_" << FunctionTasks[i].pragmaId
                 << " task_" << FunctionTasks[i].id << "_private_data={";
         for (int j = 0; j < (int)FunctionTasks[i].FirstPrivateData.size();
              j++) {
-          if (TasksAllocInfo[FunctionTasks[i].pragmaId]
-                  .privatesType[j]
-                  ->isPointerTy()) {
-            Tdgfile << "(void *) ";
-          }
-          Tdgfile << FunctionTasks[i].FirstPrivateData[j];
+          Type *ThisType = TasksAllocInfo[FunctionTasks[i].pragmaId]
+                  .privatesType[j];  
+          Tdgfile << initType(ThisType,FunctionTasks[i].FirstPrivateData[j]);
           if (j != (int)FunctionTasks[i].FirstPrivateData.size() - 1)
             Tdgfile << ", ";
           else
@@ -730,8 +864,8 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName, Fu
       Tdgfile << get_task_layout(
           "private_data_" + std::to_string(longest_pragma),
           "shared_data_" + std::to_string(longest_pragma));
-      Tdgfile << "struct kmp_task preallocated_tasks[" << NumPreallocs
-              << "];\n";
+      Tdgfile << "char preallocated_tasks[" << NumPreallocs 
+              << "*(sizeof(kmp_taskdata)+sizeof(kmp_task))];\n";
       Tdgfile << "struct kmp_space_indexer_node preallocated_nodes["
               << NumPreallocs << "];\n\n";
     }
@@ -807,6 +941,21 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName, Fu
     }
     */
     for (int i = 0; i < (int)TasksAllocInfo.size(); i++) {
+
+      for (int j = 0; j < (int)TasksAllocInfo[i].globalFirstPrivateData.size();
+           j++) {
+
+        Type *varType = TasksAllocInfo[i].globalFirstPrivateData[j].Var->getValueType();
+        StringRef VarName = TasksAllocInfo[i].globalFirstPrivateData[j].Var->getName();
+        if(!varType->isStructTy()){
+          std::string TypeName = getThisTypeName(varType, VarName.str());
+          Tdgfile << "extern " << TypeName << ";\n";
+        }
+        else{
+          Tdgfile << "extern struct anon " << VarName << ";\n";
+        }
+      }
+
       Tdgfile << "int shared_data_positions_" << i << "[] = {";
       for (int j = 0; j < (int)TasksAllocInfo[i].sharedDataPositions.size();
            j++) {
@@ -854,6 +1003,18 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName, Fu
       }
       if (!TasksAllocInfo[i].firstPrivateDataSizes.size())
         Tdgfile << "};\n";
+
+      Tdgfile << "GlobalVarInfo firstprivate_globals_" << i << "[] = {";
+      for (int j = 0; j < (int)TasksAllocInfo[i].globalFirstPrivateData.size();
+           j++) {
+        Tdgfile << "{&" << TasksAllocInfo[i].globalFirstPrivateData[j].Var->getName() << ", " << TasksAllocInfo[i].globalFirstPrivateData[j].Offset << ", " <<  TasksAllocInfo[i].globalFirstPrivateData[j].Size << ", " << TasksAllocInfo[i].globalFirstPrivateData[j].IsPointer << "}";
+        if (j != (int)TasksAllocInfo[i].globalFirstPrivateData.size() - 1)
+          Tdgfile << ", ";
+        else
+          Tdgfile << "};\n";
+      }
+      if (!TasksAllocInfo[i].globalFirstPrivateData.size())
+        Tdgfile << "};\n";
     }
     Tdgfile << "struct kmp_task_alloc_info task_static_data["
             << TasksAllocInfo.size() << "] = {";
@@ -873,7 +1034,9 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName, Fu
           << i
           << ", .firstPrivateDataSizes = (int *) & firstprivate_data_sizes_"
           << i << ", .numFirstPrivates = "
-          << TasksAllocInfo[i].firstPrivateDataSizes.size() << "}";
+          << TasksAllocInfo[i].firstPrivateDataSizes.size()
+          << ", .GlobalVars= (GlobalVarInfo *) &firstprivate_globals_" << i
+          << ", .numGlobals = " << TasksAllocInfo[i].globalFirstPrivateData.size() << "}";
 
       if (i != (int)TasksAllocInfo.size() - 1)
         Tdgfile << ",\n";
@@ -890,7 +1053,7 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName, Fu
                "preallocated_tasks, "
                "preallocated_nodes, "
             << FunctionTasks.size()
-            << ", num_preallocs, sizeof(struct kmp_task)," << ntdgs << ");\n";
+            << ", num_preallocs, sizeof(struct kmp_task) + sizeof(struct kmp_taskdata)," << ntdgs << ");\n";
   }
   Tdgfile << "  __kmpc_set_tdg(kmp_tdg_" << ntdgs << ", gtid, " << ntdgs  << ", " << FunctionTasks.size()
           << ", kmp_tdg_roots_" << ntdgs <<", " << TdgRoots.size() << ");\n";
@@ -927,12 +1090,47 @@ int getTypeSizeInBytes(Type *this_type) {
     result = sizeof(void *);
     break;
 
+  case Type::ArrayTyID:
+  {
+    ArrayType *array = dyn_cast<ArrayType>(this_type);
+    int numElements =  array->getArrayNumElements();
+    int elemSize = getTypeSizeInBytes(array->getArrayElementType());
+    result = numElements * elemSize;
+    break;
+  }
+  case Type::StructTyID:
+  {
+    DataLayout DL = DataLayout("");
+    const StructLayout *SL = DL.getStructLayout(dyn_cast<StructType>(this_type));
+    result = SL->getSizeInBytes();
+    break;
+  }
   default:
     dbgs() << "Data type not implemented or recognized "
            << this_type->getTypeID() << "\n";
     break;
   }
   return result;
+}
+
+void fillWithStores(SmallVector<SFUse, 2> &ArgPositions,
+                    Value *Val, int position, bool isReverse) {
+
+  for (auto *U : Val->users()) {
+    if (auto *Store = dyn_cast<StoreInst>(U))
+      ArgPositions.push_back({Store, position, isReverse});
+    else if(auto *MemCpy = dyn_cast<MemCpyInst>(U)) {
+      ArgPositions.push_back({MemCpy, position, isReverse});
+    }
+    else{
+      bool thisReverse = false;
+      if(ShuffleVectorInst *Shuffle = dyn_cast<ShuffleVectorInst>(U)){
+        if(Shuffle->isReverse())
+          thisReverse = true;
+      }
+      fillWithStores(ArgPositions, U, position, thisReverse);
+    }
+  }
 }
 
 int TaskDependencyGraphData::findPragmaId(CallInst &TaskCallInst,
@@ -965,18 +1163,23 @@ int TaskDependencyGraphData::findPragmaId(CallInst &TaskCallInst,
   }
 
   // Get entry point from task alloc, operand 5
-  Value *EntryPoint = nullptr;
-
-  if (auto BitC = dyn_cast<BitCastOperator>(TaskAlloc->getArgOperand(5))) {
-    EntryPoint = BitC->getOperand(0);
-  }
-
+   Value * EntryPoint = TaskAlloc->getArgOperand(5);
+  
   // Get private data types
   SmallVector<Type *, 2> TaskPrivatesType;
   Function *EntryPointFunction = dyn_cast<Function>(EntryPoint);
-  Type *TaskWithPrivatesType =
-      ((EntryPointFunction->getArg(1))->getType())->getPointerElementType();
-  if (TaskWithPrivatesType->getStructNumElements() > 1) {
+
+  Type *TaskWithPrivatesType = nullptr;
+  Value *TaskWithPrivatesArg = EntryPointFunction->getArg(1);
+  for (auto *U : TaskWithPrivatesArg->users()){
+    if(auto *GEP = dyn_cast<GEPOperator>(U)){
+      TaskWithPrivatesType = GEP->getSourceElementType();
+      break;
+    }
+  }
+
+
+  if (TaskWithPrivatesType!=nullptr && TaskWithPrivatesType->getStructNumElements() > 1) {
     Type *PrivatesType = TaskWithPrivatesType->getStructElementType(1);
     for (int j = 0; j < (int)PrivatesType->getStructNumElements(); j++)
       TaskPrivatesType.push_back(PrivatesType->getStructElementType(j));
@@ -986,75 +1189,104 @@ int TaskDependencyGraphData::findPragmaId(CallInst &TaskCallInst,
   SmallVector<int64_t> PrivateValues;
   SmallVector<int, 2> FinalFirstPrivateOffsets;
   SmallVector<int, 2> FirstPrivateSizes;
-  SmallVector<int, 2> AllPositions;
+  SmallVector<GlobalVarInfo, 2> GlobalFirstPrivates;
 
   Instruction *Start = dyn_cast<Instruction>(TaskAlloc);
   Instruction *End = dyn_cast<Instruction>(&TaskCallInst);
+  int SumSize = 0;
+  int StructElementCounter = 0;
   while (Start != End) {
     for (Value *TaskAllocUser : TaskAlloc->users()) {
       if (Start == dyn_cast<Instruction>(TaskAllocUser)) {
         if (auto *ThisGEP = dyn_cast<GEPOperator>(TaskAllocUser)) {
-          Value *ValSize = ThisGEP->getOperand(1);
-          int Size = (int)dyn_cast<ConstantInt>(ValSize)->getSExtValue() - 40;
-          AllPositions.push_back(Size);
+
+          int InitPos = SumSize;
+
+          int NumPrevPrivates = 0;
+          if (ThisGEP->getNumOperands() > 2) {
+
+            int StructElem = 0;
+            if (ThisGEP->getNumIndices() == 3) {
+              Value *StructElemValue = ThisGEP->getOperand(3);
+              StructElem =
+                  (int)dyn_cast<ConstantInt>(StructElemValue)->getSExtValue();
+            }
+
+            NumPrevPrivates = StructElem - StructElementCounter;
+            int Size = getTypeSizeInBytes(TaskPrivatesType[StructElem]);
+            SumSize += Size;
+          } else {
+            int Size = getTypeSizeInBytes(TaskPrivatesType[0]);
+            SumSize += Size;
+          }
 
           // Check if there is a private variable in the middle!!!
-          int BytesDiff, LastBytes, DiffCount;
-          if (AllPositions.size() != 1) {
-            BytesDiff =
-                AllPositions.back() - AllPositions[AllPositions.size() - 2];
-            LastBytes =
-                getTypeSizeInBytes(TaskPrivatesType[AllPositions.size() - 2]);
-          } else {
-            BytesDiff = AllPositions.back();
-            LastBytes = 0;
-          }
-          if (BytesDiff != LastBytes) {
-            int Index = 0;
-            DiffCount = LastBytes;
-            while (DiffCount < BytesDiff) {
-              PrivateValues.push_back(-2);
-              // dbgs()<< "Es " << DiffCount << " " << BytesDiff << " \n";
-              if (LastBytes != 0)
-                DiffCount += 4;
-              else
-                DiffCount += 4; // getTypeSizeInBytes(TaskPrivatesType[Index]);
-              Index++;
-            }
+          for (int i = 0; i < NumPrevPrivates; i++) {
+            int Size =
+                getTypeSizeInBytes(TaskPrivatesType[StructElementCounter + i]);
+            SumSize += Size;
+            InitPos += Size;
+            PrivateValues.push_back(-2);
+            StructElementCounter++;
           }
 
-          Value *ValStored = nullptr;
-          if (StoreInst *ConstantStore =
-                  dyn_cast<StoreInst>(Start->getNextNode()->getNextNode())) {
-            ValStored = ConstantStore->getValueOperand();
-          } else if (StoreInst *ConstantStore =
-                         dyn_cast<StoreInst>(Start->getNextNode())) {
-            ValStored = ConstantStore->getValueOperand();
-          } else if (StoreInst *ConstantStore = dyn_cast<StoreInst>(
-                         Start->getNextNode()->getNextNode()->getNextNode())) {
-            ValStored = ConstantStore->getValueOperand();
+          Value *StoreUser = Start->getUniqueUndroppableUser();
+          if (!StoreUser)
+            llvm_unreachable("Store User is not unique or does not exist");
+          StoreInst *ValStoreInst = dyn_cast<StoreInst>(StoreUser);
+          MemCpyInst *ValCallInst = dyn_cast<MemCpyInst>(StoreUser);
+          while (!ValStoreInst && !ValCallInst && StoreUser) {
+            StoreUser = StoreUser->getUniqueUndroppableUser();
+            if (!StoreUser)
+              llvm_unreachable(
+                  "Store or Memcpy User is not unique or does not exist");
+            ValStoreInst = dyn_cast<StoreInst>(StoreUser);
+            ValCallInst = dyn_cast<MemCpyInst>(StoreUser);
           }
+
+          Value *ValStored;
+          if (ValStoreInst)
+            ValStored = ValStoreInst->getValueOperand();
+          else if (ValCallInst)
+            ValStored = ValCallInst->getSource();
           if (ValStored) {
             if (ConstantInt *CI = dyn_cast<ConstantInt>(ValStored)) {
               PrivateValues.push_back(CI->getSExtValue());
             } else {
-
-              if (PrivateValues.size() == 0)
-                FinalFirstPrivateOffsets.push_back(0);
-              else {
-                FinalFirstPrivateOffsets.push_back(AllPositions.back());
+              GlobalValue *GlobalVar = dyn_cast<GlobalValue>(ValStored);
+              if (!GlobalVar)
+                if (LoadInst *LoadGlobal = dyn_cast<LoadInst>(ValStored)) {
+                  GlobalVar =
+                      dyn_cast<GlobalValue>(LoadGlobal->getPointerOperand());
+                }
+              if (!GlobalVar) {
+                FinalFirstPrivateOffsets.push_back(InitPos);
+                FirstPrivateSizes.push_back(
+                    getTypeSizeInBytes(TaskPrivatesType[StructElementCounter]));
+                PrivateValues.push_back(-1);
+              } else {
+                GlobalFirstPrivates.push_back(
+                    {GlobalVar, InitPos,
+                     getTypeSizeInBytes(
+                         TaskPrivatesType[StructElementCounter]), TaskPrivatesType[StructElementCounter]->isPointerTy()});
+                PrivateValues.push_back(-3);
               }
-
-              int CurrentPos = PrivateValues.size();
-              PrivateValues.push_back(-1);
-              FirstPrivateSizes.push_back(
-                  getTypeSizeInBytes(TaskPrivatesType[CurrentPos]));
             }
           }
+          StructElementCounter++;
         }
       }
     }
-    Start = Start->getNextNode();
+    if (!Start->getNextNode()) {
+      if (InvokeInst *InvokeStart = dyn_cast<InvokeInst>(Start)) {
+        Start = InvokeStart->getNormalDest()->getFirstNonPHIOrDbg();
+      } else {
+        llvm_unreachable(
+            "Next instruction is not found, looking for task with deps");
+      }
+    } else {
+      Start = Start->getNextNode();
+    }
   }
 
   // Private values that are not in the middle are stored at the end
@@ -1068,52 +1300,35 @@ int TaskDependencyGraphData::findPragmaId(CallInst &TaskCallInst,
   // Get shared data types
   SmallVector<Type *, 2> TaskSharedsType;
   BasicBlock *FirstBB = &EntryPointFunction->getEntryBlock();
-  if (auto *SharedsBitcast =
-          dyn_cast<BitCastInst>(FirstBB->getFirstNonPHIOrDbgOrLifetime())) {
-    if (auto *SharedsLoad = dyn_cast<LoadInst>(SharedsBitcast->getNextNode())) {
-      Type *SharedsType = SharedsLoad->getPointerOperandType()
-                              ->getPointerElementType()
-                              ->getPointerElementType();
-      for (int j = 0; j < (int)SharedsType->getStructNumElements(); j++)
-        TaskSharedsType.push_back(SharedsType->getStructElementType(j));
+
+  if (auto *SharedsLoad =
+          dyn_cast<LoadInst>(FirstBB->getFirstNonPHIOrDbgOrLifetime())) {
+    //If first instruction is a load then there is at least one shared value
+    TaskSharedsType.push_back(Type::getInt8PtrTy(F.getContext()));
+    //Look if there are more
+    for(auto *U : SharedsLoad->users()){
+      if(dyn_cast<GEPOperator>(U))
+        TaskSharedsType.push_back(Type::getInt8PtrTy(F.getContext()));
     }
   }
 
   // Store position of shared data
   SmallVector<int, 2> FinalSharedPositions;
   SmallVector<int, 2> FinalFirstPrivatePositions;
-  SmallVector<bool, 2> DoubleLoadPositions;
+
 
   Value *FuncArg = F.getArg(0);
-  std::vector<Value *> ArgPositions(FuncArg->getNumUses());
+  SmallVector<SFUse, 2> ArgPositions;
   for (Value *ArgUser : FuncArg->users()) {
+    int position = 0;
     if (GetElementPtrInst *GetArg = dyn_cast<GetElementPtrInst>(ArgUser)) {
       Value *PositionValue = GetArg->getOperand(2);
-      int position = dyn_cast<ConstantInt>(PositionValue)->getSExtValue();
-      if (LoadInst *ArgLoad = dyn_cast<LoadInst>(GetArg->getNextNode())) {
-        LoadInst *OtherLoad = dyn_cast<LoadInst>(ArgLoad->getNextNode());
-        while(OtherLoad && OtherLoad->getPointerOperand() == ArgLoad){
-          OtherLoad = dyn_cast<LoadInst>(ArgLoad->getNextNode());
-          ArgLoad = OtherLoad;
-          DoubleLoadPositions[position] =true;
-        }
-        ArgPositions[position] = ArgLoad;
-      } else {
-        Start = TaskCallInst.getPrevNode();
-        bool Found = false;
-        while (!Found) {
-          if (LoadInst *ArgLoad = dyn_cast<LoadInst>(Start)) {
-            if (ArgLoad->getPointerOperand() == GetArg) {
-              ArgPositions[position] = ArgLoad;
-              Found = true;
-            }
-          }
-          if (Start->getPrevNode() == nullptr)
-            break;
-
-          Start = Start->getPrevNode();
-        }
-      }
+      position = dyn_cast<ConstantInt>(PositionValue)->getSExtValue();
+      //Look for the final store
+      fillWithStores(ArgPositions, ArgUser, position, false);
+    }
+    else if (dyn_cast<LoadInst>(ArgUser)){
+      fillWithStores(ArgPositions, ArgUser, position, false);
     }
   }
 
@@ -1121,22 +1336,49 @@ int TaskDependencyGraphData::findPragmaId(CallInst &TaskCallInst,
   End = dyn_cast<Instruction>(&TaskCallInst);
 
   while (Start != End) {
-    for (int i = 0; i < (int)ArgPositions.size(); i++){
-      bool doubleLoad = DoubleLoadPositions[i];
-      if(ArgPositions[i] ==nullptr) continue;
-      for (Value *ArgUser : ArgPositions[i]->users()) {
-        if (Start == dyn_cast<Instruction>(ArgUser)) {
+    for (int i = 0; i < (int)ArgPositions.size(); i++) {
+      if (Start == dyn_cast<Instruction>(ArgPositions[i].val)) {
 
-          if(dyn_cast<StoreInst>(ArgUser) && !doubleLoad)
-            FinalSharedPositions.push_back(i);
-          else if (dyn_cast<StoreInst>(ArgUser) && doubleLoad)
-            FinalFirstPrivatePositions.push_back(i);
-          else if((dyn_cast<StoreInst>(dyn_cast<Instruction>(ArgUser)->getNextNode())))
-            FinalFirstPrivatePositions.push_back(i);
+        if (auto StoreVal = dyn_cast<StoreInst>(ArgPositions[i].val)) {
+          int multipleStore = 1;
+
+          llvm::Type *SourceType = StoreVal->getValueOperand()->getType();
+          if (SourceType->isVectorTy()) {
+            llvm::VectorType *SourceVector =
+                dyn_cast<llvm::VectorType>(SourceType);
+            SourceType = SourceVector->getContainedType(0);
+            multipleStore = SourceVector->getElementCount().getFixedValue();
+          }
+
+          bool isReverse = ArgPositions[i].isReverse;
+          for (int j = 0; j < multipleStore; j++) {
+            int add;
+            if (!isReverse)
+              add = j;
+            else
+              add = multipleStore - 1 - j;
+            if (SourceType->isPointerTy()) {
+              FinalSharedPositions.push_back(ArgPositions[i].position + add);
+            } else {
+              FinalFirstPrivatePositions.push_back(ArgPositions[i].position +
+                                                   add);
+            }
+          }
+        } else if (dyn_cast<MemCpyInst>(ArgPositions[i].val)) {
+          FinalFirstPrivatePositions.push_back(ArgPositions[i].position);
         }
       }
     }
-    Start = Start->getNextNode();
+    if (!Start->getNextNode()) {
+      if (InvokeInst *InvokeStart = dyn_cast<InvokeInst>(Start)) {
+        Start = InvokeStart->getNormalDest()->getFirstNonPHIOrDbg();
+      } else {
+        llvm_unreachable(
+            "Next instruction is not found, looking for task with deps");
+      }
+    } else {
+      Start = Start->getNextNode();
+    }
   }
 
   int i;
@@ -1150,13 +1392,12 @@ int TaskDependencyGraphData::findPragmaId(CallInst &TaskCallInst,
     TasksAllocInfo.push_back({Flags, SizeOfTask, SizeOfShareds, EntryPoint,
                               TaskPrivatesType, TaskSharedsType,
                               FinalSharedPositions, FinalFirstPrivatePositions,
-                              FinalFirstPrivateOffsets, FirstPrivateSizes});
+                              FinalFirstPrivateOffsets, FirstPrivateSizes, GlobalFirstPrivates});
 
   return i;
 }
 
 void TaskDependencyGraphData::findOpenMPTasks(Function &F, DominatorTree &DT, int ntdgs) {
-
   // Iterate over the BB
   SmallVector<BasicBlock *, 8> Worklist;
   SmallPtrSet<BasicBlock *, 8> Visited;

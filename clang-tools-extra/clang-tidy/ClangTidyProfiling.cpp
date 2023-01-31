@@ -11,6 +11,7 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
+#include <optional>
 #include <system_error>
 #include <utility>
 
@@ -53,7 +54,7 @@ void ClangTidyProfiling::printAsJSON(llvm::raw_ostream &OS) {
 }
 
 void ClangTidyProfiling::storeProfileData() {
-  assert(Storage.hasValue() && "We should have a filename.");
+  assert(Storage && "We should have a filename.");
 
   llvm::SmallString<256> OutputDirectory(Storage->StoreFilename);
   llvm::sys::path::remove_filename(OutputDirectory);
@@ -74,13 +75,13 @@ void ClangTidyProfiling::storeProfileData() {
   printAsJSON(OS);
 }
 
-ClangTidyProfiling::ClangTidyProfiling(llvm::Optional<StorageParams> Storage)
+ClangTidyProfiling::ClangTidyProfiling(std::optional<StorageParams> Storage)
     : Storage(std::move(Storage)) {}
 
 ClangTidyProfiling::~ClangTidyProfiling() {
   TG.emplace("clang-tidy", "clang-tidy checks profiling", Records);
 
-  if (!Storage.hasValue())
+  if (!Storage)
     printUserFriendlyTable(llvm::errs());
   else
     storeProfileData();

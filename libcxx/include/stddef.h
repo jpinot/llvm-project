@@ -42,15 +42,12 @@ Types:
 #  pragma GCC system_header
 #endif
 
-#include_next <stddef.h>
+#  if __has_include_next(<stddef.h>)
+#    include_next <stddef.h>
+#  endif
 
 #ifdef __cplusplus
-
-extern "C++" {
-#include <__nullptr>
-using std::nullptr_t;
-}
-
+    typedef decltype(nullptr) nullptr_t;
 #endif
 
 #endif // _LIBCPP_STDDEF_H

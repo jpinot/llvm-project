@@ -23,7 +23,7 @@
 #include "llvm/Support/MD5.h"
 
 static llvm::cl::opt<bool>
-    EnableValueProfiling("enable-value-profiling", llvm::cl::ZeroOrMore,
+    EnableValueProfiling("enable-value-profiling",
                          llvm::cl::desc("Enable value profiling"),
                          llvm::cl::Hidden, llvm::cl::init(false));
 
@@ -755,7 +755,7 @@ void PGOHash::combine(HashType Type) {
   if (Count && Count % NumTypesPerWord == 0) {
     using namespace llvm::support;
     uint64_t Swapped = endian::byte_swap<uint64_t, little>(Working);
-    MD5.update(llvm::makeArrayRef((uint8_t *)&Swapped, sizeof(Swapped)));
+    MD5.update(llvm::ArrayRef((uint8_t *)&Swapped, sizeof(Swapped)));
     Working = 0;
   }
 
@@ -781,7 +781,7 @@ uint64_t PGOHash::finalize() {
     } else {
       using namespace llvm::support;
       uint64_t Swapped = endian::byte_swap<uint64_t, little>(Working);
-      MD5.update(llvm::makeArrayRef((uint8_t *)&Swapped, sizeof(Swapped)));
+      MD5.update(llvm::ArrayRef((uint8_t *)&Swapped, sizeof(Swapped)));
     }
   }
 
@@ -821,6 +821,8 @@ void CodeGenPGO::assignRegionCounters(GlobalDecl GD, llvm::Function *Fn) {
 
   CGM.ClearUnusedCoverageMapping(D);
   if (Fn->hasFnAttribute(llvm::Attribute::NoProfile))
+    return;
+  if (Fn->hasFnAttribute(llvm::Attribute::SkipProfile))
     return;
 
   setFuncName(Fn);
@@ -963,11 +965,11 @@ void CodeGenPGO::emitCounterIncrement(CGBuilderTy &Builder, const Stmt *S,
                          Builder.getInt32(Counter), StepV};
   if (!StepV)
     Builder.CreateCall(CGM.getIntrinsic(llvm::Intrinsic::instrprof_increment),
-                       makeArrayRef(Args, 4));
+                       ArrayRef(Args, 4));
   else
     Builder.CreateCall(
         CGM.getIntrinsic(llvm::Intrinsic::instrprof_increment_step),
-        makeArrayRef(Args));
+        ArrayRef(Args));
 }
 
 void CodeGenPGO::setValueProfilingFlag(llvm::Module &M) {

@@ -16,36 +16,15 @@
 #define LLVM_CLANG_BASIC_OMPSSKINDS_H
 
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Frontend/OmpSs/OSSConstants.h"
 
 namespace clang {
 
 /// OmpSs directives.
-enum OmpSsDirectiveKind {
-#define OMPSS_DIRECTIVE(Name) \
-  OSSD_##Name,
-#define OMPSS_DIRECTIVE_EXT(Name, Str) \
-  OSSD_##Name,
-#include "clang/Basic/OmpSsKinds.def"
-  OSSD_unknown
-};
+using OmpSsDirectiveKind = llvm::oss::Directive;
 
 /// OmpSs clauses.
-enum OmpSsClauseKind {
-#define OMPSS_CLAUSE(Name, Class) \
-  OSSC_##Name,
-#define OMPSS_CLAUSE_ALIAS(Alias, Name) \
-  OSSC_##Alias,
-#include "clang/Basic/OmpSsKinds.def"
-  OSSC_unknown
-};
-
-/// OmpSs attributes for 'default' clause.
-enum OmpSsDefaultClauseKind {
-#define OMPSS_DEFAULT_KIND(Name) \
-  OSSC_DEFAULT_##Name,
-#include "clang/Basic/OmpSsKinds.def"
-  OSSC_DEFAULT_unknown
-};
+using OmpSsClauseKind = llvm::oss::Clause;
 
 /// OmpSs attributes for 'depend' clause.
 enum OmpSsDependClauseKind {
@@ -55,17 +34,16 @@ enum OmpSsDependClauseKind {
   OSSC_DEPEND_unknown
 };
 
-OmpSsDirectiveKind getOmpSsDirectiveKind(llvm::StringRef Str);
-const char *getOmpSsDirectiveName(OmpSsDirectiveKind Kind);
-
-OmpSsClauseKind getOmpSsClauseKind(llvm::StringRef Str);
-const char *getOmpSsClauseName(OmpSsClauseKind Kind);
+/// OmpSs attributes for 'device' clause.
+enum OmpSsDeviceClauseKind {
+#define OMPSS_DEVICE_KIND(Name) \
+  OSSC_DEVICE_##Name,
+#include "clang/Basic/OmpSsKinds.def"
+  OSSC_DEVICE_unknown
+};
 
 unsigned getOmpSsSimpleClauseType(OmpSsClauseKind Kind, llvm::StringRef Str);
 const char *getOmpSsSimpleClauseTypeName(OmpSsClauseKind Kind, unsigned Type);
-
-bool isAllowedClauseForDirective(OmpSsDirectiveKind DKind,
-                                 OmpSsClauseKind CKind);
 
 /// Checks if the specified clause is one of private clauses like
 /// 'private', 'firstprivate', 'reduction' etc..

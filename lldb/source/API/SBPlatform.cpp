@@ -7,13 +7,16 @@
 //===----------------------------------------------------------------------===//
 
 #include "lldb/API/SBPlatform.h"
+#include "lldb/API/SBDebugger.h"
 #include "lldb/API/SBEnvironment.h"
 #include "lldb/API/SBError.h"
 #include "lldb/API/SBFileSpec.h"
 #include "lldb/API/SBLaunchInfo.h"
 #include "lldb/API/SBPlatform.h"
+#include "lldb/API/SBStructuredData.h"
 #include "lldb/API/SBUnixSignals.h"
 #include "lldb/Host/File.h"
+#include "lldb/Interpreter/ScriptedMetadata.h"
 #include "lldb/Target/Platform.h"
 #include "lldb/Target/Target.h"
 #include "lldb/Utility/ArchSpec.h"
@@ -48,8 +51,7 @@ struct PlatformConnectOptions {
 // PlatformShellCommand
 struct PlatformShellCommand {
   PlatformShellCommand(llvm::StringRef shell_interpreter,
-                       llvm::StringRef shell_command)
-      : m_status(0), m_signo(0) {
+                       llvm::StringRef shell_command) {
     if (!shell_interpreter.empty())
       m_shell = shell_interpreter.str();
 
@@ -70,7 +72,7 @@ struct PlatformShellCommand {
   std::string m_output;
   int m_status = 0;
   int m_signo = 0;
-  Timeout<std::ratio<1>> m_timeout = llvm::None;
+  Timeout<std::ratio<1>> m_timeout = std::nullopt;
 };
 // SBPlatformConnectOptions
 SBPlatformConnectOptions::SBPlatformConnectOptions(const char *url)
@@ -262,7 +264,7 @@ void SBPlatformShellCommand::SetTimeoutSeconds(uint32_t sec) {
   LLDB_INSTRUMENT_VA(this, sec);
 
   if (sec == UINT32_MAX)
-    m_opaque_ptr->m_timeout = llvm::None;
+    m_opaque_ptr->m_timeout = std::nullopt;
   else
     m_opaque_ptr->m_timeout = std::chrono::seconds(sec);
 }
@@ -293,9 +295,31 @@ SBPlatform::SBPlatform() { LLDB_INSTRUMENT_VA(this); }
 SBPlatform::SBPlatform(const char *platform_name) {
   LLDB_INSTRUMENT_VA(this, platform_name);
 
-  Status error;
-  if (platform_name && platform_name[0])
-    m_opaque_sp = Platform::Create(ConstString(platform_name), error);
+  m_opaque_sp = Platform::Create(platform_name, /*debugger = */ nullptr,
+                                 /*metadata = */ nullptr);
+}
+
+SBPlatform::SBPlatform(const char *platform_name, const SBDebugger &debugger,
+                       const char *script_name, const SBStructuredData &dict) {
+  LLDB_INSTRUMENT_VA(this, platform_name, debugger, script_name, dict);
+
+  if (!script_name || !dict.IsValid() || !dict.m_impl_up)
+    return;
+
+  StructuredData::ObjectSP obj_sp = dict.m_impl_up->GetObjectSP();
+
+  if (!obj_sp)
+    return;
+
+  StructuredData::DictionarySP dict_sp =
+      std::make_shared<StructuredData::Dictionary>(obj_sp);
+  if (!dict_sp || dict_sp->GetType() == lldb::eStructuredDataTypeInvalid)
+    return;
+
+  const ScriptedMetadata metadata(script_name, dict_sp);
+
+  m_opaque_sp =
+      Platform::Create(platform_name, debugger.m_opaque_sp.get(), &metadata);
 }
 
 SBPlatform::SBPlatform(const SBPlatform &rhs) {
@@ -342,7 +366,7 @@ const char *SBPlatform::GetName() {
 
   PlatformSP platform_sp(GetSP());
   if (platform_sp)
-    return platform_sp->GetName().GetCString();
+    return ConstString(platform_sp->GetName()).AsCString();
   return nullptr;
 }
 
@@ -357,7 +381,7 @@ const char *SBPlatform::GetWorkingDirectory() {
 
   PlatformSP platform_sp(GetSP());
   if (platform_sp)
-    return platform_sp->GetWorkingDirectory().GetCString();
+    return platform_sp->GetWorkingDirectory().GetPathAsConstString().AsCString();
   return nullptr;
 }
 
@@ -427,7 +451,7 @@ const char *SBPlatform::GetOSBuild() {
 
   PlatformSP platform_sp(GetSP());
   if (platform_sp) {
-    std::string s = platform_sp->GetOSBuildString().getValueOr("");
+    std::string s = platform_sp->GetOSBuildString().value_or("");
     if (!s.empty()) {
       // Const-ify the string so we don't need to worry about the lifetime of
       // the string
@@ -442,7 +466,7 @@ const char *SBPlatform::GetOSDescription() {
 
   PlatformSP platform_sp(GetSP());
   if (platform_sp) {
-    std::string s = platform_sp->GetOSKernelDescription().getValueOr("");
+    std::string s = platform_sp->GetOSKernelDescription().value_or("");
     if (!s.empty()) {
       // Const-ify the string so we don't need to worry about the lifetime of
       // the string
@@ -476,7 +500,7 @@ uint32_t SBPlatform::GetOSMinorVersion() {
   llvm::VersionTuple version;
   if (PlatformSP platform_sp = GetSP())
     version = platform_sp->GetOSVersion();
-  return version.getMinor().getValueOr(UINT32_MAX);
+  return version.getMinor().value_or(UINT32_MAX);
 }
 
 uint32_t SBPlatform::GetOSUpdateVersion() {
@@ -485,7 +509,7 @@ uint32_t SBPlatform::GetOSUpdateVersion() {
   llvm::VersionTuple version;
   if (PlatformSP platform_sp = GetSP())
     version = platform_sp->GetOSVersion();
-  return version.getSubminor().getValueOr(UINT32_MAX);
+  return version.getSubminor().value_or(UINT32_MAX);
 }
 
 void SBPlatform::SetSDKRoot(const char *sysroot) {
@@ -550,14 +574,15 @@ SBError SBPlatform::Run(SBPlatformShellCommand &shell_command) {
         if (!command)
           return Status("invalid shell command (empty)");
 
-        const char *working_dir = shell_command.GetWorkingDirectory();
-        if (working_dir == nullptr) {
-          working_dir = platform_sp->GetWorkingDirectory().GetCString();
-          if (working_dir)
-            shell_command.SetWorkingDirectory(working_dir);
+        if (shell_command.GetWorkingDirectory() == nullptr) {
+          std::string platform_working_dir =
+              platform_sp->GetWorkingDirectory().GetPath();
+          if (!platform_working_dir.empty())
+            shell_command.SetWorkingDirectory(platform_working_dir.c_str());
         }
         return platform_sp->RunShellCommand(
-            shell_command.m_opaque_ptr->m_shell, command, FileSpec(working_dir),
+            shell_command.m_opaque_ptr->m_shell, command,
+            FileSpec(shell_command.GetWorkingDirectory()),
             &shell_command.m_opaque_ptr->m_status,
             &shell_command.m_opaque_ptr->m_signo,
             &shell_command.m_opaque_ptr->m_output,
