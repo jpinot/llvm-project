@@ -75,6 +75,9 @@ bool StaticSchedule = false;
 
 int replaying[MAX_NUM_PROC] = {0};
 
+// tdg_index of the current TDG. Set to non-negative value upon
+// encountering a taskgraph directive withOUT nowait clause
+kmp_int32 curr_tdg_idx = -1;
 
 struct kmp_space_indexer free_space_indexer;
 struct kmp_task_alloc_info *task_static_table;
@@ -1111,6 +1114,99 @@ void print_tdg_to_dot(kmp_tdg_info *thisTdg) {
   fclose(f);
 }
 
+// task_insert: distribute tasks among threads.
+// Returns a list of kmp_int32 (corresponding to task_id) for each thread.
+//
+// nthreads: the number of threads taking tasks, TDG thread is already excluded,
+//           i.e., nthreads = team.nproc - 1
+// ntasks_per_thread: number of tasks assigned to each thread, update
+//                    and return to caller
+static kmp_int32 **task_insert(kmp_int32 nthreads, kmp_int32 *ntasks_per_thread, kmp_int32 tdg_index) {
+  kmp_node_info *ThisRecordMap;
+  kmp_int32 ThisNumRoots;
+  kmp_int32 *ThisRootTasks;
+
+  ThisRecordMap = GlobalTdgs[tdg_index].RecordMap;
+  ThisNumRoots = GlobalTdgs[tdg_index].numRoots;
+  ThisRootTasks = GlobalTdgs[tdg_index].rootTasks;
+
+  int dst_th_ct = 0; // thread counter
+  kmp_int32 **result = (kmp_int32 **)malloc(sizeof(kmp_int32 *) * nthreads);
+  kmp_int32 tid = __kmp_get_tid();
+
+  for (int i = 0; i < nthreads; ++i) {
+    // we are not sure how many tasks are going to be in each thread,
+    // allocate number of root tasks to be pessimistic.
+    result[i] = (kmp_int32 *)malloc(sizeof(kmp_int32) * ThisNumRoots);
+    for (kmp_uint j = 0; j < ThisNumRoots; ++j) {
+      result[i][j] = -1;
+    }
+  }
+
+  // distribute tasks in a round robin way without sorting their duration
+  for (kmp_int i = 0; i < ThisNumRoots; ++i) {
+    result[dst_th_ct][ntasks_per_thread[dst_th_ct]] = ThisRecordMap[ThisRootTasks[i]].static_id;
+    ntasks_per_thread[dst_th_ct]++;
+    dst_th_ct++;
+    dst_th_ct %= nthreads;
+  }
+
+  return result;
+}
+
+// distribute_tasks: after recording a TDG, this method is invoked to
+// evenly distribute root tasks among available threads.
+//
+// gtid: global thread id of the caller (TDG thread)
+static void distribute_tasks(kmp_int32 gtid, kmp_int32 tdg_index) {
+  kmp_node_info *ThisRecordMap;
+  ThisRecordMap = GlobalTdgs[tdg_index].RecordMap;
+
+  task_teams_sync = true;
+  kmp_info_t *thread = __kmp_threads[gtid];
+  kmp_int32 tid = thread->th.th_info.ds.ds_tid;
+  kmp_task_team_t *task_team = thread->th.th_task_team;
+  kmp_int32 nthreads;
+
+  if (task_team)
+    nthreads = task_team->tt.tt_nproc;
+  else
+    return;
+
+  kmp_int32 *ntasks_per_thread;
+
+  if (task_team == NULL || nthreads == 1)
+    return;
+
+  ntasks_per_thread = (kmp_int32 *)calloc(nthreads, sizeof(kmp_int32));
+
+  kmp_int32 **schedule =
+      task_insert(nthreads, ntasks_per_thread, tdg_index);
+
+  for (kmp_int32 dst_tid = 0; dst_tid < nthreads; ++dst_tid) {
+    kmp_thread_data *thread_data = &task_team->tt.tt_threads_data[dst_tid];
+    if (thread_data == NULL) {
+      __kmp_enable_tasking(task_team, thread);
+      thread_data = &task_team->tt.tt_threads_data[dst_tid];
+    }
+    KMP_ASSERT(thread_data != NULL);
+
+    if (ntasks_per_thread[dst_tid] > 0) {
+      __kmp_alloc_tdg_tasks(gtid, thread_data, tdg_index,
+                            ntasks_per_thread[dst_tid]);
+      KMP_ASSERT(thread_data->td.td_tdg_tasks[tdg_index] != NULL);
+      for (kmp_int32 task_ct = 0; task_ct < ntasks_per_thread[dst_tid];
+          ++task_ct) {
+        __kmp_insert_task_into_tdg(gtid, thread_data, tdg_index,
+                                  ThisRecordMap[schedule[dst_tid][task_ct]].task);
+      }
+    }
+  }
+
+  free(ntasks_per_thread);
+  free(schedule);
+}
+
 // wait all threads to schedule their tasks.
 void wait_all_threads_scheduled(kmp_int32 gtid, kmp_int32 nthreads) {
   volatile int proceed;
@@ -1133,12 +1229,30 @@ void __kmpc_execute_tdg(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 tdg_index) {
    kmp_int32 ThisNumTasks = GlobalTdgs[tdg_index].numTasks;
    
    kmp_info_t *thread = __kmp_threads[gtid];
+   kmp_thread_data_t *thread_data;
    kmp_taskdata_t *parent_task = thread->th.th_current_task;
+
+   kmp_task_team_t *task_team = thread->th.th_task_team;
+   kmp_int32 nthreads = 1;
+   kmp_int32 tid = __kmp_tid_from_gtid(gtid);
 
    bool prealloc = false;
    if (GlobalTdgs[tdg_index].tdgStatus == TDG_PREALLOC)
-    prealloc= true;
-   
+    prealloc = true;
+
+   if (task_team) {
+    nthreads = task_team->tt.tt_nproc;
+    thread_data = &task_team->tt.tt_threads_data[tid];
+    if (task_teams_sync) {
+      kmp_task_team *other_task_team =
+          thread->th.th_team->t.t_task_team[1 - thread->th.th_task_state];
+      if (other_task_team && other_task_team->tt.tt_threads_data)
+        sync_tdg_tasks_for_task_team(gtid, other_task_team, task_team,
+                                     nthreads);
+      task_teams_sync = false;
+    }
+   }
+
    if (GlobalTdgs[tdg_index].rec_taskred_data) {
         __kmpc_taskred_init(gtid, GlobalTdgs[tdg_index].rec_num_taskred,
                             GlobalTdgs[tdg_index].rec_taskred_data);
@@ -1146,54 +1260,64 @@ void __kmpc_execute_tdg(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 tdg_index) {
    // Reset remaining tasks
    KMP_ATOMIC_ST_RLX(&GlobalTdgs[tdg_index].remainingTasks, ThisNumTasks);
 
-   for (kmp_int32 j = 0; j < ThisNumTasks; j++) {
-     kmp_taskdata_t *td = KMP_TASK_TO_TASKDATA(ThisRecordMap[j].task);
-    
-     if (!prealloc)
+  for (kmp_int32 j = 0; j < ThisNumTasks; j++) {
+    kmp_taskdata_t *td = KMP_TASK_TO_TASKDATA(ThisRecordMap[j].task);
+
+    if (!prealloc)
       td->td_parent = parent_task;
 
-     ThisRecordMap[j].parent_task = parent_task;
-     // kmp_taskdata_t *new_taskdata =
-     KMP_ATOMIC_ST_RLX(&ThisRecordMap[j].npredecessors_counter,
-                       ThisRecordMap[j].npredecessors);
+    ThisRecordMap[j].parent_task = parent_task;
+    kmp_taskgroup_t *parentTaskgroup =
+        ThisRecordMap[j].parent_task->td_taskgroup;
 
-     KMP_ATOMIC_INC(&ThisRecordMap[j].parent_task->td_incomplete_child_tasks);
+    KMP_ATOMIC_ST_RLX(&ThisRecordMap[j].npredecessors_counter,
+                      ThisRecordMap[j].npredecessors);
 
-     //printf ("Es: %d \n", KMP_ATOMIC_LD_RLX(&ThisRecordMap[j].parent_task->td_taskgroup->count));
-     // Protect with if?
-     kmp_taskgroup_t *parentTaskgroup =ThisRecordMap[j].parent_task->td_taskgroup;
-     if (parentTaskgroup){
-       KMP_ATOMIC_INC(&parentTaskgroup->count);
-       //The taskgroup is different so we must update it
-      if (!prealloc)
-       td->td_taskgroup = parentTaskgroup;
-     }
-     else if( !prealloc && td->td_taskgroup!=nullptr){
-      //If the parent doesnt have a taskgroup, remove it from the task
-      td->td_taskgroup = nullptr;
-     }
+    KMP_ATOMIC_INC(&ThisRecordMap[j].parent_task->td_incomplete_child_tasks);
 
-     if (ThisRecordMap[j].parent_task->td_flags.tasktype == TASK_EXPLICIT)
-       KMP_ATOMIC_INC(&ThisRecordMap[j].parent_task->td_allocated_child_tasks);
-   }
+    if (parentTaskgroup) {
+        KMP_ATOMIC_INC(&parentTaskgroup->count);
+        // The taskgroup is different so we must update it
+        if (!prealloc)
+          td->td_taskgroup = parentTaskgroup;
+    } else if (!prealloc && td->td_taskgroup != nullptr) {
+        // If the parent doesnt have a taskgroup, remove it from the task
+        td->td_taskgroup = nullptr;
+    }
 
-  for (kmp_int32 j = 0; j < ThisNumRoots; j++) {
-    if (GlobalTdgs[tdg_index].tdgStatus == TDG_PREALLOC) {
-      kmp_info_t *thread = __kmp_threads[gtid];
+    if (ThisRecordMap[j].parent_task->td_flags.tasktype == TASK_EXPLICIT)
+      KMP_ATOMIC_INC(&ThisRecordMap[j].parent_task->td_allocated_child_tasks);
+  }
+
+  if (GlobalTdgs[tdg_index].tdgStatus == TDG_PREALLOC) {
+    for (kmp_int32 j = 0; j < ThisNumRoots; j++) {
       kmp_taskdata_t *parent_task = thread->th.th_current_task;
       ThisRecordMap[ThisRootTasks[j]].task = nullptr;
       kmp_task_t *task = kmp_init_lazy_task(
           ThisRootTasks[j], gtid, ThisRecordMap, GlobalTdgs[tdg_index].tdgId);
       if (task == nullptr) {
-        // printf("Me guardo %d \n", ThisRootTasks[j]);
         insert_to_waiting_tdg(&ThisRecordMap[ThisRootTasks[j]]);
       } else
         __kmp_omp_task(gtid, task, true);
-    } else {
-	__kmp_omp_task(gtid, ThisRecordMap[ThisRootTasks[j]].task, true);
     }
+  } else if (thread->th.th_task_team == NULL || nowait) {
+    // tdgStatus != TDG_PREALLOC && (th_task_team == NULL || nowait)
+    for (kmp_int32 j = 0; j < ThisNumRoots; j++)
+      __kmp_omp_task(gtid, ThisRecordMap[ThisRootTasks[j]].task, true);
+  } else {
+    // tdgStatus != TDG_PREALLOC && th_task_team != NULL && !nowait
+    curr_tdg_idx = tdg_index;
+    memset(&replaying[0], 1, sizeof(int) * MAX_NUM_PROC);
+    // wake up threads to execute tasks
+    if (UNLIKELY(!KMP_TASKING_ENABLED(task_team)))
+      __kmp_enable_tasking(task_team, thread);
+    kmp_taskdata_t *taskdata;
+    for (kmp_int32 i = 0; i < thread_data->td.td_tdg_ntasks[tdg_index]; ++i) {
+      taskdata = KMP_TASK_TO_TASKDATA(thread_data->td.td_tdg_tasks[tdg_index][i]);
+      __kmp_omp_task(gtid, thread_data->td.td_tdg_tasks[tdg_index][i], true);
+    }
+    replaying[tid] = 0;
   }
-  //__kmpc_end_taskgroup(loc_ref, gtid);
 }
 
 void cleanTdgCreationInfo(kmp_int32 gtid) {
@@ -1311,7 +1435,7 @@ void __kmpc_set_tdg(struct kmp_node_info *tdg, kmp_int32 gtid, kmp_int32 tdg_id,
 }
 
 kmp_int32 __kmpc_record(ident_t *loc_ref, kmp_int32 gtid, void (*entry)(void *),
-                        void *args, kmp_int32 tdg_id, bool re_rec) {
+                        void *args, kmp_int32 tdg_id, bool re_rec, bool nowait) {
 
   kmp_int32 ThisMapSize = INIT_MAPSIZE;
 
@@ -1400,6 +1524,10 @@ kmp_int32 __kmpc_record(ident_t *loc_ref, kmp_int32 gtid, void (*entry)(void *),
   GlobalTdgs[current_tdg_number].rootTasks = ThisRootTasks;
   GlobalTdgs[current_tdg_number].tdgStatus = TDG_NONE;
   GlobalTdgs[current_tdg_number].spent_time = 0;
+  //Static Mapping: distribute root tasks among threads.
+  //Only activate when taskgraph is synchronous
+  if (!nowait)
+    distribute_tasks(gtid, current_tdg_number);
   //Clean tdg creation info slot
   cleanTdgCreationInfo(gtid);
   // printf("[OpenMP] Recording finished! \n");
@@ -1466,10 +1594,15 @@ void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 tdg_id,
           if (!nowait)
             __kmpc_taskgroup(loc_ref, gtid);
 
-          __kmpc_execute_tdg(loc_ref, gtid, tdg_index);
+          __kmpc_execute_tdg(loc_ref, gtid, tdg_index, nowait);
 
-          if (!nowait)
+          if (!nowait) {
+            kmp_info_t *thread = __kmp_threads[gtid];
+            kmp_task_team_t *task_team = thread->th.th_task_team;
+            kmp_int32 nthreads = task_team->tt.tt_nproc;
             __kmpc_end_taskgroup(loc_ref, gtid);
+            wait_all_threads_scheduled(gtid, nthreads);
+          }
 
           return;
         }
@@ -1482,7 +1615,7 @@ void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 tdg_id,
     if(tdg_index!=-1 && if_cond)
       freeTDG(tdg_index, gtid);
       
-    __kmpc_record(loc_ref, gtid, entry, args, tdg_id, if_cond);
+    __kmpc_record(loc_ref, gtid, entry, args, tdg_id, if_cond, nowait);
   } else if (tdg_type == STATIC_TDG) {
     if (!nowait)
       __kmpc_taskgroup(loc_ref, gtid);
@@ -1549,7 +1682,10 @@ void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 tdg_id,
       // From TDG_FILL_DATA to TDG_NONE
       GlobalTdgs[tdg_index].tdgStatus = TDG_NONE;
     }
-    __kmpc_execute_tdg(loc_ref, gtid, tdg_index);
+    if (!nowait)
+      distribute_tasks(gtid, tdg_index);
+
+    __kmpc_execute_tdg(loc_ref, gtid, tdg_index, nowait);
     if (!nowait)
       __kmpc_end_taskgroup(loc_ref, gtid);
   } else {
