@@ -2694,7 +2694,6 @@ kmp_int32 __kmp_omp_task(kmp_int32 gtid, kmp_task_t *new_task,
     TaskInfo->parent_task = new_taskdata->td_parent;
 
     //Reduce task counters, since task is not executed
-    printf("NOOOO 2 \n");
     KMP_ATOMIC_DEC(&new_taskdata->td_parent->td_incomplete_child_tasks);
     if (new_taskdata->td_parent->td_taskgroup)
       KMP_ATOMIC_DEC(&new_taskdata->td_parent->td_taskgroup->count);

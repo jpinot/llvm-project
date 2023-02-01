@@ -768,7 +768,6 @@ kmp_int32 __kmpc_omp_task_with_deps(ident_t *loc_ref, kmp_int32 gtid,
     TaskInfo->parent_task = new_taskdata->td_parent;
 
     // Reduce task counters, since task is not executed
-    printf("NOOO \n");
     KMP_ATOMIC_DEC(&new_taskdata->td_parent->td_incomplete_child_tasks);
     if (new_taskdata->td_parent->td_taskgroup)
       KMP_ATOMIC_DEC(&new_taskdata->td_parent->td_taskgroup->count);
@@ -1217,7 +1216,7 @@ void wait_all_threads_scheduled(kmp_int32 gtid, kmp_int32 nthreads) {
   } while (proceed);
 }
 
-void __kmpc_execute_tdg(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 tdg_index) {
+void __kmpc_execute_tdg(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 tdg_index, bool nowait) {
    kmp_node_info *ThisRecordMap;
    kmp_int32 *ThisRootTasks;
    kmp_int32 ThisNumRoots;
