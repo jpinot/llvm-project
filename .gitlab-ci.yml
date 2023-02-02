@@ -1,34 +1,25 @@
 stages:
   - build
   - test
-  - publish
-  - deploy
-  
-image: gcc
 
 build:
   stage: build
-  # instead of calling g++ directly you can also use some build toolkit like make
-  # install the necessary build tools when needed
-  # before_script:
-  #   - apt update && apt -y install make autoconf
+  variables:
+    CC: clang
+    CCX: clang++
+  before_script:
+    - apt update && apt -y install ninja-build ldd clang
   script:
-    - g++ helloworld.cpp -o mybinary
+    - mkdir build
+    - cd build
+    - cmake -DLLVM_ENABLE_PROJECTS="clang;openmp" -DCMAKE_BUILD_TYPE=MinSizeRel -G "Ninja" -DCMAKE_INSTALL_PREFIX=opt/ampere/llvm -DLLVM_ENABLE_LLD=ON -DLLVM_PARALLEL_LINK_JOBS=8 -DLIBOMP_TASKGRAPH=1 -DLLVM_LINK_LLVM_DYLIB=ON -DLLVM_BUILD_LLVM_DYLIB=ON ../llvm
+    - ninja install
   artifacts:
     paths:
-      - mybinary
-      # depending on your build setup it's most likely a good idea to cache outputs to reduce the build time
-      # cache:
-      #   paths:
-      #     - "*.o"
+      - install/bin/clang
 
 # run tests using the binary built before
 test:
   stage: test
   script:
-    - ./runmytests.sh
-
-deploy:
-  stage: deploy
-  script: echo "Define your deployment script!"
-  environment: production
+    - echo "Do some testing"
