@@ -79,15 +79,12 @@ int replaying[MAX_NUM_PROC] = {0};
 // encountering a taskgraph directive withOUT nowait clause
 kmp_int32 curr_tdg_idx = -1;
 
-struct kmp_space_indexer free_space_indexer;
-struct kmp_task_alloc_info *task_static_table;
-struct kmp_waiting_tdg waiting_tdg_to_execute;
 extern size_t __kmp_round_up_to_val(size_t size, size_t val);
 extern void __kmp_free_task_and_ancestors(kmp_int32 gtid,
                                           kmp_taskdata_t *taskdata,
                                           kmp_info_t *thread);
 kmp_task_t *kmp_init_lazy_task(int static_id,
-                               kmp_int32 gtid, kmp_node_info *thisRecordMap, kmp_int32 tdg_id);
+                               kmp_int32 gtid, kmp_node_info *thisRecordMap, kmp_tdg_info *globalTdg);
 void kmp_insert_task_in_indexer(kmp_task_t *task);
 
 #endif // LIBOMP_TASKGRAPH
@@ -1032,7 +1029,7 @@ void print_tdg_to_dot(kmp_tdg_info *thisTdg) {
   fprintf(f, "digraph TDG {\n");
   fprintf(f, "   compound=true\n");
   fprintf(f, "   subgraph cluster_0 {\n");
-  fprintf(f, "      label=TDG_%llu\n", thisTdg->tdgId);
+  fprintf(f, "      label=TDG_%d\n", thisTdg->tdgId);
 
   for (kmp_int32 i = 0; i < thisTdg->numTasks; i++) {
 
@@ -1131,13 +1128,12 @@ static kmp_int32 **task_insert(kmp_int32 nthreads, kmp_int32 *ntasks_per_thread,
 
   int dst_th_ct = 0; // thread counter
   kmp_int32 **result = (kmp_int32 **)malloc(sizeof(kmp_int32 *) * nthreads);
-  kmp_int32 tid = __kmp_get_tid();
 
   for (int i = 0; i < nthreads; ++i) {
     // we are not sure how many tasks are going to be in each thread,
     // allocate number of root tasks to be pessimistic.
     result[i] = (kmp_int32 *)malloc(sizeof(kmp_int32) * ThisNumRoots);
-    for (kmp_uint j = 0; j < ThisNumRoots; ++j) {
+    for (kmp_uint j = 0; j < (kmp_uint) ThisNumRoots; ++j) {
       result[i][j] = -1;
     }
   }
@@ -1163,7 +1159,6 @@ static void distribute_tasks(kmp_int32 gtid, kmp_int32 tdg_index) {
 
   task_teams_sync = true;
   kmp_info_t *thread = __kmp_threads[gtid];
-  kmp_int32 tid = thread->th.th_info.ds.ds_tid;
   kmp_task_team_t *task_team = thread->th.th_task_team;
   kmp_int32 nthreads;
 
@@ -1220,9 +1215,7 @@ void __kmpc_execute_tdg(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 tdg_index, b
    kmp_node_info *ThisRecordMap;
    kmp_int32 *ThisRootTasks;
    kmp_int32 ThisNumRoots;
-   kmp_int32 ThisMapSize;
    ThisRecordMap = GlobalTdgs[tdg_index].RecordMap;
-   ThisMapSize = GlobalTdgs[tdg_index].mapSize;
    ThisNumRoots = GlobalTdgs[tdg_index].numRoots;
    ThisRootTasks = GlobalTdgs[tdg_index].rootTasks;
    kmp_int32 ThisNumTasks = GlobalTdgs[tdg_index].numTasks;
@@ -1290,14 +1283,14 @@ void __kmpc_execute_tdg(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 tdg_index, b
 
   if (GlobalTdgs[tdg_index].tdgStatus == TDG_PREALLOC) {
     for (kmp_int32 j = 0; j < ThisNumRoots; j++) {
-      kmp_taskdata_t *parent_task = thread->th.th_current_task;
       ThisRecordMap[ThisRootTasks[j]].task = nullptr;
       kmp_task_t *task = kmp_init_lazy_task(
-          ThisRootTasks[j], gtid, ThisRecordMap, GlobalTdgs[tdg_index].tdgId);
+          ThisRootTasks[j], gtid, ThisRecordMap, &GlobalTdgs[tdg_index]);
       if (task == nullptr) {
-        insert_to_waiting_tdg(&ThisRecordMap[ThisRootTasks[j]]);
-      } else
+        insert_to_waiting_tdg(&ThisRecordMap[ThisRootTasks[j]], &GlobalTdgs[tdg_index]);
+      } else{
         __kmp_omp_task(gtid, task, true);
+      }
     }
   } else if (thread->th.th_task_team == NULL || nowait) {
     // tdgStatus != TDG_PREALLOC && (th_task_team == NULL || nowait)
@@ -1310,9 +1303,7 @@ void __kmpc_execute_tdg(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 tdg_index, b
     // wake up threads to execute tasks
     if (UNLIKELY(!KMP_TASKING_ENABLED(task_team)))
       __kmp_enable_tasking(task_team, thread);
-    kmp_taskdata_t *taskdata;
     for (kmp_int32 i = 0; i < thread_data->td.td_tdg_ntasks[tdg_index]; ++i) {
-      taskdata = KMP_TASK_TO_TASKDATA(thread_data->td.td_tdg_tasks[tdg_index][i]);
       __kmp_omp_task(gtid, thread_data->td.td_tdg_tasks[tdg_index][i], true);
     }
     replaying[tid] = 0;
@@ -1424,9 +1415,9 @@ void __kmpc_set_tdg(struct kmp_node_info *tdg, kmp_int32 gtid, kmp_int32 tdg_id,
   GlobalTdgs[current_tdg_number].colorMapSize = 0;
   */
 
-  if(GlobalTdgs[current_tdg_number].tdgStatus!= TDG_PREALLOC)
-    GlobalTdgs[current_tdg_number].tdgStatus = TDG_FILL_DATA;
+  GlobalTdgs[current_tdg_number].tdgStatus = TDG_FILL_DATA;
   GlobalTdgs[current_tdg_number].numTasks = ntasks;
+
   void * pCounters = (void *) &GlobalTdgs[current_tdg_number].remainingTasks;
   new (pCounters) std::atomic<kmp_int32>(0);
 
@@ -1574,6 +1565,58 @@ void freeTDG(int tdg_index, int gtid){
    free(GlobalTdgs[tdg_index].colorMap);
 }
 
+void copyPreallocData(int gtid, kmp_int32 ThisMapSize, void *args,
+                      kmp_tdg_info *tdg) {
+
+   kmp_info_t *thread = __kmp_threads[gtid];
+   kmp_taskdata_t *parent_task = thread->th.th_current_task;
+   kmp_node_info *ThisRecordMap = tdg->RecordMap;
+   for (kmp_int32 i = 0; i < ThisMapSize; i++) {
+    ThisRecordMap[i].parent_task = parent_task;
+    int Pragma = ThisRecordMap[i].pragma_id;
+    int *SharedPositions = tdg->task_static_table[Pragma].sharedDataPositions;
+    int NumShareds =
+        tdg->task_static_table[Pragma].sizeOfShareds / sizeof(void *);
+    for (int j = 0; j < NumShareds; j++) {
+      memcpy((char *)ThisRecordMap[i].shared_data + j * sizeof(void *),
+             (char *)args + SharedPositions[j] * sizeof(void *),
+             sizeof(void *));
+    }
+
+    int *FirstPrivatePositions =
+        tdg->task_static_table[Pragma].firstPrivateDataPositions;
+    int *FirstPrivateOffsets =
+        tdg->task_static_table[Pragma].firstPrivateDataOffsets;
+    int *FirstPrivateSizes =
+        tdg->task_static_table[Pragma].firstPrivateDataSizes;
+    int NumPrivates = tdg->task_static_table[Pragma].numFirstPrivates;
+    int CurrentPosition;
+    int CurrentOffset;
+    int CurrentSize;
+    for (int j = 0; j < NumPrivates; j++) {
+      CurrentPosition = FirstPrivatePositions[j];
+      CurrentOffset = FirstPrivateOffsets[j];
+      CurrentSize = FirstPrivateSizes[j];
+      char ***AdressValue =
+          (char ***)((char *)args + CurrentPosition * sizeof(void *));
+      memcpy((char *)ThisRecordMap[i].private_data + CurrentOffset,
+             *AdressValue, CurrentSize);
+    }
+
+    int NumGlobals = tdg->task_static_table[Pragma].numGlobals;
+    GlobalVarInfo *Globals = tdg->task_static_table[Pragma].GlobalVars;
+    for (int j = 0; j < NumGlobals; j++) {
+      int CurrentOffset = Globals[j].Offset;
+      int CurrentSize = Globals[j].Size;
+      void *GlobalVar = Globals[j].Var;
+      void **GlobalVarPointer = &GlobalVar;
+      bool IsPointer = Globals[j].IsPointer;
+      memcpy((char *)ThisRecordMap[i].private_data + CurrentOffset,
+             (IsPointer) ? GlobalVarPointer : GlobalVar, CurrentSize);
+    }
+   }
+}
+
 void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 tdg_id,
                       void (*entry)(void *), void *args, kmp_int32 tdg_type, kmp_int32 if_cond, bool nowait) {
   int tdg_index = -1;
@@ -1585,14 +1628,20 @@ void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 tdg_id,
         kmp_int32 remainingTasks =
             KMP_ATOMIC_LD_RLX(&GlobalTdgs[i].remainingTasks);
         // Wait if this tdg is already running
+
+        if (GlobalTdgs[tdg_index].tdgStatus == TDG_PREALLOC) {
+          copyPreallocData(gtid, GlobalTdgs[tdg_index].mapSize, args, &GlobalTdgs[tdg_index]);
+        }
+
         if (remainingTasks > 0) {
           __kmpc_omp_taskwait(loc_ref, gtid);
         }
+
         // printf("Executing! \n");
         if(!if_cond || tdg_type == STATIC_TDG) {
           if (!nowait)
             __kmpc_taskgroup(loc_ref, gtid);
-
+            
           __kmpc_execute_tdg(loc_ref, gtid, tdg_index, nowait);
 
           if (!nowait) {
@@ -1629,53 +1678,7 @@ void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 tdg_id,
     kmp_int32 ThisMapSize = GlobalTdgs[tdg_index].mapSize;
 
     if (GlobalTdgs[tdg_index].tdgStatus == TDG_PREALLOC) {
-      kmp_info_t *thread = __kmp_threads[gtid];
-      kmp_taskdata_t *parent_task = thread->th.th_current_task;
-      for (kmp_int32 i = 0; i < ThisMapSize; i++) {
-        ThisRecordMap[i].parent_task = parent_task;
-        int Pragma = ThisRecordMap[i].pragma_id;
-        int *SharedPositions = task_static_table[Pragma].sharedDataPositions;
-        int NumShareds =
-            task_static_table[Pragma].sizeOfShareds / sizeof(void *);
-        for (int j = 0; j < NumShareds; j++) {
-          memcpy((char *)ThisRecordMap[i].shared_data + j * sizeof(void *),
-                 (char *)args + SharedPositions[j] * sizeof(void *),
-                 sizeof(void *));
-        }
-
-        int *FirstPrivatePositions =
-            task_static_table[Pragma].firstPrivateDataPositions;
-        int *FirstPrivateOffsets =
-            task_static_table[Pragma].firstPrivateDataOffsets;
-        int *FirstPrivateSizes =
-            task_static_table[Pragma].firstPrivateDataSizes;
-        int NumPrivates = task_static_table[Pragma].numFirstPrivates;
-        int CurrentPosition;
-        int CurrentOffset;
-        int CurrentSize;
-        for (int j = 0; j < NumPrivates; j++) {
-          CurrentPosition = FirstPrivatePositions[j];
-          CurrentOffset = FirstPrivateOffsets[j];
-          CurrentSize = FirstPrivateSizes[j];
-          char ***AdressValue =
-              (char ***)((char *)args + CurrentPosition * sizeof(void *));
-          memcpy((char *)ThisRecordMap[i].private_data + CurrentOffset,
-                 *AdressValue, CurrentSize);
-        }
-        
-        int NumGlobals = task_static_table[Pragma].numGlobals;
-        GlobalVarInfo *Globals = task_static_table[Pragma].GlobalVars;
-        for (int j = 0; j < NumGlobals; j++){
-          int CurrentOffset = Globals[j].Offset;
-          int CurrentSize = Globals[j].Size;
-          void *GlobalVar = Globals[j].Var;
-          void **GlobalVarPointer= &GlobalVar;
-          bool IsPointer = Globals[j].IsPointer;
-          memcpy((char *)ThisRecordMap[i].private_data + CurrentOffset,
-                 (IsPointer)?GlobalVarPointer:GlobalVar, CurrentSize);
-
-        }
-      }
+        copyPreallocData(gtid, ThisMapSize, args, &GlobalTdgs[tdg_index]);
     } else {
       __kmpc_fill_data(loc_ref, gtid, entry, args);
       // From TDG_FILL_DATA to TDG_NONE
@@ -1697,66 +1700,65 @@ void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 tdg_id,
 // structure to be executed. Contains functions to insert and obtain tasks.
 
 // Initializes the list
-void init_waiting_tdg() {
-  waiting_tdg_to_execute.size = 0;
-  waiting_tdg_to_execute.head = NULL;
-  waiting_tdg_to_execute.tail = NULL;
-  __kmp_init_futex_lock(&waiting_tdg_to_execute.waiting_tdg_lock);
+void init_waiting_tdg(int index) {
+  GlobalTdgs[index].waiting_tdg_to_execute.size = 0;
+  GlobalTdgs[index].waiting_tdg_to_execute.head = NULL;
+  GlobalTdgs[index].waiting_tdg_to_execute.tail = NULL;
+  __kmp_init_futex_lock(&GlobalTdgs[index].waiting_tdg_to_execute.waiting_tdg_lock);
 }
 
 // Returns the number of tasks waiting
-int check_waiting_tdg() {
-  __kmp_acquire_futex_lock(&waiting_tdg_to_execute.waiting_tdg_lock, 0);
-  int size = waiting_tdg_to_execute.size;
-  __kmp_release_futex_lock(&waiting_tdg_to_execute.waiting_tdg_lock, 0);
+int check_waiting_tdg(kmp_tdg_info *tdg) {
+  __kmp_acquire_futex_lock(&tdg->waiting_tdg_to_execute.waiting_tdg_lock, 0);
+  int size = tdg->waiting_tdg_to_execute.size;
+  __kmp_release_futex_lock(&tdg->waiting_tdg_to_execute.waiting_tdg_lock, 0);
   return size;
 }
 
 // Insert a task at the begining of the list. Currently not used.
-void insert_first_to_waiting_tdg(struct kmp_node_info *tdg) {
+void insert_first_to_waiting_tdg(struct kmp_node_info *tdg_to_insert, kmp_tdg_info *tdg) {
 
-  __kmp_acquire_futex_lock(&waiting_tdg_to_execute.waiting_tdg_lock, 0);
-  tdg->next_waiting_tdg = waiting_tdg_to_execute.head;
-  waiting_tdg_to_execute.head = tdg;
-  waiting_tdg_to_execute.size += 1;
-  __kmp_release_futex_lock(&waiting_tdg_to_execute.waiting_tdg_lock, 0);
+  __kmp_acquire_futex_lock(&tdg->waiting_tdg_to_execute.waiting_tdg_lock, 0);
+  tdg_to_insert->next_waiting_tdg = tdg->waiting_tdg_to_execute.head;
+  tdg->waiting_tdg_to_execute.head = tdg_to_insert;
+  tdg->waiting_tdg_to_execute.size += 1;
+  __kmp_release_futex_lock(&tdg->waiting_tdg_to_execute.waiting_tdg_lock, 0);
 }
 
 // Insert a task at the end of the list. Used at launching points when no free
 // task structure is available, at: 1) TDG execution of the roots 2) when a
 // tasks finishes and queues their dependants
-void insert_to_waiting_tdg(struct kmp_node_info *tdg) {
-  __kmp_acquire_futex_lock(&waiting_tdg_to_execute.waiting_tdg_lock, 0);
-  printf("INSERTO!! \n");
-  if (!waiting_tdg_to_execute.size) {
-    waiting_tdg_to_execute.head = tdg;
-    waiting_tdg_to_execute.tail = tdg;
+void insert_to_waiting_tdg(struct kmp_node_info *tdg_to_insert, kmp_tdg_info *tdg) {
+  __kmp_acquire_futex_lock(&tdg->waiting_tdg_to_execute.waiting_tdg_lock, 0);
+  if (!tdg->waiting_tdg_to_execute.size) {
+    tdg->waiting_tdg_to_execute.head = tdg_to_insert;
+    tdg->waiting_tdg_to_execute.tail = tdg_to_insert;
   } else {
-    waiting_tdg_to_execute.tail->next_waiting_tdg = tdg;
-    waiting_tdg_to_execute.tail = waiting_tdg_to_execute.tail->next_waiting_tdg;
+    tdg->waiting_tdg_to_execute.tail->next_waiting_tdg = tdg_to_insert;
+    tdg->waiting_tdg_to_execute.tail = tdg->waiting_tdg_to_execute.tail->next_waiting_tdg;
   }
-  waiting_tdg_to_execute.size += 1;
-  waiting_tdg_to_execute.tail->next_waiting_tdg = NULL;
-  __kmp_release_futex_lock(&waiting_tdg_to_execute.waiting_tdg_lock, 0);
+  tdg->waiting_tdg_to_execute.size += 1;
+  tdg->waiting_tdg_to_execute.tail->next_waiting_tdg = NULL;
+  __kmp_release_futex_lock(&tdg->waiting_tdg_to_execute.waiting_tdg_lock, 0);
 }
 
 // Obtains a free task structure, returns NULL in case no task structure is
 // available. Used when creating tasks: 1) When filling data for the first time
 // 2) lazy task creation
-struct kmp_node_info *get_from_waiting_tdg() {
-  __kmp_acquire_futex_lock(&waiting_tdg_to_execute.waiting_tdg_lock, 0);
+struct kmp_node_info *get_from_waiting_tdg(kmp_tdg_info *tdg) {
+  __kmp_acquire_futex_lock(&tdg->waiting_tdg_to_execute.waiting_tdg_lock, 0);
   struct kmp_node_info *temp;
-  temp = waiting_tdg_to_execute.head;
+  temp = tdg->waiting_tdg_to_execute.head;
 
-  if (!waiting_tdg_to_execute.size) {
-    __kmp_release_futex_lock(&waiting_tdg_to_execute.waiting_tdg_lock, 0);
+  if (!tdg->waiting_tdg_to_execute.size) {
+    __kmp_release_futex_lock(&tdg->waiting_tdg_to_execute.waiting_tdg_lock, 0);
     return NULL;
   } else {
-    waiting_tdg_to_execute.head = waiting_tdg_to_execute.head->next_waiting_tdg;
-    waiting_tdg_to_execute.size -= 1;
+    tdg->waiting_tdg_to_execute.head = tdg->waiting_tdg_to_execute.head->next_waiting_tdg;
+    tdg->waiting_tdg_to_execute.size -= 1;
   }
 
-  __kmp_release_futex_lock(&waiting_tdg_to_execute.waiting_tdg_lock, 0);
+  __kmp_release_futex_lock(&tdg->waiting_tdg_to_execute.waiting_tdg_lock, 0);
   return temp;
 }
 
@@ -1765,54 +1767,54 @@ struct kmp_node_info *get_from_waiting_tdg() {
 // a moment, contains functions to insert and obtain tasks structures.
 
 // Initializes the list
-void init_free_space_indexer() {
-  free_space_indexer.head = NULL;
-  free_space_indexer.tail = NULL;
-  free_space_indexer.n_free_tasks = 0;
-  free_space_indexer.max_free_tasks = 0;
-  __kmp_init_futex_lock(&free_space_indexer.lock);
+void init_free_space_indexer(int index) {
+  GlobalTdgs[index].free_space_indexer.head = NULL;
+  GlobalTdgs[index].free_space_indexer.tail = NULL;
+  GlobalTdgs[index]. free_space_indexer.n_free_tasks = 0;
+  GlobalTdgs[index].free_space_indexer.max_free_tasks = 0;
+  __kmp_init_futex_lock(&GlobalTdgs[index].free_space_indexer.lock);
 }
 
 // Returns the number of free task structures
-int get_num_free_task() { return free_space_indexer.n_free_tasks; }
+int get_num_free_task(kmp_tdg_info *tdg) { return tdg->free_space_indexer.n_free_tasks; }
 
 // Obtains a free node, otherwise returns NULL. Used at
 // kmp_get_free_task_from_indexer function.
-struct kmp_space_indexer_node *get_free_indexer_node() {
-  __kmp_acquire_futex_lock(&free_space_indexer.lock, 0);
+struct kmp_space_indexer_node *get_free_indexer_node(kmp_tdg_info *tdg) {
+  __kmp_acquire_futex_lock(&tdg->free_space_indexer.lock, 0);
 
-  if (!get_num_free_task()) {
-    __kmp_release_futex_lock(&free_space_indexer.lock, 0);
+  if (!get_num_free_task(tdg)) {
+    __kmp_release_futex_lock(&tdg->free_space_indexer.lock, 0);
     return NULL;
   }
 
   struct kmp_space_indexer_node *node;
 
-  node = free_space_indexer.head;
+  node = tdg->free_space_indexer.head;
 
-  free_space_indexer.head = free_space_indexer.head->next;
-  free_space_indexer.n_free_tasks -= 1;
+  tdg->free_space_indexer.head = tdg->free_space_indexer.head->next;
+  tdg->free_space_indexer.n_free_tasks -= 1;
 
-  __kmp_release_futex_lock(&free_space_indexer.lock, 0);
+  __kmp_release_futex_lock(&tdg->free_space_indexer.lock, 0);
   return node;
 }
 
-void insert_indexer_node(struct kmp_space_indexer_node *node) {
-  __kmp_acquire_futex_lock(&free_space_indexer.lock, 0);
+void insert_indexer_node(struct kmp_space_indexer_node *node, kmp_tdg_info *tdg) {
+  __kmp_acquire_futex_lock(&tdg->free_space_indexer.lock, 0);
   node->next = NULL;
-  if (!get_num_free_task()) {
-    free_space_indexer.head = node;
-    free_space_indexer.tail = node;
+  if (!get_num_free_task(tdg)) {
+    tdg->free_space_indexer.head = node;
+    tdg->free_space_indexer.tail = node;
   } else {
-    free_space_indexer.tail->next = node;
-    free_space_indexer.tail = free_space_indexer.tail->next;
+    tdg->free_space_indexer.tail->next = node;
+    tdg->free_space_indexer.tail =  tdg->free_space_indexer.tail->next;
   }
-  free_space_indexer.n_free_tasks += 1;
-  __kmp_release_futex_lock(&free_space_indexer.lock, 0);
+  tdg->free_space_indexer.n_free_tasks += 1;
+  __kmp_release_futex_lock(&tdg->free_space_indexer.lock, 0);
 }
 
-kmp_task_t *kmp_get_free_task_from_indexer() {
-  struct kmp_space_indexer_node *node = get_free_indexer_node();
+kmp_task_t *kmp_get_free_task_from_indexer(kmp_tdg_info *tdg) {
+  struct kmp_space_indexer_node *node = get_free_indexer_node(tdg);
 
   if (node == NULL) {
     return NULL;
@@ -1837,7 +1839,7 @@ void kmp_insert_task_in_indexer(kmp_task_t *task) {
   struct kmp_space_indexer_node *node = taskdata->indexer_node;
   clean_free_task(task);
   taskdata->indexer_node = node;
-  insert_indexer_node(node);
+  insert_indexer_node(node, taskdata->tdg);
 }
 
 void __kmpc_prealloc_tasks(kmp_task_alloc_info *task_static_data,
@@ -1848,31 +1850,29 @@ void __kmpc_prealloc_tasks(kmp_task_alloc_info *task_static_data,
                            unsigned int task_size,
                            kmp_int32 tdg_id) {
 
-  __kmp_acquire_futex_lock(&TdgLock, 0);
-
+  int index = -1;
   //If the TDG is encountered preallocation has already been performed
   for (int i = 0; i < Ntdgs; i++) {
     if (GlobalTdgs[i].tdgId == tdg_id){
-        __kmp_release_futex_lock(&TdgLock, 0);
-        return;
+        index = i;
+        if(GlobalTdgs[i].tdgStatus== TDG_PREALLOC){
+          return;
+        }
     }
   }
 
-  GlobalTdgs[Ntdgs].tdgStatus = TDG_PREALLOC;
-
-  //Current TDG is always Ntdgs position
-  __kmp_release_futex_lock(&TdgLock, 0);
+  GlobalTdgs[index].tdgStatus = TDG_PREALLOC;
 
   if (max_concurrent_tasks == 0 || max_concurrent_tasks > n_task_constructs) {
     max_concurrent_tasks = n_task_constructs;
   }
 
-  task_static_table = task_static_data;
+  GlobalTdgs[index].task_static_table = task_static_data;
 
-  init_free_space_indexer();
-  init_waiting_tdg();
+  init_free_space_indexer(index);
+  init_waiting_tdg(index);
 
-  free_space_indexer.max_free_tasks = max_concurrent_tasks;
+  GlobalTdgs[index].free_space_indexer.max_free_tasks = max_concurrent_tasks;
 
   // printf("Runtime es %d \n", max_arg_size);
   for (int i = 0; i < (int)max_concurrent_tasks; i++) {
@@ -1884,22 +1884,24 @@ void __kmpc_prealloc_tasks(kmp_task_alloc_info *task_static_data,
 
     kmp_task_t *task = KMP_TASKDATA_TO_TASK(taskdata);
     node->task = task;
-    insert_indexer_node(node);
+    insert_indexer_node(node, &GlobalTdgs[index]);
   }
 }
 
 kmp_task_t *kmp_init_lazy_task(int static_id,
-                               kmp_int32 gtid, kmp_node_info *thisRecordMap, kmp_int32 tdg_id) {
+                               kmp_int32 gtid, kmp_node_info *thisRecordMap, kmp_tdg_info *globalTdg) {
 
-  kmp_task_t *new_task = kmp_get_free_task_from_indexer();
+  kmp_task_t *new_task = kmp_get_free_task_from_indexer(globalTdg);
   if (new_task == NULL)
     return nullptr;
+  
+  kmp_int32 tdg_id = globalTdg->tdgId;
   kmp_taskdata_t *new_taskdata = KMP_TASK_TO_TASKDATA(new_task);
   kmp_info_t *thread = __kmp_threads[gtid];
   kmp_node_info *tdg = &thisRecordMap[static_id];
   kmp_taskdata_t *parent_task = tdg->parent_task;
   kmp_team_t *team = thread->th.th_team;
-  kmp_task_alloc_info tdg_static_data = task_static_table[tdg->pragma_id];
+  kmp_task_alloc_info tdg_static_data = globalTdg->task_static_table[tdg->pragma_id];
   kmp_tasking_flags_t *flags = (kmp_tasking_flags_t *)&tdg_static_data.flags;
 
   int tdg_index = -1;
@@ -1909,7 +1911,7 @@ kmp_task_t *kmp_init_lazy_task(int static_id,
     }
   }
 
-  if (tdg_static_data.sizeOfShareds > 0) {
+  if (tdg_static_data.sizeOfShareds >= 4) {
 
     int shareds_offset = sizeof(kmp_taskdata_t) + tdg_static_data.sizeOfTask;
     shareds_offset = __kmp_round_up_to_val(shareds_offset, sizeof(void *));
@@ -1995,9 +1997,11 @@ kmp_task_t *kmp_init_lazy_task(int static_id,
   new_taskdata->td_allow_completion_event.pending_events_count = 1;
   new_taskdata->td_allow_completion_event.ed.task = new_task;
 
-  memcpy(new_task + 1, tdg->private_data,
+  if((tdg_static_data.sizeOfTask - sizeof(kmp_task_t)) > 0)
+    memcpy(new_task + 1, tdg->private_data,
          tdg_static_data.sizeOfTask - sizeof(kmp_task_t));
-  memcpy(new_task->shareds, tdg->shared_data, tdg_static_data.sizeOfShareds);
+  if(tdg_static_data.sizeOfShareds>=4)
+    memcpy(new_task->shareds, tdg->shared_data, tdg_static_data.sizeOfShareds);
 
   tdg->task = new_task;
   return new_task;

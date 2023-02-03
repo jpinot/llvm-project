@@ -2537,35 +2537,6 @@ struct kmp_ident_color {
   const char *color;
 };
 
-//Structure that contains a TDG
-struct kmp_tdg_info {
-  const char *loc; //Location of the pragma
-  kmp_int32 tdgId; //Unique idenfifier of the TDG
-  kmp_int32 mapSize; //Number of allocated TDG nodes
-  kmp_int32 numRoots; //Number of roots tasks int the TDG
-  kmp_int32 *rootTasks; //Array of tasks identifiers that are roots
-  kmp_node_info *RecordMap; //Array of TDG nodes
-  kmp_ident_task *taskIdent; //Array of locations of each TDG node
-  kmp_ident_color *colorMap; //Array of colors for the dot output
-  kmp_int32 colorIndex; //Index of colors used
-  kmp_int32 colorMapSize; //Size of colors array
-  kmp_tdg_status tdgStatus; //Status of the TDG (recording, filling data...)
-  kmp_int32 numTasks; //Number of TDG nodes
-  std::atomic<kmp_int32> remainingTasks; //Used to know if the TDG is finished
-  double spent_time; // time spent to execute this tdg, in us
-  // taskloop reduction related
-  void *rec_taskred_data; // data to pass to __kmpc_task_reduction_init or
-                          // __kmpc_taskred_init
-  kmp_int32 rec_num_taskred;
-};
-
-//Structure to associate a task gen ID for each thread. This is needed to allow several threads to record different TDGs at the same time
-struct kmp_tdg_creation_info {
-  std::atomic<kmp_int32> currentTaskGenID;
-  kmp_int32 gtid;
-  kmp_tdg_info *tdg;
-};
-
 //Structures used for the preallocation and lazy task creation mechanisms
 struct kmp_space_indexer_node {
   kmp_task_t *task;
@@ -2586,6 +2557,41 @@ struct kmp_waiting_tdg {
   int size;
   kmp_futex_lock_t waiting_tdg_lock;
 };
+
+//Structure that contains a TDG
+struct kmp_tdg_info {
+  const char *loc; //Location of the pragma
+  kmp_int32 tdgId; //Unique idenfifier of the TDG
+  kmp_int32 mapSize; //Number of allocated TDG nodes
+  kmp_int32 numRoots; //Number of roots tasks int the TDG
+  kmp_int32 *rootTasks; //Array of tasks identifiers that are roots
+  kmp_node_info *RecordMap; //Array of TDG nodes
+  kmp_ident_task *taskIdent; //Array of locations of each TDG node
+  kmp_ident_color *colorMap; //Array of colors for the dot output
+  kmp_int32 colorIndex; //Index of colors used
+  kmp_int32 colorMapSize; //Size of colors array
+  kmp_tdg_status tdgStatus; //Status of the TDG (recording, filling data...)
+  kmp_int32 numTasks; //Number of TDG nodes
+  std::atomic<kmp_int32> remainingTasks; //Used to know if the TDG is finished
+  double spent_time; // time spent to execute this tdg, in us
+  // taskloop reduction related
+  void *rec_taskred_data; // data to pass to __kmpc_task_reduction_init or
+                          // __kmpc_taskred_init
+  kmp_int32 rec_num_taskred;
+  //PREALLOC
+  struct kmp_space_indexer free_space_indexer;
+  struct kmp_task_alloc_info *task_static_table;
+  struct kmp_waiting_tdg waiting_tdg_to_execute;
+};
+
+//Structure to associate a task gen ID for each thread. This is needed to allow several threads to record different TDGs at the same time
+struct kmp_tdg_creation_info {
+  std::atomic<kmp_int32> currentTaskGenID;
+  kmp_int32 gtid;
+  kmp_tdg_info *tdg;
+};
+
+
 
 struct GlobalVarInfo {
   void *Var;

@@ -53,6 +53,7 @@ struct SFUse{
     Value *val;
     int position;
     bool isReverse;
+    bool isPrivate;
 };
 
 struct TaskInfo {
@@ -92,9 +93,7 @@ public:
   void obtainTaskIdent(TaskInfo &TaskFound, CallInst &TaskCall);
   // static so that it can be used in cuda generation
   static std::string createStructType(SmallVectorImpl<Type *> &types,
-                                      int struct_id, std::string name);
-  std::string get_task_layout(std::string LongestPrivateName,
-                              std::string LongestSharedName);
+                                      int struct_id, std::string name, int ntdgs);
   void erase_transitive_edges();
   bool checkDependency(TaskDependInfo &Source, TaskDependInfo &Dest);
   void findOpenMPTasks(Function &F, DominatorTree &DT, int ntdgs);

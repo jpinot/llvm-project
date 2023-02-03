@@ -999,11 +999,11 @@ static void __kmp_free_task(kmp_int32 gtid, kmp_taskdata_t *taskdata,
   } else {
     if (taskdata->tdg->tdgStatus == TDG_PREALLOC) {
       kmp_insert_task_in_indexer(task);
-      if (check_waiting_tdg()) {
-        kmp_node_info *Next = get_from_waiting_tdg();
+      if (check_waiting_tdg(taskdata->tdg)) {
+        kmp_node_info *Next = get_from_waiting_tdg(taskdata->tdg);
         if(Next!=NULL) {
           kmp_task_t *NextTask = kmp_init_lazy_task(
-            Next->static_id, gtid, taskdata->tdg->RecordMap, taskdata->tdg->tdgId);
+            Next->static_id, gtid, taskdata->tdg->RecordMap, taskdata->tdg);
           __kmp_omp_task(gtid, NextTask, false);
         }
       }
@@ -2643,7 +2643,6 @@ kmp_int32 __kmpc_omp_task_parts(ident_t *loc_ref, kmp_int32 gtid,
 kmp_int32 __kmp_omp_task(kmp_int32 gtid, kmp_task_t *new_task,
                          bool serialize_immediate) {
   kmp_taskdata_t *new_taskdata = KMP_TASK_TO_TASKDATA(new_task);
-
 #if LIBOMP_TASKGRAPH
   if (new_taskdata->is_taskgraph && new_taskdata->tdg->tdgStatus == TDG_RECORDING) {
     // Extend Map Size if needed
@@ -2702,17 +2701,7 @@ kmp_int32 __kmp_omp_task(kmp_int32 gtid, kmp_task_t *new_task,
     if (new_taskdata->td_parent->td_flags.tasktype == TASK_EXPLICIT) {
       KMP_ATOMIC_DEC(&new_taskdata->td_parent->td_allocated_child_tasks);
     }
-    /*
-    if (prealloc) {
-      size_t sizeOfPrivates =
-          task_static_table[TaskInfo->pragma_id].sizeOfTask -
-          sizeof(kmp_task_t);
-      TaskInfo->task = nullptr;
-      memcpy(TaskInfo->private_data, new_task + 1, sizeOfPrivates);
-      memcpy(TaskInfo->shared_data, new_task->shareds,
-             task_static_table[TaskInfo->pragma_id].sizeOfShareds);
-      kmp_insert_task_in_indexer(new_task);
-    }*/
+
     return TASK_CURRENT_NOT_QUEUED;
   }
   if (new_taskdata->is_taskgraph && StaticSchedule) {

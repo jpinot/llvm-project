@@ -21,10 +21,10 @@
 #if LIBOMP_TASKGRAPH
 //Variables to manage data preallocation and lazy task creation
 extern kmp_task_t *kmp_init_lazy_task(int static_id,
-                                      kmp_int32 gtid, kmp_node_info *thisRecordMap, kmp_int32 tdg_id);
-extern void insert_to_waiting_tdg(struct kmp_node_info *tdg);
-extern int check_waiting_tdg();
-extern struct kmp_node_info *get_from_waiting_tdg();
+                                      kmp_int32 gtid, kmp_node_info *thisRecordMap, kmp_tdg_info *globalTdg);
+extern void insert_to_waiting_tdg(struct kmp_node_info *tdg_to_insert, kmp_tdg_info *tdg);
+extern int check_waiting_tdg(kmp_tdg_info *tdg);
+extern struct kmp_node_info *get_from_waiting_tdg(kmp_tdg_info *tdg);
 #endif
 
 static inline void __kmp_node_deref(kmp_info_t *thread, kmp_depnode_t *node) {
@@ -119,9 +119,9 @@ static inline void __kmp_release_deps(kmp_int32 gtid, kmp_taskdata_t *task) {
       if (task->tdg->tdgStatus == TDG_PREALLOC) {
         if (npredecessors==0) {
           kmp_task_t *NextTask = kmp_init_lazy_task(
-              successorNumber, gtid, task->tdg->RecordMap, task->tdg->tdgId);
+              successorNumber, gtid, task->tdg->RecordMap, task->tdg);
           if (NextTask == nullptr) {
-            insert_to_waiting_tdg(successor);
+            insert_to_waiting_tdg(successor, task->tdg);
             //printf("Me guardo %d \n", successorNumber);
           } else
             __kmp_omp_task(gtid, NextTask, false);
