@@ -764,14 +764,14 @@ kmp_int32 __kmpc_omp_task_with_deps(ident_t *loc_ref, kmp_int32 gtid,
     TaskInfo->task = new_task;
     TaskInfo->parent_task = new_taskdata->td_parent;
 
-    // Reduce task counters, since task is not executed
-    KMP_ATOMIC_DEC(&new_taskdata->td_parent->td_incomplete_child_tasks);
+    // Reset parent task counters, since task is not executed
+    KMP_ATOMIC_ST_RLX(&new_taskdata->td_parent->td_incomplete_child_tasks, 0);
     if (new_taskdata->td_parent->td_taskgroup)
-      KMP_ATOMIC_DEC(&new_taskdata->td_parent->td_taskgroup->count);
+       KMP_ATOMIC_ST_RLX(&new_taskdata->td_parent->td_taskgroup->count, 0);
     // Only need to keep track of allocated child tasks for explicit tasks since
     // implicit not deallocated
     if (new_taskdata->td_parent->td_flags.tasktype == TASK_EXPLICIT) {
-      KMP_ATOMIC_DEC(&new_taskdata->td_parent->td_allocated_child_tasks);
+      KMP_ATOMIC_ST_RLX(&new_taskdata->td_parent->td_allocated_child_tasks,0);
     }
 
     // if (prealloc) {
@@ -1647,7 +1647,9 @@ void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 tdg_id,
           if (!nowait) {
             kmp_info_t *thread = __kmp_threads[gtid];
             kmp_task_team_t *task_team = thread->th.th_task_team;
-            kmp_int32 nthreads = task_team->tt.tt_nproc;
+            kmp_int32 nthreads = 1;
+            if(task_team)
+              nthreads = task_team->tt.tt_nproc;
             __kmpc_end_taskgroup(loc_ref, gtid);
             wait_all_threads_scheduled(gtid, nthreads);
           }
