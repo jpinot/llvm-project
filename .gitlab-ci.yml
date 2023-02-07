@@ -11,7 +11,7 @@ build:
     CC: clang
     CCX: clang++
   before_script:
-    - apt update -y && apt install -y ninja-build lld clang cmake
+    - apt update -y && apt install -y ninja-build lld clang cmake perl
   script:
     - mkdir build && cd build
     - cmake ../llvm -DLLVM_ENABLE_PROJECTS="clang;openmp" -DCMAKE_BUILD_TYPE=MinSizeRel -G "Ninja" -DLLVM_ENABLE_LLD=ON -DLLVM_PARALLEL_LINK_JOBS=8 -DLIBOMP_TASKGRAPH=1 -DLLVM_LINK_LLVM_DYLIB=ON -DLLVM_BUILD_LLVM_DYLIB=ON
@@ -23,6 +23,8 @@ build:
 # run tests using the binary built before
 test:
   stage: test
+  before_script:
+    - apt update -y && apt install -y libgtest-dev
   script:
     - echo "Do some testing"
   dependencies:
