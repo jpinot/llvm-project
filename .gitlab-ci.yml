@@ -6,14 +6,15 @@ stages:
 
 build:
   stage: build
+  timeout: 3h 30m
   variables:
     CC: clang
     CCX: clang++
   before_script:
-    - apt update && apt -y install ninja-build lld clang cmake
+    - apt update -y && apt install -y ninja-build lld clang cmake
   script:
     - mkdir build && cd build
-    - cmake .. -DLLVM_ENABLE_PROJECTS="clang;openmp" -DCMAKE_BUILD_TYPE=MinSizeRel -G "Ninja" -DLLVM_ENABLE_LLD=ON -DLLVM_PARALLEL_LINK_JOBS=8 -DLIBOMP_TASKGRAPH=1 -DLLVM_LINK_LLVM_DYLIB=ON -DLLVM_BUILD_LLVM_DYLIB=ON
+    - cmake ../llvm -DLLVM_ENABLE_PROJECTS="clang;openmp" -DCMAKE_BUILD_TYPE=MinSizeRel -G "Ninja" -DLLVM_ENABLE_LLD=ON -DLLVM_PARALLEL_LINK_JOBS=8 -DLIBOMP_TASKGRAPH=1 -DLLVM_LINK_LLVM_DYLIB=ON -DLLVM_BUILD_LLVM_DYLIB=ON
     - ninja install
   artifacts:
     paths:
