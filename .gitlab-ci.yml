@@ -10,6 +10,8 @@ build:
   variables:
     CC: clang
     CCX: clang++
+    DEBIAN_FRONTEND: noninteractive
+    TZ: Europe/Paris
   before_script:
     - apt update -y && apt install -y ninja-build lld clang cmake perl
   script:
