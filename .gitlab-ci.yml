@@ -1,11 +1,12 @@
 image: ubuntu:20.04
 
 stages:
-  - build
+  - build_llvm
+  - build_tests
   - test
 
-build:
-  stage: build
+build_llvm:
+  stage: build_llvm
   timeout: 3h 30m
   variables:
     CC: clang
@@ -16,18 +17,36 @@ build:
     - apt update -y && apt install -y ninja-build lld clang cmake perl
   script:
     - mkdir build && cd build
-    - cmake ../llvm -DLLVM_ENABLE_PROJECTS="clang;openmp" -DCMAKE_BUILD_TYPE=MinSizeRel -G "Ninja" -DLLVM_ENABLE_LLD=ON -DLLVM_PARALLEL_LINK_JOBS=8 -DLIBOMP_TASKGRAPH=1 -DLLVM_LINK_LLVM_DYLIB=ON -DLLVM_BUILD_LLVM_DYLIB=ON
+    - cmake ../llvm -DLLVM_ENABLE_PROJECTS="clang;openmp" -DCMAKE_BUILD_TYPE=MinSizeRel -G "Ninja" -DLLVM_ENABLE_LLD=ON -DLLVM_PARALLEL_LINK_JOBS=8 -DLIBOMP_TASKGRAPH=1 -DLLVM_LINK_LLVM_DYLIB=ON -DLLVM_BUILD_LLVM_DYLIB=ON -DOPENMP_ENABLE_LIBOMPTARGET=OFF
     - ninja install
-  artifacts:
-    paths:
-      - /bin/clang
+    
+build_tests:
+  stage: build_tests
+  timeout: 1h
+  variables:
+    CC: /bin/clang
+    CCX: /bin/clang++
+    GTEST_ROOT: /usr/src/googletest/googletest
+  before_script:
+    - apt update -y && apt install -y googletest git
+    - /usr/src/googletest/googletest
+    - cmake .
+    - make
+    - git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.bsc.es/ppc/software/matlab-rt_scheduling
+  script:
+    - cd llvm-tests
+    - sh compileEverything.sh
+  dependencies:
+  - build_llvm
 
-# run tests using the binary built before
 test:
   stage: test
-  before_script:
-    - apt update -y && apt install -y libgtest-dev
   script:
-    - echo "Do some testing"
+    - cd tests
+    - sh testEverythin.sh > results.txt
+  artifacts:
+    paths:
+      - results.txt
   dependencies:
-    - build
+    - build_tests
+  
