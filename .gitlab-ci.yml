@@ -29,12 +29,14 @@ build_tests:
     GTEST_ROOT: /usr/src/googletest/googletest
   before_script:
     - apt update -y && apt install -y googletest git
-    - /usr/src/googletest/googletest
+    - cd /usr/src/googletest/googletest
     - cmake .
     - make
-    - git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.bsc.es/ppc/software/matlab-rt_scheduling
+    - git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.bsc.es/ppc/benchmarks/llvm_ompss_tests
+    - cd llvm-ompss-tests
+    - git checkout master
   script:
-    - cd llvm-tests
+    - cd llvm-ompss-tests
     - sh compileEverything.sh
   dependencies:
   - build_llvm
