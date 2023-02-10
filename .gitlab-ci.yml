@@ -10,7 +10,7 @@ build_llvm:
   timeout: 3h 30m
   variables:
     CC: clang
-    CCX: clang++
+    CXX: clang++
     DEBIAN_FRONTEND: noninteractive
     TZ: Europe/Paris
   before_script:
@@ -19,36 +19,34 @@ build_llvm:
     - mkdir build && cd build
     - cmake ../llvm -DLLVM_ENABLE_PROJECTS="clang;openmp" -DCMAKE_BUILD_TYPE=MinSizeRel -G "Ninja" -DLLVM_ENABLE_LLD=ON -DLLVM_PARALLEL_LINK_JOBS=8 -DLIBOMP_TASKGRAPH=1 -DLLVM_LINK_LLVM_DYLIB=ON -DLLVM_BUILD_LLVM_DYLIB=ON -DOPENMP_ENABLE_LIBOMPTARGET=OFF
     - ninja install
+  artifacts:
+    untracked: true 
     
-build_tests:
+build_n_test:
   stage: build_tests
   timeout: 1h
   variables:
-    CC: /bin/clang
-    CCX: /bin/clang++
+    CC: /builds/project-0/.git/bin/clang
+    CXX: /builds/project-0/.git/bin/clang++
+    LLVM_PPC: /builds/project-0/.git/
     GTEST_ROOT: /usr/src/googletest/googletest
+    DEBIAN_FRONTEND: noninteractive
+    TZ: Europe/Paris
   before_script:
-    - apt update -y && apt install -y googletest git
+    - apt update -y && apt install -y googletest git cmake
     - cd /usr/src/googletest/googletest
     - cmake .
     - make
-    - git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.bsc.es/ppc/benchmarks/llvm_ompss_tests
+  script:
+    - echo ${CI_JOB_TOKEN}
+    - git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.bsc.es/ppc/software/llvm-ompss-tests
     - cd llvm-ompss-tests
     - git checkout master
-  script:
-    - cd llvm-ompss-tests
     - sh compileEverything.sh
-  dependencies:
-  - build_llvm
-
-test:
-  stage: test
-  script:
-    - cd tests
     - sh testEverythin.sh > results.txt
+    - cat results.txt
   artifacts:
     paths:
-      - results.txt
+      - results.txt    
   dependencies:
-    - build_tests
-  
+    - build_llvm
