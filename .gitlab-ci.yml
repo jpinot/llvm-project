@@ -2,7 +2,7 @@ image: ubuntu:20.04
 
 stages:
   - build_llvm
-  - build_tests
+  - build_n_test
   - test
 
 build_llvm:
