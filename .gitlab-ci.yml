@@ -20,15 +20,17 @@ build_llvm:
     - cmake ../llvm -DLLVM_ENABLE_PROJECTS="clang;openmp" -DCMAKE_BUILD_TYPE=MinSizeRel -G "Ninja" -DLLVM_ENABLE_LLD=ON -DLLVM_PARALLEL_LINK_JOBS=8 -DLIBOMP_TASKGRAPH=1 -DLLVM_LINK_LLVM_DYLIB=ON -DLLVM_BUILD_LLVM_DYLIB=ON -DOPENMP_ENABLE_LIBOMPTARGET=OFF
     - ninja install
   artifacts:
-    untracked: true 
+    paths:
+    - /builds/project-0/.git/llvm-ompss/bin/clang
+    - /builds/project-0/.git/llvm-ompss/bin/clang++  
     
 build_n_test:
-  stage: build_tests
+  stage: build_n_test
   timeout: 1h
   variables:
-    CC: /builds/project-0/.git/bin/clang
-    CXX: /builds/project-0/.git/bin/clang++
-    LLVM_PPC: /builds/project-0/.git/
+    CC: /builds/project-0/.git/llvm-ompss/bin/clang
+    CXX: /builds/project-0/.git/llvm-ompss/bin/clang++
+    LLVM_PPC: /builds/project-0/.git/llvm-ompss/
     GTEST_ROOT: /usr/src/googletest/googletest
     DEBIAN_FRONTEND: noninteractive
     TZ: Europe/Paris
