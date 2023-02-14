@@ -1,45 +1,31 @@
 image: ubuntu:20.04
 
 stages:
-  - build_llvm
-  - build_n_test
-  - test
+  - build_and_test
 
-build_llvm:
-  stage: build_llvm
+build_and_test:
+  stage: build_and_test
   timeout: 3h 30m
   variables:
     CC: clang
     CXX: clang++
     DEBIAN_FRONTEND: noninteractive
     TZ: Europe/Paris
-  before_script:
-    - apt update -y && apt install -y ninja-build lld clang cmake perl
-  script:
-    - mkdir build && cd build
-    - cmake ../llvm -DLLVM_ENABLE_PROJECTS="clang;openmp" -DCMAKE_BUILD_TYPE=MinSizeRel -G "Ninja" -DLLVM_ENABLE_LLD=ON -DLLVM_PARALLEL_LINK_JOBS=8 -DLIBOMP_TASKGRAPH=1 -DLLVM_LINK_LLVM_DYLIB=ON -DLLVM_BUILD_LLVM_DYLIB=ON -DOPENMP_ENABLE_LIBOMPTARGET=OFF
-    - ninja install
-  artifacts:
-    paths:
-    - /builds/project-0/.git/llvm-ompss/bin/clang
-    - /builds/project-0/.git/llvm-ompss/bin/clang++  
-    
-build_n_test:
-  stage: build_n_test
-  timeout: 1h
-  variables:
-    CC: /builds/project-0/.git/llvm-ompss/bin/clang
-    CXX: /builds/project-0/.git/llvm-ompss/bin/clang++
-    LLVM_PPC: /builds/project-0/.git/llvm-ompss/
+    LLVM_PPC: /builds/project-0/install
     GTEST_ROOT: /usr/src/googletest/googletest
-    DEBIAN_FRONTEND: noninteractive
-    TZ: Europe/Paris
   before_script:
-    - apt update -y && apt install -y googletest git cmake
+    - apt update -y && apt install -y ninja-build lld clang cmake perl googletest git cmake
     - cd /usr/src/googletest/googletest
     - cmake .
     - make
   script:
+    - cd /builds/project-0
+    - mkdir build && cd build
+    - cmake ../llvm -DLLVM_ENABLE_PROJECTS="clang;openmp" -DCMAKE_BUILD_TYPE=MinSizeRel -G "Ninja" -DCMAKE_INSTALL_PREFIX=/builds/project-0/install -DLLVM_ENABLE_LLD=ON -DLLVM_PARALLEL_LINK_JOBS=8 -DLIBOMP_TASKGRAPH=1 -DLLVM_LINK_LLVM_DYLIB=ON -DLLVM_BUILD_LLVM_DYLIB=ON -DOPENMP_ENABLE_LIBOMPTARGET=OFF
+    - ninja install
+    - export CC=/builds/project-0/install/bin/clang
+    - export CXX=/builds/project-0/install/bin/clang++
+    - cd ..
     - echo ${CI_JOB_TOKEN}
     - git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.bsc.es/ppc/software/llvm-ompss-tests
     - cd llvm-ompss-tests
@@ -47,8 +33,7 @@ build_n_test:
     - sh compileEverything.sh
     - sh testEverythin.sh > results.txt
     - cat results.txt
+    
   artifacts:
     paths:
       - results.txt    
-  dependencies:
-    - build_llvm
