@@ -11,7 +11,7 @@ build_and_test:
     CXX: clang++
     DEBIAN_FRONTEND: noninteractive
     TZ: Europe/Paris
-    LLVM_PPC: /builds/project-0/install
+    LLVM_PPC: /builds/ppc/software/llvm-ompss/install
     GTEST_ROOT: /usr/src/googletest/googletest
   before_script:
     - apt update -y && apt install -y ninja-build lld clang cmake perl googletest git cmake
@@ -19,12 +19,12 @@ build_and_test:
     - cmake .
     - make
   script:
-    - cd /builds/project-0
+    - cd /builds/ppc/software/llvm-ompss/
     - mkdir build && cd build
-    - cmake ../llvm -DLLVM_ENABLE_PROJECTS="clang;openmp" -DCMAKE_BUILD_TYPE=MinSizeRel -G "Ninja" -DCMAKE_INSTALL_PREFIX=/builds/project-0/install -DLLVM_ENABLE_LLD=ON -DLLVM_PARALLEL_LINK_JOBS=8 -DLIBOMP_TASKGRAPH=1 -DLLVM_LINK_LLVM_DYLIB=ON -DLLVM_BUILD_LLVM_DYLIB=ON -DOPENMP_ENABLE_LIBOMPTARGET=OFF
+    - cmake ../llvm -DLLVM_ENABLE_PROJECTS="clang;openmp" -DCMAKE_BUILD_TYPE=MinSizeRel -G "Ninja" -DCMAKE_INSTALL_PREFIX=/builds/ppc/software/llvm-ompss/install -DLLVM_ENABLE_LLD=ON -DLLVM_PARALLEL_LINK_JOBS=8 -DLIBOMP_TASKGRAPH=1 -DLLVM_LINK_LLVM_DYLIB=ON -DLLVM_BUILD_LLVM_DYLIB=ON -DOPENMP_ENABLE_LIBOMPTARGET=OFF
     - ninja install
-    - export CC=/builds/project-0/install/bin/clang
-    - export CXX=/builds/project-0/install/bin/clang++
+    - export CC=/builds/ppc/software/llvm-ompss/install/bin/clang
+    - export CXX=/builds/ppc/software/llvm-ompss/install/bin/clang++
     - cd ..
     - echo ${CI_JOB_TOKEN}
     - git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.bsc.es/ppc/software/llvm-ompss-tests
