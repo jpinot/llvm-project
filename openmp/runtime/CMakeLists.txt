@@ -73,6 +73,8 @@ endif()
 # Time profiling support
 set(LIBOMP_PROFILING_SUPPORT ${OPENMP_ENABLE_LIBOMP_PROFILING})
 
+set(LIBOMP_TASKGRAPH)
+
 # FUJITSU A64FX is a special processor because its cache line size is 256.
 # We need to pass this information into kmp_config.h.
 if(LIBOMP_ARCH STREQUAL "aarch64")

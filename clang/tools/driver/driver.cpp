@@ -683,16 +683,15 @@ int clang_main(int Argc, char **Argv) {
         }
       }
       FILE *file;
-      auto itPos = Args.begin() + 2;
-      Args.insert(itPos,"tdg.cpp");
-      Args.push_back("--driver-mode=g++");
-
-      //Only recompile if the tdg file exists
       if((file = fopen("tdg.cpp","r"))!=NULL){
-        std::unique_ptr<Compilation> C_tdg(TheDriver.BuildCompilation(Args));
-        SmallVector<std::pair<int, const Command *>, 4> FailingCommands;
-        TheDriver.ExecuteCompilation(*C_tdg, FailingCommands);
+        auto itPos = Args.begin() + 2;
+        Args.insert(itPos,"tdg.cpp");
+        Args.push_back("--driver-mode=g++");
       }
+
+      std::unique_ptr<Compilation> C_tdg(TheDriver.BuildCompilation(Args));
+      SmallVector<std::pair<int, const Command *>, 4> FailingCommands;
+      TheDriver.ExecuteCompilation(*C_tdg, FailingCommands);
     }
   }
 

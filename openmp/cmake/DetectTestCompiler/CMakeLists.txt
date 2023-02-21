@@ -19,8 +19,8 @@ endfunction(write_compiler_information)
 
 find_package(OpenMP)
 if (NOT OpenMP_Found)
-  set(OpenMP_C_FLAGS "-fopenmp")
-  set(OpenMP_CXX_FLAGS "-fopenmp")
+  set(OpenMP_C_FLAGS "-fopenmp -fopenmp-taskgraph -static-tdg")
+  set(OpenMP_CXX_FLAGS "-fopenmp -fopenmp-taskgraph -static-tdg")
 endif()
 
 set(CMAKE_THREAD_PREFER_PTHREAD TRUE)
