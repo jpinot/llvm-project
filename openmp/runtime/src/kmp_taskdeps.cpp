@@ -349,16 +349,18 @@ __kmp_depnode_link_successor(kmp_int32 gtid, kmp_info_t *thread,
     kmp_depnode_t *dep = p->node;
 #if LIBOMP_TASKGRAPH
     kmp_tdg_status tdgStatus = TDG_NONE;
-    if(KMP_TASK_TO_TASKDATA(task)->is_taskgraph)
-      tdgStatus = KMP_TASK_TO_TASKDATA(task)->tdg->tdgStatus;
-    if (tdgStatus == TDG_RECORDING)
-      __kmp_track_dependence(gtid, dep, node, task);
+    if (task){
+      if(KMP_TASK_TO_TASKDATA(task)->is_taskgraph)
+        tdgStatus = KMP_TASK_TO_TASKDATA(task)->tdg->tdgStatus;
+      if (tdgStatus == TDG_RECORDING)
+        __kmp_track_dependence(gtid, dep, node, task);
+    }
 #endif
     if (dep->dn.task) {
       KMP_ACQUIRE_DEPNODE(gtid, dep);
       if (dep->dn.task) {
 #if LIBOMP_TASKGRAPH
-        if (!(tdgStatus == TDG_RECORDING))
+        if (!(tdgStatus == TDG_RECORDING) && task)
 #endif
           __kmp_track_dependence(gtid, dep, node, task);
         dep->dn.successors = __kmp_add_node(thread, dep->dn.successors, node);
@@ -384,17 +386,19 @@ static inline kmp_int32 __kmp_depnode_link_successor(kmp_int32 gtid,
   kmp_int32 npredecessors = 0;
 #if LIBOMP_TASKGRAPH
   kmp_tdg_status tdgStatus = TDG_NONE;
-  if(KMP_TASK_TO_TASKDATA(task)->is_taskgraph)
-     tdgStatus = KMP_TASK_TO_TASKDATA(task)->tdg->tdgStatus;
-  if (tdgStatus == TDG_RECORDING && sink->dn.task)
-    __kmp_track_dependence(gtid, sink, source, task);
+  if (task){
+    if(KMP_TASK_TO_TASKDATA(task)->is_taskgraph)
+      tdgStatus = KMP_TASK_TO_TASKDATA(task)->tdg->tdgStatus;
+    if (tdgStatus == TDG_RECORDING && sink->dn.task)
+      __kmp_track_dependence(gtid, sink, source, task);
+  }
 #endif
   if (sink->dn.task) {
     // synchronously add source to sink' list of successors
     KMP_ACQUIRE_DEPNODE(gtid, sink);
     if (sink->dn.task) {
 #if LIBOMP_TASKGRAPH
-      if (!(tdgStatus == TDG_RECORDING))
+      if (!(tdgStatus == TDG_RECORDING) && task)
 #endif
         __kmp_track_dependence(gtid, sink, source, task);
       sink->dn.successors = __kmp_add_node(thread, sink->dn.successors, source);
