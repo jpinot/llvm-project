@@ -37,7 +37,8 @@ void debug_print(const char *format, ...);
 void __kmp_enable_tasking(kmp_task_team_t *task_team, kmp_info_t *this_thr);
 void sync_tdg_tasks_for_task_team(kmp_int32, kmp_task_team_t *,
                                   kmp_task_team_t *, kmp_int32);
-
+int __kmp_realloc_task_threads_data(kmp_info_t *thread,
+                                           kmp_task_team_t *task_team);
 #if LIBOMP_TASKGRAPH
 #include <new>
 #include <utility>
@@ -1238,6 +1239,9 @@ void __kmpc_execute_tdg(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 tdg_index, b
 
    if (task_team) {
     nthreads = task_team->tt.tt_nproc;
+    if (!(&task_team->tt.tt_threads_data[tid]))
+      __kmp_realloc_task_threads_data(thread, task_team);
+
     thread_data = &task_team->tt.tt_threads_data[tid];
     if (task_teams_sync) {
       kmp_task_team *other_task_team =

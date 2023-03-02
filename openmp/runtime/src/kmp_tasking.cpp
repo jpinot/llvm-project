@@ -107,7 +107,7 @@ extern "C" void __tgt_target_nowait_query(void **) KMP_WEAK_ATTRIBUTE_INTERNAL;
 void __kmp_enable_tasking(kmp_task_team_t *task_team, kmp_info_t *this_thr);
 static void __kmp_alloc_task_deque(kmp_info_t *thread,
                                    kmp_thread_data_t *thread_data);
-static int __kmp_realloc_task_threads_data(kmp_info_t *thread,
+int __kmp_realloc_task_threads_data(kmp_info_t *thread,
                                            kmp_task_team_t *task_team);
 static void __kmp_bottom_half_finish_proxy(kmp_int32 gtid, kmp_task_t *ptask);
 #if LIBOMP_TASKGRAPH
@@ -4680,7 +4680,7 @@ void sync_tdg_tasks_for_task_team(kmp_int32 gtid, kmp_task_team_t *other_tt,
 // That thread returns "TRUE", the rest return "FALSE".
 // Assumes that the new array size is given by task_team -> tt.tt_nproc.
 // The current size is given by task_team -> tt.tt_max_threads.
-static int __kmp_realloc_task_threads_data(kmp_info_t *thread,
+int __kmp_realloc_task_threads_data(kmp_info_t *thread,
                                            kmp_task_team_t *task_team) {
   kmp_thread_data_t **threads_data_p;
   kmp_int32 nthreads, maxthreads;
