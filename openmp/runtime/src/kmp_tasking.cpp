@@ -1267,6 +1267,7 @@ static void __kmp_task_finish(kmp_int32 gtid, kmp_task_t *task,
 
   if (completed) {
     taskdata->td_flags.complete = 1; // mark the task as completed
+    taskdata->td_flags.onced = 1; // mark the task as ran once already
 
 #if OMPT_SUPPORT
     // This is not a detached task, we are done here
@@ -1461,6 +1462,7 @@ void __kmp_init_implicit_task(ident_t *loc_ref, kmp_info_t *this_thr,
   task->td_flags.executing = 1;
   task->td_flags.complete = 0;
   task->td_flags.freed = 0;
+  task->td_flags.onced = 0;
 
   task->td_depnode = NULL;
   task->td_last_tied = task;
@@ -1500,6 +1502,7 @@ void __kmp_finish_implicit_task(kmp_info_t *thread) {
   if (task->td_dephash) {
     int children;
     task->td_flags.complete = 1;
+    task->td_flags.onced = 1;
     children = KMP_ATOMIC_LD_ACQ(&task->td_incomplete_child_tasks);
     kmp_tasking_flags_t flags_old = task->td_flags;
     if (children == 0 && flags_old.complete == 1) {
@@ -1744,6 +1747,7 @@ kmp_task_t *__kmp_task_alloc(ident_t *loc_ref, kmp_int32 gtid,
   taskdata->td_flags.executing = 0;
   taskdata->td_flags.complete = 0;
   taskdata->td_flags.freed = 0;
+  taskdata->td_flags.onced = 0;
 
   KMP_ATOMIC_ST_RLX(&taskdata->td_incomplete_child_tasks, 0);
   // start at one because counts current task and children
@@ -5288,7 +5292,7 @@ static void __kmp_first_top_half_finish_proxy(kmp_taskdata_t *taskdata) {
   KMP_DEBUG_ASSERT(taskdata->td_flags.freed == 0);
 
   taskdata->td_flags.complete = 1; // mark the task as completed
-
+  taskdata->td_flags.onced = 1; // mark the task as ran once
   if (taskdata->td_taskgroup) {
     KMP_ATOMIC_DEC(&taskdata->td_taskgroup->count);
   }

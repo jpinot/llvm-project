@@ -407,6 +407,16 @@ static inline kmp_int32 __kmp_depnode_link_successor(kmp_int32 gtid,
                     "%p\n",
                     gtid, KMP_TASK_TO_TASKDATA(sink->dn.task),
                     KMP_TASK_TO_TASKDATA(task)));
+#if LIBOMP_TASKGRAPH
+      if (tdgStatus == TDG_RECORDING) {
+        kmp_taskdata_t *td = KMP_TASK_TO_TASKDATA(sink->dn.task);
+        if (td->is_taskgraph && td->td_flags.onced)
+          // decrement npredecessors only if sink->dn.task belongs to a taskgraph and
+          // 1. the task is reset to its initial state (by kmp_free_task) or
+          // 2. the task is complete but not yet reset
+          npredecessors--;
+      }
+#endif
       npredecessors++;
     }
     KMP_RELEASE_DEPNODE(gtid, sink);
