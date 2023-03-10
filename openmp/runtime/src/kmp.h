@@ -2493,9 +2493,12 @@ typedef struct kmp_tasking_flags { /* Total struct must be exactly 32 bits */
   unsigned complete : 1; /* 1==complete, 0==not complete   */
   unsigned freed : 1; /* 1==freed, 0==allocated        */
   unsigned native : 1; /* 1==gcc-compiled task, 0==intel */
+#ifdef LIBOMP_TASKGRAPH
   unsigned onced : 1; /* 1==ran once already, 0==never ran, record & replay purposes */
   unsigned reserved31 : 6; /* reserved for library use */
-
+#else
+  unsigned reserved31 : 7;
+#endif
 } kmp_tasking_flags_t;
 
 #if LIBOMP_TASKGRAPH
