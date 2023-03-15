@@ -639,24 +639,28 @@ int clang_main(int Argc, char **Argv) {
       }
 
       //Replace input files by objects files
-      SmallVector <char *, 4> FileNames;
+      SmallVector <char *, 4> ObjectFileNames;
+      SmallVector <char *, 4> TdgFileNames;
       auto it = Args.begin()+1;
       while(it != Args.end()) {
         if(has_suffix(std::string(*it), ".c") || has_suffix(std::string(*it), ".cpp")){
           size_t lastindex = std::string(*it).find_last_of(".");
-          std::string rawFileName = std::string(*it).substr(0, lastindex) + ".o";
+          std::string rawFileName = std::string(*it).substr(0, lastindex);
+          std::string objectFileName = rawFileName + ".o";
+          std::string tdgFileName = rawFileName + "_tdg.cpp";
           rawFileName = rawFileName.substr(rawFileName.find_last_of("/\\") + 1);
-          FileNames.push_back(strcpy(new char[rawFileName.length() + 1], rawFileName.c_str()));
+          ObjectFileNames.push_back(strcpy(new char[objectFileName.length() + 1], objectFileName.c_str()));
+          TdgFileNames.push_back(strcpy(new char[tdgFileName.length() + 1], tdgFileName.c_str()));
           it = Args.erase(it);
         }
         else{
-        ++it;
+          ++it;
         }
       }
 
-      for(int i=0; i < (int) FileNames.size(); i++){
+      for(int i=0; i < (int) ObjectFileNames.size(); i++){
         auto itPos = Args.begin() + 2;
-        Args.insert(itPos,FileNames[i]);
+        Args.insert(itPos,ObjectFileNames[i]);
       }
       //Remove -static-tdg flag
       for(int i=1; i < (int) Args.size(); i++){
@@ -683,15 +687,18 @@ int clang_main(int Argc, char **Argv) {
         }
       }
       FILE *file;
-      if((file = fopen("tdg.cpp","r"))!=NULL){
+      for(int i=0; i < (int) TdgFileNames.size(); i++){
         auto itPos = Args.begin() + 2;
-        Args.insert(itPos,"tdg.cpp");
-        Args.push_back("--driver-mode=g++");
+        Args.insert(itPos, TdgFileNames[i]);
       }
+      Args.push_back("--driver-mode=g++");
 
-      std::unique_ptr<Compilation> C_tdg(TheDriver.BuildCompilation(Args));
-      SmallVector<std::pair<int, const Command *>, 4> FailingCommands;
-      TheDriver.ExecuteCompilation(*C_tdg, FailingCommands);
+      //Only recompile if the tdg file exists
+      if((file = fopen("tdg.hpp","r"))!=NULL){
+        std::unique_ptr<Compilation> C_tdg(TheDriver.BuildCompilation(Args));
+        SmallVector<std::pair<int, const Command *>, 4> FailingCommands;
+        TheDriver.ExecuteCompilation(*C_tdg, FailingCommands);
+      }
     }
   }
 

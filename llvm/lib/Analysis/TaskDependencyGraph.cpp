@@ -320,13 +320,13 @@ void TaskDependencyGraphData::print_tdg() {
 void TaskDependencyGraphData::print_tdg_to_dot(StringRef ModuleName, int ntdgs,
                                                Function &F) {
 
-  // std::string fileName = ModuleName.str();
-  // size_t lastindex = fileName.find_last_of(".");
-  // std::string rawFileName = fileName.substr(0, lastindex);
+  std::string fileName = ModuleName.str();
+  size_t lastindex = fileName.find_last_of(".");
+  std::string rawFileName = fileName.substr(0, lastindex);
   std::error_code EC;
   char FileName[20];
-  sprintf(FileName, "tdg_%d.dot", ntdgs);
-  llvm::raw_fd_ostream Tdgfile(FileName, EC);
+  sprintf(FileName, "_tdg_%d.dot", ntdgs);
+  llvm::raw_fd_ostream Tdgfile(rawFileName + FileName, EC);
 
   if (Tdgfile.has_error()) {
     llvm_unreachable("Error Opening TDG file \n");
@@ -745,20 +745,76 @@ std::string initType(Type *this_type, int value) {
   return result;
 }
 
+void TaskDependencyGraphData::generate_runtime_header() {
+
+  std::error_code EC;
+  sys::fs::OpenFlags flags = sys::fs::OF_None;
+  llvm::raw_fd_ostream Headerfile("tdg.hpp", EC, flags);
+  if (Headerfile.has_error()) {
+    llvm_unreachable("Error Opening TDG header file \n");
+  }
+
+  Headerfile << "#include <stddef.h>\n";
+  Headerfile << "#include <atomic>\n";
+  if (Prealloc) {
+    Headerfile << "#include <stdint.h>\n";
+    Headerfile << "#include <stdio.h>\n";
+  }
+
+  Headerfile << "struct kmp_task_t;\nstruct kmp_node_info\n{\n";
+  Headerfile
+      << "  int static_id;\n  struct kmp_task_t *task;\n  int "
+         "* succesors;\n  int nsuccessors;\n  "
+         "std::atomic<int> npredecessors_counter;\n  int npredecessors;\n  "
+         "int "
+         "successors_size;\n  int static_thread;\n  int pragma_id;\n  void "
+         "* private_data;\n  "
+         "void * shared_data;\n  void * parent_task;\n  struct "
+         "kmp_node_info * next_waiting_tdg;\n};\n";
+
+  Headerfile << "extern  \"C\" void __kmpc_set_tdg(struct kmp_node_info *tdg, "
+                "int gtid, int tdg_id, int "
+                "ntasks, int *roots, int nroots);\n";
+
+  Headerfile << "extern \"C\" void __kmpc_taskgraph(void *loc_ref, int gtid, "
+                "int tdg_id, void (*entry)(void *), void *args, int tdg_type, "
+                "int if_cond, bool nowait);\n";
+
+  if (Prealloc) {
+    Headerfile << "struct GlobalVarInfo\n{\n";
+    Headerfile << "  void *Var;\n  int Offset;\n  int Size;\n  bool "
+                  "Ispointer;\n};\n";
+    Headerfile << "struct kmp_task_alloc_info\n{\n";
+    Headerfile
+        << "  int flags;\n  int sizeOfTask;\n  int sizeOfShareds;\n  void* "
+           "taskEntry;\n  int *sharedDataPositions;\n  int "
+           "*firstPrivateDataPositions;\n  int *firstPrivateDataOffsets;\n  "
+           "int *firstPrivateDataSizes;\n  int numFirstPrivates;\n  "
+           "GlobalVarInfo *GlobalVars;\n  int numGlobals;\n};\n";
+    Headerfile << "extern  \"C\"  void  __kmpc_prealloc_tasks(struct "
+                  "kmp_task_alloc_info *task_static_data, char "
+                  "*preallocated_tasks, void *preallocated_nodes, unsigned int "
+                  "n_task_constructs,unsigned int "
+                  "max_concurrent_tasks, unsigned int task_size, unsigned long "
+                  "long tdg_id);\n";
+
+    Headerfile << get_task_definitions();
+  }
+}
+
 void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName,
                                                         Function &F,
                                                         int ntdgs) {
-  /*
+
   std::string fileName = ModuleName.str();
   size_t lastindex = fileName.find_last_of(".");
   std::string rawFileName = fileName.substr(0, lastindex);
-  */
   std::error_code EC;
   sys::fs::OpenFlags flags = sys::fs::OF_None;
   if (ntdgs > 1)
     flags = sys::fs::OF_Append;
 
-  llvm::raw_fd_ostream Tdgfile("tdg.cpp", EC, flags);
+  llvm::raw_fd_ostream Tdgfile(rawFileName + "_tdg.cpp", EC, flags);
 
   if (Tdgfile.has_error()) {
     llvm_unreachable("Error Opening TDG file \n");
@@ -775,54 +831,8 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName,
   }
 
   int offout = 0;
-
   if (ntdgs == 1) {
-    Tdgfile << "#include <stddef.h>\n";
-    Tdgfile << "#include <atomic>\n";
-    if (Prealloc) {
-      Tdgfile << "#include <stdint.h>\n";
-      Tdgfile << "#include <stdio.h>\n";
-    }
-
-    Tdgfile << "struct kmp_task_t;\nstruct kmp_node_info\n{\n";
-    Tdgfile
-        << "  int static_id;\n  struct kmp_task_t *task;\n  int "
-           "* succesors;\n  int nsuccessors;\n  "
-           "std::atomic<int> npredecessors_counter;\n  int npredecessors;\n  "
-           "int "
-           "successors_size;\n  int static_thread;\n  int pragma_id;\n  void "
-           "* private_data;\n  "
-           "void * shared_data;\n  void * parent_task;\n  struct "
-           "kmp_node_info * next_waiting_tdg;\n};\n";
-
-    Tdgfile << "extern  \"C\" void __kmpc_set_tdg(struct kmp_node_info *tdg, "
-               "int gtid, int tdg_id, int "
-               "ntasks, int *roots, int nroots);\n";
-
-    Tdgfile << "extern \"C\" void __kmpc_taskgraph(void *loc_ref, int gtid, "
-               "int tdg_id, void (*entry)(void *), void *args, int tdg_type, "
-               "int if_cond, bool nowait);\n";
-
-    if (Prealloc) {
-      Tdgfile << "struct GlobalVarInfo\n{\n";
-      Tdgfile << "  void *Var;\n  int Offset;\n  int Size;\n  bool "
-                 "Ispointer;\n};\n";
-      Tdgfile << "struct kmp_task_alloc_info\n{\n";
-      Tdgfile
-          << "  int flags;\n  int sizeOfTask;\n  int sizeOfShareds;\n  void* "
-             "taskEntry;\n  int *sharedDataPositions;\n  int "
-             "*firstPrivateDataPositions;\n  int *firstPrivateDataOffsets;\n  "
-             "int *firstPrivateDataSizes;\n  int numFirstPrivates;\n  "
-             "GlobalVarInfo *GlobalVars;\n  int numGlobals;\n};\n";
-      Tdgfile << "extern  \"C\"  void  __kmpc_prealloc_tasks(struct "
-                 "kmp_task_alloc_info *task_static_data, char "
-                 "*preallocated_tasks, void *preallocated_nodes, unsigned int "
-                 "n_task_constructs,unsigned int "
-                 "max_concurrent_tasks, unsigned int task_size, unsigned long "
-                 "long tdg_id);\n";
-
-      Tdgfile << get_task_definitions();
-    }
+    Tdgfile << "#include \"tdg.hpp\"\n";
   } else {
     Tdgfile << "\n";
   }
@@ -841,13 +851,16 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName,
         longest_pragma = i;
       }
       Tdgfile << createStructType(TasksAllocInfo[i].privatesType,
-                                  FunctionTasks[i].id, "private_data", ntdgs);
+                                  FunctionTasks[i].id,
+                                  rawFileName + "_private_data", ntdgs);
       Tdgfile << createStructType(TasksAllocInfo[i].sharedsType,
-                                  FunctionTasks[i].id, "shared_data", ntdgs);
+                                  FunctionTasks[i].id,
+                                  rawFileName + "_shared_data", ntdgs);
     }
     for (int i = 0; i < (int)FunctionTasks.size(); i++) {
-      Tdgfile << "struct private_data_" << FunctionTasks[i].pragmaId << "_"
-              << ntdgs << " task_" << FunctionTasks[i].id << "_" << ntdgs
+      Tdgfile << "struct " << rawFileName << "_private_data_"
+              << FunctionTasks[i].pragmaId << "_" << ntdgs << " " << rawFileName
+              << "_task_" << FunctionTasks[i].id << "_" << ntdgs
               << "_private_data={";
       for (int j = 0; j < (int)FunctionTasks[i].FirstPrivateData.size(); j++) {
         Type *ThisType =
@@ -860,20 +873,23 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName,
       }
       if (!FunctionTasks[i].FirstPrivateData.size())
         Tdgfile << "};\n";
-      Tdgfile << "struct shared_data_" << FunctionTasks[i].pragmaId << "_"
-              << ntdgs << " task_" << FunctionTasks[i].id << "_" << ntdgs
+      Tdgfile << "struct " << rawFileName << "_shared_data_"
+              << FunctionTasks[i].pragmaId << "_" << ntdgs << " " << rawFileName
+              << "_task_" << FunctionTasks[i].id << "_" << ntdgs
               << "_shared_data;\n";
     }
-    Tdgfile << "char preallocated_tasks_" << ntdgs << "[" << NumPreallocs
-            << "*(sizeof(kmp_taskdata)+sizeof(kmp_task)+sizeof(private_data_"
-            << longest_pragma << "_" << ntdgs << ")+sizeof(shared_data_"
-            << longest_pragma << "_" << ntdgs << "))];\n";
-    Tdgfile << "struct kmp_space_indexer_node preallocated_nodes_" << ntdgs
-            << "[" << NumPreallocs << "];\n\n";
+    Tdgfile << "char " << rawFileName << "_preallocated_tasks_" << ntdgs << "["
+            << NumPreallocs << "*(sizeof(kmp_taskdata)+sizeof(kmp_task)+sizeof("
+            << rawFileName << "_private_data_" << longest_pragma << "_" << ntdgs
+            << ")+sizeof(" << rawFileName << "_shared_data_" << longest_pragma
+            << "_" << ntdgs << "))];\n";
+    Tdgfile << "struct kmp_space_indexer_node " << rawFileName
+            << "_preallocated_nodes_" << ntdgs << "[" << NumPreallocs
+            << "];\n\n";
   }
 
-  Tdgfile << "int kmp_tdg_outs_" << ntdgs << "[" << OutputList.size()
-          << "] = {";
+  Tdgfile << "int " << rawFileName << "_kmp_tdg_outs_" << ntdgs << "["
+          << OutputList.size() << "] = {";
   if (OutputList.size()) {
     for (int i = 0; i < (int)OutputList.size(); i++) {
       Tdgfile << OutputList[i];
@@ -885,12 +901,12 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName,
   } else {
     Tdgfile << "};\n";
   }
-  Tdgfile << "struct kmp_node_info kmp_tdg_" << ntdgs << "["
-          << FunctionTasks.size() << "] = {";
+  Tdgfile << "struct kmp_node_info " << rawFileName << "_kmp_tdg_" << ntdgs
+          << "[" << FunctionTasks.size() << "] = {";
   for (int i = 0; i < (int)FunctionTasks.size(); i++) {
     Tdgfile << "{ .static_id = " << FunctionTasks[i].id
-            << ", .task = NULL, .succesors = &kmp_tdg_outs_" << ntdgs << "["
-            << offout << "]"
+            << ", .task = NULL, .succesors = &" << rawFileName
+            << "_kmp_tdg_outs_" << ntdgs << "[" << offout << "]"
             << ", .nsuccessors = " << FunctionTasks[i].successors.size()
             << ", .npredecessors_counter = {"
             << FunctionTasks[i].predecessors.size()
@@ -899,10 +915,10 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName,
             << ", .static_thread = -1"
             << ", .pragma_id = " << FunctionTasks[i].pragmaId;
     if (Prealloc)
-      Tdgfile << ", .private_data = &task_" << FunctionTasks[i].id << "_"
-              << ntdgs << "_private_data"
-              << ", .shared_data = &task_" << FunctionTasks[i].id << "_"
-              << ntdgs << "_shared_data";
+      Tdgfile << ", .private_data = &" << rawFileName << "_task_"
+              << FunctionTasks[i].id << "_" << ntdgs << "_private_data"
+              << ", .shared_data = &" << rawFileName << "_task_"
+              << FunctionTasks[i].id << "_" << ntdgs << "_shared_data";
     else
       Tdgfile << ", .private_data = NULL"
               << ", .shared_data = NULL";
@@ -917,7 +933,8 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName,
     else
       Tdgfile << "};\n";
   }
-  Tdgfile << "int kmp_tdg_roots_" << ntdgs << "[" << TdgRoots.size() << "] = {";
+  Tdgfile << "int " << rawFileName << "_kmp_tdg_roots_" << ntdgs << "["
+          << TdgRoots.size() << "] = {";
   for (int i = 0; i < (int)TdgRoots.size(); i++) {
     Tdgfile << TdgRoots[i];
     if (i != (int)TdgRoots.size() - 1)
@@ -943,7 +960,8 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName,
         }
       }
 
-      Tdgfile << "int shared_data_positions_" << i << "_" << ntdgs << "[] = {";
+      Tdgfile << "int " << rawFileName << "_shared_data_positions_" << i << "_"
+              << ntdgs << "[] = {";
       for (int j = 0; j < (int)TasksAllocInfo[i].sharedDataPositions.size();
            j++) {
         Tdgfile << TasksAllocInfo[i].sharedDataPositions[j];
@@ -955,8 +973,8 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName,
       if (!TasksAllocInfo[i].sharedDataPositions.size())
         Tdgfile << "};\n";
 
-      Tdgfile << "int firstprivate_data_positions_" << i << "_" << ntdgs
-              << "[] = {";
+      Tdgfile << "int " << rawFileName << "_firstprivate_data_positions_" << i
+              << "_" << ntdgs << "[] = {";
       for (int j = 0;
            j < (int)TasksAllocInfo[i].firstPrivateDataPositions.size(); j++) {
         Tdgfile << TasksAllocInfo[i].firstPrivateDataPositions[j];
@@ -968,8 +986,8 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName,
       if (!TasksAllocInfo[i].firstPrivateDataPositions.size())
         Tdgfile << "};\n";
 
-      Tdgfile << "int firstprivate_data_offsets_" << i << "_" << ntdgs
-              << "[] = {";
+      Tdgfile << "int " << rawFileName << "_firstprivate_data_offsets_" << i
+              << "_" << ntdgs << "[] = {";
       for (int j = 0; j < (int)TasksAllocInfo[i].firstPrivateDataOffsets.size();
            j++) {
         Tdgfile << TasksAllocInfo[i].firstPrivateDataOffsets[j];
@@ -981,8 +999,8 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName,
       if (!TasksAllocInfo[i].firstPrivateDataOffsets.size())
         Tdgfile << "};\n";
 
-      Tdgfile << "int firstprivate_data_sizes_" << i << "_" << ntdgs
-              << "[] = {";
+      Tdgfile << "int " << rawFileName << "_firstprivate_data_sizes_" << i
+              << "_" << ntdgs << "[] = {";
       for (int j = 0; j < (int)TasksAllocInfo[i].firstPrivateDataSizes.size();
            j++) {
         Tdgfile << TasksAllocInfo[i].firstPrivateDataSizes[j];
@@ -994,8 +1012,8 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName,
       if (!TasksAllocInfo[i].firstPrivateDataSizes.size())
         Tdgfile << "};\n";
 
-      Tdgfile << "GlobalVarInfo firstprivate_globals_" << i << "_" << ntdgs
-              << "[] = {";
+      Tdgfile << "GlobalVarInfo " << rawFileName << "_firstprivate_globals_"
+              << i << "_" << ntdgs << "[] = {";
       for (int j = 0; j < (int)TasksAllocInfo[i].globalFirstPrivateData.size();
            j++) {
         Tdgfile << "{&"
@@ -1012,29 +1030,31 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName,
       if (!TasksAllocInfo[i].globalFirstPrivateData.size())
         Tdgfile << "};\n";
     }
-    Tdgfile << "struct kmp_task_alloc_info task_static_data_" << ntdgs << "["
-            << TasksAllocInfo.size() << "] = {";
+    Tdgfile << "struct kmp_task_alloc_info " << rawFileName
+            << "_task_static_data_" << ntdgs << "[" << TasksAllocInfo.size()
+            << "] = {";
     for (int i = 0; i < (int)TasksAllocInfo.size(); i++) {
 
-      Tdgfile
-          << "{ .flags = " << TasksAllocInfo[i].flags
-          << ", .sizeOfTask = " << TasksAllocInfo[i].sizeOfTask
-          << ", .sizeOfShareds = " << TasksAllocInfo[i].sizeOfShareds
-          << ", .taskEntry = (void *) &"
-          << TasksAllocInfo[i].entryPoint->getName()
-          << ", .sharedDataPositions = (int *) &shared_data_positions_" << i
-          << "_" << ntdgs
-          << ", .firstPrivateDataPositions = (int *) "
-             "&firstprivate_data_positions_"
-          << i << "_" << ntdgs
-          << ", .firstPrivateDataOffsets = (int *) &firstprivate_data_offsets_"
-          << i << "_" << ntdgs
-          << ", .firstPrivateDataSizes = (int *) & firstprivate_data_sizes_"
-          << i << "_" << ntdgs << ", .numFirstPrivates = "
-          << TasksAllocInfo[i].firstPrivateDataSizes.size()
-          << ", .GlobalVars= (GlobalVarInfo *) &firstprivate_globals_" << i
-          << "_" << ntdgs << ", .numGlobals = "
-          << TasksAllocInfo[i].globalFirstPrivateData.size() << "}";
+      Tdgfile << "{ .flags = " << TasksAllocInfo[i].flags
+              << ", .sizeOfTask = " << TasksAllocInfo[i].sizeOfTask
+              << ", .sizeOfShareds = " << TasksAllocInfo[i].sizeOfShareds
+              << ", .taskEntry = (void *) &"
+              << TasksAllocInfo[i].entryPoint->getName()
+              << ", .sharedDataPositions = (int *) &" << rawFileName
+              << "_shared_data_positions_" << i << "_" << ntdgs
+              << ", .firstPrivateDataPositions = (int *) "
+                 "&"
+              << rawFileName << "_firstprivate_data_positions_" << i << "_"
+              << ntdgs << ", .firstPrivateDataOffsets = (int *) &"
+              << rawFileName << "_firstprivate_data_offsets_" << i << "_"
+              << ntdgs << ", .firstPrivateDataSizes = (int *) &" << rawFileName
+              << "_firstprivate_data_sizes_" << i << "_" << ntdgs
+              << ", .numFirstPrivates = "
+              << TasksAllocInfo[i].firstPrivateDataSizes.size()
+              << ", .GlobalVars= (GlobalVarInfo *) &" << rawFileName
+              << "_firstprivate_globals_" << i << "_" << ntdgs
+              << ", .numGlobals = "
+              << TasksAllocInfo[i].globalFirstPrivateData.size() << "}";
 
       if (i != (int)TasksAllocInfo.size() - 1)
         Tdgfile << ",\n";
@@ -1043,28 +1063,27 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName,
     }
   }
   std::pair<StringRef, StringRef> FNames = F.getName().split(".");
-  Tdgfile << "extern \"C\" void kmp_set_tdg_" << FNames.first << "_"
-          << FNames.second
+  Tdgfile << "extern \"C\" void " << rawFileName << "_kmp_set_tdg_"
+          << FNames.first << "_" << FNames.second
           << "(void *loc_ref, int gtid, void (*entry)(void *), void *args, int "
              "tdg_type, int if_cond, bool nowait, int num_preallocs)\n{\n";
 
-  Tdgfile << "  __kmpc_set_tdg(kmp_tdg_" << ntdgs << ", gtid, " << ntdgs << ", "
-          << FunctionTasks.size() << ", kmp_tdg_roots_" << ntdgs << ", "
+  Tdgfile << "  __kmpc_set_tdg(" << rawFileName << "_kmp_tdg_" << ntdgs
+          << ", gtid, " << ntdgs << ", " << FunctionTasks.size() << ", "
+          << rawFileName << "_kmp_tdg_roots_" << ntdgs << ", "
           << TdgRoots.size() << ");\n";
 
   if (Prealloc) {
     // Tdgfile << "printf(\" es: %d \", sizeof(struct kmp_task));\n";
-    Tdgfile << "  __kmpc_prealloc_tasks(task_static_data_" << ntdgs
-            << ", (char *) "
-               "preallocated_tasks_"
-            << ntdgs
-            << ", "
-               "preallocated_nodes_"
-            << ntdgs << ", " << FunctionTasks.size()
+    Tdgfile << "  __kmpc_prealloc_tasks(" << rawFileName << "_task_static_data_"
+            << ntdgs << ", (char *) " << rawFileName << "_preallocated_tasks_"
+            << ntdgs << ", " << rawFileName << "_preallocated_nodes_" << ntdgs
+            << ", " << FunctionTasks.size()
             << ", num_preallocs, sizeof(struct kmp_task) + sizeof(struct "
-               "kmp_taskdata) + sizeof(private_data_"
-            << longest_pragma << "_" << ntdgs << ")+sizeof(shared_data_"
-            << longest_pragma << "_" << ntdgs << ")," << ntdgs << ");\n";
+               "kmp_taskdata) + sizeof("
+            << rawFileName << "_private_data_" << longest_pragma << "_" << ntdgs
+            << ")+sizeof(" << rawFileName << "_shared_data_" << longest_pragma
+            << "_" << ntdgs << ")," << ntdgs << ");\n";
   }
 
   Tdgfile << "  __kmpc_taskgraph(loc_ref, gtid, " << ntdgs
@@ -1593,6 +1612,7 @@ void TaskDependencyGraphData::findOpenMPTasks(Function &F, DominatorTree &DT,
   if (FunctionTasks.size()) {
     print_tdg_to_dot(F.getParent()->getSourceFileName(), ntdgs, F);
     // generate_analysis_tdg_file(F.getParent()->getSourceFileName());
+    generate_runtime_header();
     generate_runtime_tdg_file(F.getParent()->getSourceFileName(), F, ntdgs);
     TasksAllocInfo.clear();
     FunctionTasks.clear();

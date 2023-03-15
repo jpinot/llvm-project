@@ -87,6 +87,7 @@ public:
                      int master, int nesting_level, std::vector<bool> &Visited);
   void print_tdg();
   void print_tdg_to_dot(StringRef ModuleName, int ntdgs, Function &F);
+  void generate_runtime_header();
   void generate_analysis_tdg_file(StringRef ModuleName);
   void generate_runtime_tdg_file(StringRef ModuleName, Function &F, int ntdgs);
   void clear();
