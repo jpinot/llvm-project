@@ -2396,7 +2396,6 @@ typedef struct kmp_base_depnode {
   kmp_lock_t *mtx_locks[MAX_MTX_DEPS]; /* lock mutexinoutset dependent tasks */
   kmp_int32 mtx_num_locks; /* number of locks in mtx_locks array */
   kmp_lock_t lock; /* guards shared fields: task, successors */
-  kmp_uint32 part_id;
 #if KMP_SUPPORT_GRAPH_OUTPUT
   kmp_uint32 id;
 #endif
@@ -2503,9 +2502,28 @@ typedef struct kmp_tasking_flags { /* Total struct must be exactly 32 bits */
 
 #if LIBOMP_TASKGRAPH
 //Represents the two types of TDGs
-enum kmp_tdg_type { DYNAMIC_TDG, STATIC_TDG };
+enum kmp_tdg_type { KMP_DYNAMIC_TDG, KMP_STATIC_TDG };
 //Represents the possible status of the TDG
-enum kmp_tdg_status { TDG_NONE, TDG_RECORDING, TDG_FILL_DATA, TDG_PREALLOC};
+enum kmp_tdg_status { KMP_TDG_NONE, KMP_TDG_RECORDING, KMP_TDG_FILL_DATA, KMP_TDG_PREALLOC};
+
+struct ReplicationNode{
+  kmp_task_t *task;
+  void *data;
+  bool finished;
+  bool canceled;
+  int thread;
+  int correctResult;
+};
+
+struct ReplicationList{
+  int groupID;
+  int numNodes;
+  int numNodesSize;
+  struct ReplicationNode *nodes;
+  void *functionToCall;
+  bool callbackExecuted;
+  bool spatialConstraint;
+};
 
 //Represents a TDG node
 struct kmp_node_info {
@@ -2531,6 +2549,8 @@ struct kmp_node_info {
 
 //Maximum number of TDGs
 #define NUM_TDG_LIMIT 100
+
+#define MAX_NUM_PROC 100
 
 struct kmp_ident_task {
   const char *td_ident;
@@ -2569,7 +2589,7 @@ struct kmp_tdg_info {
   kmp_int32 mapSize; //Number of allocated TDG nodes
   kmp_int32 numRoots; //Number of roots tasks int the TDG
   kmp_int32 *rootTasks; //Array of tasks identifiers that are roots
-  kmp_node_info *RecordMap; //Array of TDG nodes
+  kmp_node_info *recordMap; //Array of TDG nodes
   kmp_ident_task *taskIdent; //Array of locations of each TDG node
   kmp_ident_color *colorMap; //Array of colors for the dot output
   kmp_int32 colorIndex; //Index of colors used
@@ -2596,13 +2616,11 @@ struct kmp_tdg_creation_info {
   kmp_tdg_info *tdg;
 };
 
-
-
 struct GlobalVarInfo {
-  void *Var;
-  int Offset;
-  int Size;
-  bool IsPointer;
+  void *var;
+  int offset;
+  int size;
+  bool isPointer;
 };
 
 struct kmp_task_alloc_info {
@@ -2618,6 +2636,19 @@ struct kmp_task_alloc_info {
   GlobalVarInfo *GlobalVars;
   int numGlobals;
 };
+
+extern kmp_int32 __kmp_ntdgs;
+extern kmp_tdg_info __kmp_global_tdgs[NUM_TDG_LIMIT];
+extern kmp_tdg_creation_info *__kmp_tdgCreationInfo;
+extern kmp_int32 __kmp_tdgCreationInfo_size;
+extern kmp_int32 __kmp_ntdgsBeingCreated;
+extern kmp_futex_lock_t __kmp_tdg_lock;
+extern kmp_int32 __kmp_tdg_maxNesting;
+extern kmp_int32 __kmp_tdg_initial_successors_size;
+extern int __kmp_tdg_task_teams_sync;
+extern bool __kmp_tdg_static_schedule;
+extern kmp_int32 __kmp_curr_tdg_idx;
+extern int __kmp_tdg_replaying[MAX_NUM_PROC];
 #endif
 
 typedef struct kmp_target_data {
@@ -2701,7 +2732,6 @@ typedef struct kmp_base_thread_data {
 // scheduling constraint
 #endif // BUILD_TIED_TASK_STACK
 #if LIBOMP_TASKGRAPH
-#define MAX_NUM_PROC 100
   kmp_task_t *
       *td_tdg_tasks[NUM_TDG_LIMIT]; // an array containing many arrays of tasks
                                     // (as kmp_task_t *) associated with this

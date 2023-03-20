@@ -103,31 +103,33 @@ extern void __kmpc_give_task(kmp_task_t *ptask, kmp_int32 start);
 static inline void __kmp_release_deps(kmp_int32 gtid, kmp_taskdata_t *task) {
 
 #if LIBOMP_TASKGRAPH
-  if (task->is_taskgraph && !(task->tdg->tdgStatus==TDG_RECORDING) && !(task->tdg->tdgStatus==TDG_FILL_DATA)) {
-    // TODO: Not needed when taskifying
+  kmp_tdg_info *task_tdg = task->tdg;
+  if (task->is_taskgraph && !(task_tdg->tdgStatus == KMP_TDG_RECORDING) &&
+      !(task_tdg->tdgStatus == KMP_TDG_FILL_DATA)) {
     // printf("[OpenMP] ---- Task %d ends, checking successors ----\n",
     // this_task->part_id);
-    kmp_node_info *TaskInfo = &(task->tdg->RecordMap[task->td_task_id]);
+    kmp_node_info *node = &(task_tdg->recordMap[task->td_task_id]);
 
-    for (int i = 0; i < TaskInfo->nsuccessors; i++) {
-      kmp_int32 successorNumber = TaskInfo->successors[i];
-      kmp_node_info *successor = &(task->tdg->RecordMap[successorNumber]);
+    for (int i = 0; i < node->nsuccessors; i++) {
+      kmp_int32 successorNumber = node->successors[i];
+      kmp_node_info *successor = &(task_tdg->recordMap[successorNumber]);
       // printf("  [OpenMP] Found one successor %d , deps : %d \n",
       // successorNumber, successor->npredecessors_counter);
 
-       kmp_int32 npredecessors = KMP_ATOMIC_DEC(&successor->npredecessors_counter) - 1;
-      if (task->tdg->tdgStatus == TDG_PREALLOC) {
-        if (npredecessors==0) {
+      kmp_int32 npredecessors =
+          KMP_ATOMIC_DEC(&successor->npredecessors_counter) - 1;
+      if (task_tdg->tdgStatus == KMP_TDG_PREALLOC) {
+        if (npredecessors == 0) {
           kmp_task_t *NextTask = kmp_init_lazy_task(
-              successorNumber, gtid, task->tdg->RecordMap, task->tdg);
+              successorNumber, gtid, task_tdg->recordMap, task_tdg);
           if (NextTask == nullptr) {
-            insert_to_waiting_tdg(successor, task->tdg);
-            //printf("Me guardo %d \n", successorNumber);
+            insert_to_waiting_tdg(successor, task_tdg);
+            // printf("Me guardo %d \n", successorNumber);
           } else
             __kmp_omp_task(gtid, NextTask, false);
         }
       } else {
-        if (successor->task != nullptr && npredecessors==0) {
+        if (successor->task != nullptr && npredecessors == 0) {
           // printf("  [OpenMP] Successor ready, executing \n");
           __kmp_omp_task(gtid, successor->task, false);
 
@@ -171,7 +173,7 @@ static inline void __kmp_release_deps(kmp_int32 gtid, kmp_taskdata_t *task) {
   KMP_ACQUIRE_DEPNODE(gtid, node);
 #ifdef LIBOMP_TASKGRAPH
   if (!task->is_taskgraph ||
-      (task->is_taskgraph && !(task->tdg->tdgStatus==TDG_RECORDING)))
+      (task->is_taskgraph && !(task->tdg->tdgStatus==KMP_TDG_RECORDING)))
 #endif
     node->dn.task =
         NULL; // mark this task as finished, so no new dependencies are generated

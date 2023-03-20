@@ -564,4 +564,25 @@ int __kmp_nesting_mode = 0;
 int __kmp_nesting_mode_nlevels = 1;
 int *__kmp_nesting_nth_level;
 
+#if LIBOMP_TASKGRAPH
+kmp_int32 __kmp_ntdgs = 0;
+kmp_tdg_info __kmp_global_tdgs[NUM_TDG_LIMIT]; // Global array of TDGs
+//To manage simulatenous taskIDs generation
+kmp_tdg_creation_info *__kmp_tdgCreationInfo;
+kmp_int32 __kmp_tdgCreationInfo_size = 0;
+kmp_int32 __kmp_ntdgsBeingCreated = 0;
+//Mutex lock for setting/launching tdgs
+kmp_futex_lock_t __kmp_tdg_lock = KMP_FUTEX_LOCK_INITIALIZER(__kmp_tdg_lock);
+// Initial Global Sizes
+kmp_int32 __kmp_tdg_maxNesting = 4; //Nesting when erasing edges
+kmp_int32 __kmp_tdg_initial_successors_size = 10; //Initial succesor size list for recording
+int __kmp_tdg_task_teams_sync = false; //To keep two task teams homogeneous
+//By default the static scheduling is disabled
+bool __kmp_tdg_static_schedule = false;
+// tdg_index of the current TDG. Set to non-negative value upon
+// encountering a taskgraph directive withOUT nowait clause
+kmp_int32 __kmp_curr_tdg_idx = -1;
+int __kmp_tdg_replaying[MAX_NUM_PROC] = {0};
+
+#endif
 // end of file //
