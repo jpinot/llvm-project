@@ -322,7 +322,10 @@ void TaskDependencyGraphData::print_tdg_to_dot(StringRef ModuleName, int ntdgs,
 
   std::string fileName = ModuleName.str();
   size_t lastindex = fileName.find_last_of(".");
-  std::string rawFileName = fileName.substr(0, lastindex);
+  size_t lastslash = fileName.find_last_of("/");
+  if(lastslash == fileName.size())
+    lastslash = 0;
+  std::string rawFileName = fileName.substr(lastslash+1, lastindex - (lastslash+1));
   std::error_code EC;
   char FileName[20];
   sprintf(FileName, "_tdg_%d.dot", ntdgs);
@@ -748,8 +751,7 @@ std::string initType(Type *this_type, int value) {
 void TaskDependencyGraphData::generate_runtime_header() {
 
   std::error_code EC;
-  sys::fs::OpenFlags flags = sys::fs::OF_None;
-  llvm::raw_fd_ostream Headerfile("tdg.hpp", EC, flags);
+  llvm::raw_fd_ostream Headerfile("tdg.hpp", EC);
   if (Headerfile.has_error()) {
     llvm_unreachable("Error Opening TDG header file \n");
   }
@@ -808,14 +810,17 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName,
 
   std::string fileName = ModuleName.str();
   size_t lastindex = fileName.find_last_of(".");
-  std::string rawFileName = fileName.substr(0, lastindex);
+  size_t lastslash = fileName.find_last_of("/");
+  if(lastslash == fileName.size())
+    lastslash = 0;
+  std::string rawFileName = fileName.substr(lastslash+1, lastindex - (lastslash+1));
   std::error_code EC;
   sys::fs::OpenFlags flags = sys::fs::OF_None;
   if (ntdgs > 1)
     flags = sys::fs::OF_Append;
 
   llvm::raw_fd_ostream Tdgfile(rawFileName + "_tdg.cpp", EC, flags);
-
+  
   if (Tdgfile.has_error()) {
     llvm_unreachable("Error Opening TDG file \n");
   }
