@@ -6157,10 +6157,11 @@ void CGOpenMPRuntime::emitTaskgraphCall(CodeGenFunction &CGF,
     auto *FT = llvm::FunctionType::get(CGF.VoidTy, ArgTypes, false);
     std::pair<StringRef, StringRef> FNames = FnT->getName().split(".");
     std::string ModuleName = CGF.CGM.getModule().getName().str();
-    std::string RawModuleName =
-        ModuleName.substr(0, ModuleName.find_last_of("."));
+    size_t lastindex = ModuleName.find_last_of(".");
+    ModuleName = ModuleName.substr(0, lastindex);
+    ModuleName = ModuleName.substr(ModuleName.find_last_of("/\\") + 1);
     std::string setName =
-        RawModuleName + "_kmp_set_tdg_" + FNames.first.str() + "_" + FNames.second.str();
+        ModuleName + "_kmp_set_tdg_" + FNames.first.str() + "_" + FNames.second.str();
     CGF.Builder.CreateCall(CGM.CreateRuntimeFunction(FT, setName), Args);
   } else {
     CGF.EmitRuntimeCall(OMPBuilder.getOrCreateRuntimeFunction(

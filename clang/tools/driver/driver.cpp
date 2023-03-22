@@ -645,12 +645,12 @@ int clang_main(int Argc, char **Argv) {
       while(it != Args.end()) {
         if(has_suffix(std::string(*it), ".c") || has_suffix(std::string(*it), ".cpp")){
           size_t lastindex = std::string(*it).find_last_of(".");
-          size_t lastslash = std::string(*it).find_last_of("/");
           std::string rawFileName = std::string(*it).substr(0, lastindex);
-          std::string objectFileName = rawFileName + ".o";
-
-          std::string tdgFileName = rawFileName.substr(lastslash+1, lastindex - (lastslash+1)) + "_tdg.cpp";
           rawFileName = rawFileName.substr(rawFileName.find_last_of("/\\") + 1);
+
+          std::string objectFileName = rawFileName + ".o";
+          std::string tdgFileName = rawFileName + "_tdg.cpp";
+
           ObjectFileNames.push_back(strcpy(new char[objectFileName.length() + 1], objectFileName.c_str()));
           TdgFileNames.push_back(strcpy(new char[tdgFileName.length() + 1], tdgFileName.c_str()));
           it = Args.erase(it);
