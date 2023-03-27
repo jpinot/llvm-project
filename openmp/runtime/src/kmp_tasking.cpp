@@ -2673,8 +2673,8 @@ kmp_int32 __kmp_omp_task(kmp_int32 gtid, kmp_task_t *new_task,
       KMP_ATOMIC_INC(&task_tdg->numTasks);
     }
   }
-  kmp_node_info *node = &(task_tdg->recordMap[new_taskdata->td_task_id]);
   if (new_taskdata->is_taskgraph && task_tdg->tdgStatus == KMP_TDG_FILL_DATA) {
+    kmp_node_info *node = &(task_tdg->recordMap[new_taskdata->td_task_id]);
     node->task = new_task;
 
     node->task = new_task;
@@ -2698,18 +2698,17 @@ kmp_int32 __kmp_omp_task(kmp_int32 gtid, kmp_task_t *new_task,
       if (!disable_stealing)
         disable_stealing = true;
 
-      // Transform local ID to global ID
-      int newGtid =
-          __kmp_gtid_from_tid(threadID, __kmp_threads[gtid]->th.th_team);
-
       // Check that there are suficient number of spawned threads
       if (UNLIKELY(threadID < 0 ||
                    threadID >=
                        __kmp_threads[gtid]->th.th_task_team->tt.tt_nproc))
         KMP_FATAL(ThreadIdentInvalid);
+      // Transform local ID to global ID
+      gtid =
+          __kmp_gtid_from_tid(threadID, __kmp_threads[gtid]->th.th_team);
 
-      gtid = newGtid;
     } else {
+      kmp_node_info *node = &(task_tdg->recordMap[new_taskdata->td_task_id]);
       node->static_thread = __kmp_tid_from_gtid(gtid);
     }
 
@@ -4052,7 +4051,7 @@ static inline int __kmp_execute_tasks_template(
       if (task == NULL && use_own_tasks) { // check own queue next
         task = __kmp_remove_my_task(thread, gtid, task_team, is_constrained);
       }
-      if ((task == NULL) && (nthreads > 1)) { // Steal a task finally
+      if ((task == NULL) && (nthreads > 1) && !disable_stealing) { // Steal a task finally
         int asleep = 1;
         use_own_tasks = 0;
         // Try to steal from the last place I stole from successfully.
