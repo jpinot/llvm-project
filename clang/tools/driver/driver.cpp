@@ -690,7 +690,7 @@ int clang_main(int Argc, char **Argv) {
       }
       FILE *file;
       for(int i=0; i < (int) TdgFileNames.size(); i++){
-        if(file = fopen(TdgFileNames[i],"r")) {
+        if((file = fopen(TdgFileNames[i],"r"))) {
           auto itPos = Args.begin() + 2;
           Args.insert(itPos, TdgFileNames[i]);
         }

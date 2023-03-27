@@ -1345,7 +1345,7 @@ int TaskDependencyGraphData::findPragmaId(CallInst &TaskCallInst,
             ValCallInst = dyn_cast<MemCpyInst>(StoreUser);
           }
 
-          Value *ValStored;
+          Value *ValStored = nullptr;
           if (ValStoreInst)
             ValStored = ValStoreInst->getValueOperand();
           else if (ValCallInst)

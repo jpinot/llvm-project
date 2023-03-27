@@ -4870,7 +4870,7 @@ void CGOpenMPRuntime::emitTaskCall(CodeGenFunction &CGF, SourceLocation Loc,
     DepTaskArgs[6] = llvm::ConstantPointerNull::get(CGF.VoidPtrTy);
   }
   auto &&ThenCodeGen = [this, &Data, TDBase, KmpTaskTQTyRD, &TaskArgs,
-                        &DepTaskArgs, Shareds, NewTask, &D, TaskFunction, ThreadID, Loc](CodeGenFunction &CGF, PrePostActionTy &) {
+                        &DepTaskArgs, NewTask, &D, ThreadID, Loc](CodeGenFunction &CGF, PrePostActionTy &) {
     if (!Data.Tied) {
       auto PartIdFI = std::next(KmpTaskTQTyRD->field_begin(), KmpTaskTPartId);
       LValue PartIdLVal = CGF.EmitLValueForField(TDBase, *PartIdFI);
@@ -6139,7 +6139,6 @@ void CGOpenMPRuntime::emitTaskgraphCall(CodeGenFunction &CGF,
           CapStruct.getPointer(OutlinedCGF), CGM.VoidPtrTy),
       CGF.Builder.getInt32(tdgType), Condition, Nowait};
   // Static TDG
-  llvm::Function *FnCu;
   if (tdgType) {
     if (!FnT->hasFnAttribute("llvm.omp.taskgraph.static"))
       FnT->addFnAttr("llvm.omp.taskgraph.static");

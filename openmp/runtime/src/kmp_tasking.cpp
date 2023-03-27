@@ -1798,6 +1798,7 @@ kmp_int32 __kmp_increment_counter(kmp_tdg_info *tdg) {
       return counter;
     }
   }
+  return -1;
 }
 
 void __kmp_decrement_counter(kmp_tdg_info *tdg) {
@@ -2256,7 +2257,7 @@ kmp_int32 __kmpc_dynamic_variant(kmp_int32 *traits, int numVariants,
   for (int i = 0; i < numVariants; i++) {
     if (traits[i] == LOW_MEMORY) {
       int FreeRam = GetRamFreePercentage();
-      printf("Free ram: %d\% \n", FreeRam);
+      printf("Free ram: %d \n", FreeRam);
       if (FreeRam < 60) {
         SelectedTrait = i;
       }
@@ -2641,7 +2642,7 @@ kmp_int32 __kmp_omp_task(kmp_int32 gtid, kmp_task_t *new_task,
         task_tdg->taskIdent = (kmp_ident_task *)realloc(
             task_tdg->taskIdent, newSize * sizeof(kmp_ident_task));
 
-        for (kmp_int i = oldSize; i < newSize; i++) {
+        for (kmp_int i = oldSize; i < (kmp_int) newSize; i++) {
           kmp_int32 *successorsList =
               (kmp_int32 *)malloc(__kmp_tdg_initial_successors_size * sizeof(kmp_int32));
           kmp_node_info *node = &new_taskdata->tdg->recordMap[i];
@@ -4238,7 +4239,6 @@ static inline int __kmp_schedule_tasks_template(
     int *thread_finished USE_ITT_BUILD_ARG(void *itt_sync_obj),
     kmp_int32 is_constrained) {
 
-  kmp_taskdata_t *taskdata;
   kmp_int32 tid = __kmp_get_tid();
   kmp_thread_data_t *thread_data =
       &thread->th.th_task_team->tt.tt_threads_data[tid];
@@ -4246,7 +4246,6 @@ static inline int __kmp_schedule_tasks_template(
     return FALSE;
   } else {
     for (kmp_int32 i = 0; i < thread_data->td.td_tdg_ntasks[__kmp_curr_tdg_idx]; ++i) {
-      taskdata = KMP_TASK_TO_TASKDATA(thread_data->td.td_tdg_tasks[__kmp_curr_tdg_idx][i]);
       __kmp_omp_task(gtid, thread_data->td.td_tdg_tasks[__kmp_curr_tdg_idx][i], true);
     }
     __kmp_tdg_replaying[tid] = 0;
@@ -4508,7 +4507,6 @@ static void __kmp_alloc_task_deque(kmp_info_t *thread,
   // Cannot use __kmp_thread_calloc() because threads not around for
   // kmp_reap_task_team( ).
   // Different deque size according to whether we are using TDG
-  kmp_int32 tid = thread->th.th_info.ds.ds_tid;
   thread_data->td.td_deque = (kmp_taskdata_t **)__kmp_allocate(
         INITIAL_TASK_DEQUE_SIZE * sizeof(kmp_taskdata_t *));
   thread_data->td.td_deque_size = INITIAL_TASK_DEQUE_SIZE;
@@ -4581,9 +4579,8 @@ void __kmp_insert_task_into_tdg(kmp_int32 gtid, kmp_thread_data_t *thread_data,
   kmp_int32 task_count = thread_data->td.td_tdg_ntasks[tdg_id];
   kmp_task_t **task_list = thread_data->td.td_tdg_tasks[tdg_id];
   kmp_uint array_size = thread_data->td.td_tdg_sizes[tdg_id];
-  kmp_taskdata_t *taskdata = KMP_TASK_TO_TASKDATA(task);
 
-  KMP_ASSERT(task_count < array_size);
+  KMP_ASSERT(task_count < (kmp_int32) array_size);
 
   task_list[task_count] = task;
   thread_data->td.td_tdg_ntasks[tdg_id]++;
@@ -4671,15 +4668,11 @@ int __kmp_realloc_task_threads_data(kmp_info_t *thread,
   kmp_thread_data_t **threads_data_p;
   kmp_int32 nthreads, maxthreads;
   int is_init_thread = FALSE;
-  kmp_task_team_t *other_task_team;
 
   if (TCR_4(task_team->tt.tt_found_tasks)) {
     // Already reallocated and initialized.
     return FALSE;
   }
-
-  other_task_team =
-      thread->th.th_team->t.t_task_team[1 - (thread->th.th_task_state)];
 
   threads_data_p = &task_team->tt.tt_threads_data;
   nthreads = task_team->tt.tt_nproc;

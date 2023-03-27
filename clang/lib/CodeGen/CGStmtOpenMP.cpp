@@ -5319,7 +5319,7 @@ void CodeGenFunction::EmitOMPTaskDirective(const OMPTaskDirective &S) {
       Address CapturedStructCopy = GeneratePrivateCopyCapturedStmtArgument(
           *CS, VarToReplicate, OriginalVarValue, VarName);
 
-      auto &&TaskGen = [&S, SharedsTy, CapturedStruct, IfCond,
+      auto &&TaskGen = [&S, SharedsTy, IfCond,
                         CapturedStructCopy, VarToReplicate, OriginalVarValue,
                         OriginalVarPointer](CodeGenFunction &CGF,
                                             llvm::Function *OutlinedFn,
@@ -5431,7 +5431,7 @@ void CodeGenFunction::EmitOMPTaskDirective(const OMPTaskDirective &S) {
     DDArt.DepExprs.push_back(VarToReplicate);
 
     //Generate last replica with empy body and fake dependencies
-    auto &&EmptyBodyGen = [CS](CodeGenFunction &CGF, PrePostActionTy &) {};
+    auto &&EmptyBodyGen = [](CodeGenFunction &CGF, PrePostActionTy &) {};
 
     EmitOMPTaskBasedDirective(S, OMPD_task, EmptyBodyGen, TaskGen,
                               ArtificialTaskData);
