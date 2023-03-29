@@ -78,6 +78,7 @@ class TaskDependencyGraphData {
   int ColorsUsed = 0;
   bool Prealloc = false;
   uint NumPreallocs = 0;
+  uint32_t TdgID;
   SmallVector<TaskInfo, 10> FunctionTasks; // Vector to store all tasks found
   SmallVector<TaskAllocInfo, 8>
       TasksAllocInfo; // Vector to store all tasks alloc info found

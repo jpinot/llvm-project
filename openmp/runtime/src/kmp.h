@@ -2585,7 +2585,7 @@ struct kmp_waiting_tdg {
 //Structure that contains a TDG
 struct kmp_tdg_info {
   const char *loc; //Location of the pragma
-  kmp_int32 tdgId; //Unique idenfifier of the TDG
+  kmp_uint32 tdgId; //Unique idenfifier of the TDG
   kmp_int32 mapSize; //Number of allocated TDG nodes
   kmp_int32 numRoots; //Number of roots tasks int the TDG
   kmp_int32 *rootTasks; //Array of tasks identifiers that are roots
@@ -4183,20 +4183,20 @@ KMP_EXPORT kmp_int32 __kmpc_omp_task_parts(ident_t *loc_ref, kmp_int32 gtid,
                                            kmp_task_t *new_task);
 KMP_EXPORT kmp_int32 __kmpc_omp_taskwait(ident_t *loc_ref, kmp_int32 gtid);
 #if LIBOMP_TASKGRAPH
-KMP_EXPORT void __kmpc_set_tdg(struct kmp_node_info *tdg,  kmp_int32 gtid, kmp_int32 tdg_id,  kmp_int32 ntasks,
+KMP_EXPORT void __kmpc_set_tdg(struct kmp_node_info *tdg,  kmp_int32 gtid, kmp_uint32 tdg_id,  kmp_int32 ntasks,
                                kmp_int32 *roots, kmp_int32 nroots);
 // KMP_EXPORT void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid,
 //                                  void (*entry)(void *), void *args,
 //                                  kmp_int32 tdg_type);
 KMP_EXPORT void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid,
-                                 kmp_int32 tdg_id, void (*entry)(void *),
+                                 kmp_uint32 tdg_id, void (*entry)(void *),
                                  void *args, kmp_int32 tdg_type, kmp_int32 if_cond, bool nowait);
 KMP_EXPORT void __kmpc_prealloc_tasks(
     kmp_task_alloc_info *task_static_data, char *preallocated_tasks,
     kmp_space_indexer_node *preallocated_nodes, kmp_uint32 n_task_constructs,
-    kmp_uint32 max_concurrent_tasks, kmp_uint32 task_size,  kmp_int32 tdg_id);
+    kmp_uint32 max_concurrent_tasks, kmp_uint32 task_size,  kmp_uint32 tdg_id);
 KMP_EXPORT kmp_int32 __kmpc_set_task_static_id(kmp_int32 gtid, kmp_task_t *task);
-KMP_EXPORT kmp_uint64 __kmpc_get_taskgraph_id(kmp_task_t *task);
+KMP_EXPORT kmp_uint32 __kmpc_get_taskgraph_id(kmp_task_t *task);
 KMP_EXPORT kmp_int32 __kmpc_getNewGroupID(ident_t *loc_ref);
 KMP_EXPORT kmp_int32 __kmpc_getFakeAddrGroupID(ident_t *loc_ref);
 KMP_EXPORT kmp_int32 __kmpc_getNewTaskID(ident_t *loc_ref);

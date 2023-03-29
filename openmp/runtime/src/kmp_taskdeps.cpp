@@ -1360,7 +1360,7 @@ void __kmpc_fill_data(ident_t *loc_ref, kmp_int32 gtid, void (*entry)(void *),
   cleanTdgCreationInfo(gtid);
 }
 
-void __kmpc_set_tdg(struct kmp_node_info *tdg, kmp_int32 gtid, kmp_int32 tdg_id, kmp_int32 ntasks, kmp_int32 *roots, kmp_int32 nroots) {
+void __kmpc_set_tdg(struct kmp_node_info *tdg, kmp_int32 gtid, kmp_uint32 tdg_id, kmp_int32 ntasks, kmp_int32 *roots, kmp_int32 nroots) {
 
   // Skip tdgs that we already have
   for (int i = 0; i < __kmp_ntdgs; i++) {
@@ -1589,7 +1589,7 @@ void copyPreallocData(int gtid, kmp_int32 ThisMapSize, void *args,
    }
 }
 
-void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 tdg_id,
+void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid, kmp_uint32 tdg_id,
                       void (*entry)(void *), void *args, kmp_int32 tdg_type, kmp_int32 if_cond, bool nowait) {
   int tdg_index = -1;
   for (int i = 0; i < __kmp_ntdgs; i++) {
@@ -1821,7 +1821,7 @@ void __kmpc_prealloc_tasks(kmp_task_alloc_info *task_static_data,
                            unsigned int n_task_constructs,
                            unsigned int max_concurrent_tasks,
                            unsigned int task_size,
-                           kmp_int32 tdg_id) {
+                           kmp_uint32 tdg_id) {
 
   int index = -1;
   //If the TDG is encountered preallocation has already been performed
@@ -1868,7 +1868,7 @@ kmp_task_t *kmp_init_lazy_task(int static_id,
   if (new_task == NULL)
     return nullptr;
   
-  kmp_int32 tdg_id = globalTdg->tdgId;
+  kmp_uint32 tdg_id = globalTdg->tdgId;
   kmp_taskdata_t *new_taskdata = KMP_TASK_TO_TASKDATA(new_task);
   kmp_info_t *thread = __kmp_threads[gtid];
   kmp_node_info *tdg = &thisRecordMap[static_id];

@@ -327,9 +327,7 @@ void TaskDependencyGraphData::print_tdg_to_dot(StringRef ModuleName, int ntdgs,
     lastslash = 0;
   std::string rawFileName = fileName.substr(lastslash+1, lastindex - (lastslash+1));
   std::error_code EC;
-  char FileName[20];
-  sprintf(FileName, "_tdg_%d.dot", ntdgs);
-  llvm::raw_fd_ostream Tdgfile(rawFileName + FileName, EC);
+  llvm::raw_fd_ostream Tdgfile(rawFileName + "_tdg_" + std::to_string(TdgID) + ".dot", EC);
 
   if (Tdgfile.has_error()) {
     llvm_unreachable("Error Opening TDG file \n");
@@ -338,7 +336,7 @@ void TaskDependencyGraphData::print_tdg_to_dot(StringRef ModuleName, int ntdgs,
   Tdgfile << "digraph TDG {\n";
   Tdgfile << "   compound=true\n";
   Tdgfile << "   subgraph cluster_0 {\n";
-  Tdgfile << "      label=TDG_" << ntdgs << "\n";
+  Tdgfile << "      label=TDG_" << std::to_string(TdgID) << "\n";
 
   for (auto &Task : FunctionTasks) {
 
@@ -775,11 +773,11 @@ void TaskDependencyGraphData::generate_runtime_header() {
          "kmp_node_info * next_waiting_tdg;\n};\n";
 
   Headerfile << "extern  \"C\" void __kmpc_set_tdg(struct kmp_node_info *tdg, "
-                "int gtid, int tdg_id, int "
+                "int gtid, uint32_t tdg_id, int "
                 "ntasks, int *roots, int nroots);\n";
 
   Headerfile << "extern \"C\" void __kmpc_taskgraph(void *loc_ref, int gtid, "
-                "int tdg_id, void (*entry)(void *), void *args, int tdg_type, "
+                "uint32_t tdg_id, void (*entry)(void *), void *args, int tdg_type, "
                 "int if_cond, bool nowait);\n";
 
   if (Prealloc) {
@@ -797,11 +795,24 @@ void TaskDependencyGraphData::generate_runtime_header() {
                   "kmp_task_alloc_info *task_static_data, char "
                   "*preallocated_tasks, void *preallocated_nodes, unsigned int "
                   "n_task_constructs,unsigned int "
-                  "max_concurrent_tasks, unsigned int task_size, unsigned long "
-                  "long tdg_id);\n";
+                  "max_concurrent_tasks, unsigned int task_size, uint32_t tdg_id);\n";
 
     Headerfile << get_task_definitions();
   }
+}
+
+inline uint32_t hash_str_uint32(const std::string &str) {
+
+  uint32_t hash = 0x811c9dc5;
+  uint32_t prime = 0x1000193;
+
+  for (int i = 0; i < str.size(); ++i) {
+    uint8_t value = str[i];
+    hash = hash ^ value;
+    hash *= prime;
+  }
+
+  return hash;
 }
 
 void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName,
@@ -1067,14 +1078,19 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName,
         Tdgfile << "};\n";
     }
   }
+
   std::pair<StringRef, StringRef> FNames = F.getName().split(".");
+  std::string tdgIdString = rawFileName + "_" + FNames.first.str() + "_" + FNames.second.str();
+
+  TdgID = hash_str_uint32(tdgIdString);
+
   Tdgfile << "extern \"C\" void " << rawFileName << "_kmp_set_tdg_"
           << FNames.first << "_" << FNames.second
           << "(void *loc_ref, int gtid, void (*entry)(void *), void *args, int "
              "tdg_type, int if_cond, bool nowait, int num_preallocs)\n{\n";
 
   Tdgfile << "  __kmpc_set_tdg(" << rawFileName << "_kmp_tdg_" << ntdgs
-          << ", gtid, " << ntdgs << ", " << FunctionTasks.size() << ", "
+          << ", gtid, " << TdgID << ", " << FunctionTasks.size() << ", "
           << rawFileName << "_kmp_tdg_roots_" << ntdgs << ", "
           << TdgRoots.size() << ");\n";
 
@@ -1088,10 +1104,10 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName,
                "kmp_taskdata) + sizeof("
             << rawFileName << "_private_data_" << longest_pragma << "_" << ntdgs
             << ")+sizeof(" << rawFileName << "_shared_data_" << longest_pragma
-            << "_" << ntdgs << ")," << ntdgs << ");\n";
+            << "_" << ntdgs << ")," << TdgID << ");\n";
   }
 
-  Tdgfile << "  __kmpc_taskgraph(loc_ref, gtid, " << ntdgs
+  Tdgfile << "  __kmpc_taskgraph(loc_ref, gtid, " << TdgID
           << ", entry, args, tdg_type, if_cond, nowait);\n}";
 
   Tdgfile.close();
@@ -1615,10 +1631,11 @@ void TaskDependencyGraphData::findOpenMPTasks(Function &F, DominatorTree &DT,
 
   // print_tdg();
   if (FunctionTasks.size()) {
-    print_tdg_to_dot(F.getParent()->getSourceFileName(), ntdgs, F);
     // generate_analysis_tdg_file(F.getParent()->getSourceFileName());
     generate_runtime_header();
     generate_runtime_tdg_file(F.getParent()->getSourceFileName(), F, ntdgs);
+    print_tdg_to_dot(F.getParent()->getSourceFileName(), ntdgs, F);
+
     TasksAllocInfo.clear();
     FunctionTasks.clear();
   }
