@@ -167,6 +167,10 @@ void TaskDependencyGraphData::obtainTaskInfo(TaskInfo &TaskFound,
             }
           }
         }
+        else{
+           CurrentTaskDepInfo.base = BaseStore->getValueOperand();
+          CurrentTaskDepInfo.isArray = false;
+        }
       }
     }
     //  Store type of dep (in=1, out=2, inout=3)
