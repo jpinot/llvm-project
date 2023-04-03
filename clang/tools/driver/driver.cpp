@@ -552,10 +552,18 @@ int clang_main(int Argc, char **Argv) {
     Args.push_back("-O2");
   }
 
+  // Check if -c flag is given
+  bool isC = false;
+  for (int i = 1; i < (int)Args.size(); i++) {
+    if (!strcmp(Args[i], "-c")) {
+      isC = true;
+      break;
+    }
+  }
   //Remove -o and fopenmp-target flag when using static tdgs
   SmallVector<const char *, 256>  ArgsCopy = Args;
   SmallVector<const char *, 256>  ArgsCopyOffloading = Args;
-  if (isStaticTdg) {
+  if (isStaticTdg && !isC) {
     for (int i = 1; i < (int)ArgsCopy.size(); i++) {
       if (!strcmp(Args[i], "-o")) {
         ArgsCopy.erase(ArgsCopy.begin()+i, ArgsCopy.begin() + i + 2);
@@ -630,8 +638,8 @@ int clang_main(int Argc, char **Argv) {
     }
 
     // FIXME: Initial workaround, look for a more elegant solution
-    if (C->getArgs().hasArg(driver::options::OPT_static_tdg) && !IsCrash) {
-      
+    if (C->getArgs().hasArg(driver::options::OPT_static_tdg) && !IsCrash && !isC) {
+      llvm::dbgs() << "Voy 2 \n";
       if (isOffloading){
       	std::unique_ptr<Compilation> C_offloading(TheDriver.BuildCompilation(ArgsCopyOffloading));
       	SmallVector<std::pair<int, const Command *>, 4> FailingCommandsOffloading;
@@ -671,23 +679,7 @@ int clang_main(int Argc, char **Argv) {
           break;
         }
       }
-      //Check if -c flag is given
-      bool isC = false;
-      for (int i = 1; i < (int)Args.size(); i++) {
-        if (!strcmp(Args[i], "-c")) {
-          isC = true;
-          break;
-        }
-      }
-      //Remove -o flag when -c is given
-      if (isC) {
-        for (int i = 1; i < (int)Args.size(); i++) {
-          if (!strcmp(Args[i], "-o")) {
-            Args.erase(Args.begin() + i, Args.begin() + i + 2);
-            break;
-          }
-        }
-      }
+
       FILE *file;
       for(int i=0; i < (int) TdgFileNames.size(); i++){
         if((file = fopen(TdgFileNames[i],"r"))) {
