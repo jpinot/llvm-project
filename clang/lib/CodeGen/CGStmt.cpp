@@ -2906,10 +2906,6 @@ Address CodeGenFunction::GeneratePrivateCopyCapturedStmtArgument(
     if (CurField->hasCapturedVLAType()) {
       EmitLambdaVLACapture(CurField->getCapturedVLAType(), LV);
     } else {
-      const auto *DRE1 = cast<DeclRefExpr>(*I);
-      const auto *DRE2 = cast<DeclRefExpr>(VarToReplicate);
-      if (DRE1->getDecl() == DRE2->getDecl()) {
-
         llvm::Value *OriginalVarEmitted = EmitScalarExpr((*I));
         llvm::Type *OriginalVarType = OriginalVarEmitted->getType();
 
@@ -2926,9 +2922,6 @@ Address CodeGenFunction::GeneratePrivateCopyCapturedStmtArgument(
             OriginalVarValue,
             Address(VariableReplicated, VariableReplicated->getType(), Align));
         Builder.CreateStore(VariableReplicated, LV.getAddress(*this));
-      } else {
-        EmitInitializerForField(*CurField, LV, *I);
-      }
     }
   }
   return SlotLV.getAddress(*this);

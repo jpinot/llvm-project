@@ -5340,9 +5340,7 @@ void CodeGenFunction::EmitOMPTaskDirective(const OMPTaskDirective &S) {
 
           VariableReplicated->setLinkage(llvm::GlobalValue::CommonLinkage);
           VariableReplicated->setAlignment(llvm::MaybeAlign(4));
-          llvm::ConstantAggregateZero *ZeroInit =
-              llvm::ConstantAggregateZero::get(OriginalVarValue->getType());
-          VariableReplicated->setInitializer(ZeroInit);
+          VariableReplicated->setInitializer(llvm::Constant::getNullValue(OriginalVarValue->getType()));
 
           CharUnits Align =
               CGF.getContext().getTypeAlignInChars(VarToReplicate->getType());
