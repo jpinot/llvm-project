@@ -639,7 +639,6 @@ int clang_main(int Argc, char **Argv) {
 
     // FIXME: Initial workaround, look for a more elegant solution
     if (C->getArgs().hasArg(driver::options::OPT_static_tdg) && !IsCrash && !isC) {
-      llvm::dbgs() << "Voy 2 \n";
       if (isOffloading){
       	std::unique_ptr<Compilation> C_offloading(TheDriver.BuildCompilation(ArgsCopyOffloading));
       	SmallVector<std::pair<int, const Command *>, 4> FailingCommandsOffloading;
