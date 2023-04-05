@@ -2906,6 +2906,10 @@ Address CodeGenFunction::GeneratePrivateCopyCapturedStmtArgument(
     if (CurField->hasCapturedVLAType()) {
       EmitLambdaVLACapture(CurField->getCapturedVLAType(), LV);
     } else {
+      const auto *DRE1 = dyn_cast<DeclRefExpr>(*I);
+      const auto *DRE2 = dyn_cast<DeclRefExpr>(VarToReplicate);
+      if (DRE1->getDecl() == DRE2->getDecl()) {
+
         llvm::Value *OriginalVarEmitted = EmitScalarExpr((*I));
         llvm::Type *OriginalVarType = OriginalVarEmitted->getType();
 
@@ -2915,13 +2919,17 @@ Address CodeGenFunction::GeneratePrivateCopyCapturedStmtArgument(
             CGM.getModule().getNamedGlobal(ReplicaName);
         VariableReplicated->setLinkage(llvm::GlobalValue::CommonLinkage);
         VariableReplicated->setAlignment(llvm::MaybeAlign(4));
-        VariableReplicated->setInitializer(llvm::Constant::getNullValue(VariableReplicated->getType()));
+        VariableReplicated->setInitializer(
+            llvm::Constant::getNullValue(VariableReplicated->getType()));
 
         CharUnits Align = getContext().getTypeAlignInChars((*I)->getType());
         Builder.CreateStore(
             OriginalVarValue,
             Address(VariableReplicated, VariableReplicated->getType(), Align));
         Builder.CreateStore(VariableReplicated, LV.getAddress(*this));
+      } else {
+        EmitInitializerForField(*CurField, LV, *I);
+      }
     }
   }
   return SlotLV.getAddress(*this);
