@@ -2915,7 +2915,7 @@ Address CodeGenFunction::GeneratePrivateCopyCapturedStmtArgument(
             CGM.getModule().getNamedGlobal(ReplicaName);
         VariableReplicated->setLinkage(llvm::GlobalValue::CommonLinkage);
         VariableReplicated->setAlignment(llvm::MaybeAlign(4));
-        VariableReplicated->setInitializer(llvm::ConstantInt::get(llvm::Type::getInt32Ty(CGM.getLLVMContext()), 0));
+        VariableReplicated->setInitializer(llvm::Constant::getNullValue(VariableReplicated->getType()));
 
         CharUnits Align = getContext().getTypeAlignInChars((*I)->getType());
         Builder.CreateStore(
