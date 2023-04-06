@@ -334,6 +334,10 @@ __kmp_depnode_link_successor(kmp_int32 gtid, kmp_info_t *thread,
         if (!(tdgStatus == KMP_TDG_RECORDING) && task)
 #endif
           __kmp_track_dependence(gtid, dep, node, task);
+#if LIBOMP_TASKGRAPH
+        else if (KMP_TASK_TO_TASKDATA(dep->dn.task)->td_flags.onced)
+          continue;
+#endif
         dep->dn.successors = __kmp_add_node(thread, dep->dn.successors, node);
         KA_TRACE(40, ("__kmp_process_deps: T#%d adding dependence from %p to "
                       "%p\n",
@@ -372,21 +376,15 @@ static inline kmp_int32 __kmp_depnode_link_successor(kmp_int32 gtid,
       if (!(tdgStatus == KMP_TDG_RECORDING) && task)
 #endif
         __kmp_track_dependence(gtid, sink, source, task);
+#if LIBOMP_TASKGRAPH
+        else if (KMP_TASK_TO_TASKDATA(sink->dn.task)->td_flags.onced)
+          return npredecessors;
+#endif
       sink->dn.successors = __kmp_add_node(thread, sink->dn.successors, source);
       KA_TRACE(40, ("__kmp_process_deps: T#%d adding dependence from %p to "
                     "%p\n",
                     gtid, KMP_TASK_TO_TASKDATA(sink->dn.task),
                     KMP_TASK_TO_TASKDATA(task)));
-#if LIBOMP_TASKGRAPH
-      if (tdgStatus == KMP_TDG_RECORDING) {
-        kmp_taskdata_t *td = KMP_TASK_TO_TASKDATA(sink->dn.task);
-        if (td->is_taskgraph && td->td_flags.onced)
-          // decrement npredecessors only if sink->dn.task belongs to a taskgraph and
-          // 1. the task is reset to its initial state (by kmp_free_task) or
-          // 2. the task is complete but not yet reset
-          npredecessors--;
-      }
-#endif
       npredecessors++;
     }
     KMP_RELEASE_DEPNODE(gtid, sink);
