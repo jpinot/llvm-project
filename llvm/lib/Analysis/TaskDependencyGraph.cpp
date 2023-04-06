@@ -231,7 +231,7 @@ bool TaskDependencyGraphData::checkDependency(TaskDependInfo &Source,
   }
 
   if (Source.base != Dest.base || Source.isArray != Dest.isArray ||
-      Source.type == 1 || Dest.type == 2 || SourceNumIndex != DestNumIndex)
+      (Source.type == 1 && Dest.type == 1) || SourceNumIndex != DestNumIndex)
     return false;
 
   if (!Source.isArray && !Dest.isArray)
@@ -810,7 +810,7 @@ inline uint32_t hash_str_uint32(const std::string &str) {
   uint32_t hash = 0x811c9dc5;
   uint32_t prime = 0x1000193;
 
-  for (int i = 0; i < str.size(); ++i) {
+  for (int i = 0; i < (int) str.size(); ++i) {
     uint8_t value = str[i];
     hash = hash ^ value;
     hash *= prime;
@@ -1084,7 +1084,7 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName,
   }
 
   std::pair<StringRef, StringRef> FNames = F.getName().split(".");
-  std::string tdgIdString = rawFileName + "_" + FNames.first.str() + "_" + FNames.second.str();
+  std::string tdgIdString = rawFileName + "_kmp_set_tdg_" + FNames.first.str() + "_" + FNames.second.str();
 
   TdgID = hash_str_uint32(tdgIdString);
 

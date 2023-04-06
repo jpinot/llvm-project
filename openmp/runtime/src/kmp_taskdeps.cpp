@@ -994,7 +994,7 @@ void erase_taskgroup() {
 void print_tdg_to_dot(kmp_tdg_info *thisTdg) {
   kmp_int32 thisNumTasks = KMP_ATOMIC_LD_RLX(&thisTdg->numTasks);
   char FileName[20];
-  sprintf(FileName, "tdg_%d.dot", thisTdg->tdgId);
+  sprintf(FileName, "tdg_%u.dot", thisTdg->tdgId);
   FILE *f = fopen(FileName, "w");
 
   if (f == NULL) {
@@ -1005,7 +1005,7 @@ void print_tdg_to_dot(kmp_tdg_info *thisTdg) {
   fprintf(f, "digraph TDG {\n");
   fprintf(f, "   compound=true\n");
   fprintf(f, "   subgraph cluster_0 {\n");
-  fprintf(f, "      label=TDG_%d\n", thisTdg->tdgId);
+  fprintf(f, "      label=TDG_%u\n", thisTdg->tdgId);
 
   for (kmp_int32 i = 0; i < thisNumTasks; i++) {
 

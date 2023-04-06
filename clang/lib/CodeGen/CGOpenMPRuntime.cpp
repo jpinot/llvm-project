@@ -6068,6 +6068,20 @@ void markFunctionsInlineInsideTaskgraph(llvm::Function &F) {
   }
 }
 
+inline uint32_t hash_str_uint32(const std::string &str) {
+
+  uint32_t hash = 0x811c9dc5;
+  uint32_t prime = 0x1000193;
+
+  for (int i = 0; i < (int) str.size(); ++i) {
+    uint8_t value = str[i];
+    hash = hash ^ value;
+    hash *= prime;
+  }
+
+  return hash;
+}
+
 void CGOpenMPRuntime::emitTaskgraphCall(CodeGenFunction &CGF,
                                         SourceLocation Loc,
                                         const OMPExecutableDirective &D) {
@@ -6126,14 +6140,19 @@ void CGOpenMPRuntime::emitTaskgraphCall(CodeGenFunction &CGF,
   else
     Condition = CGF.Builder.getInt32(0);
 
-  // Dynamic TDGs start from id 1000 and static TDGs from 0.
-  static int dynamicTDGId = 1000;
+  std::pair<StringRef, StringRef> FNames = FnT->getName().split(".");
+  std::string ModuleName = CGF.CGM.getModule().getName().str();
+  size_t lastindex = ModuleName.find_last_of(".");
+  ModuleName = ModuleName.substr(0, lastindex);
+  ModuleName = ModuleName.substr(ModuleName.find_last_of("/\\") + 1);
+  std::string setName = ModuleName + "_kmp_set_tdg_" + FNames.first.str() +
+                        "_" + FNames.second.str();
 
+  uint32_t dynamicTDGId = hash_str_uint32(setName);
   std::vector<llvm::Value *> Args{
       emitUpdateLocation(CGF, Loc),
       getThreadID(CGF, Loc),
-      llvm::ConstantInt::get(llvm::Type::getInt32Ty(CGF.getLLVMContext()),
-                             dynamicTDGId),
+      CGF.Builder.getInt64(dynamicTDGId),
       CGF.Builder.CreatePointerBitCastOrAddrSpaceCast(FnT,  CGM.VoidPtrTy),
       CGF.Builder.CreatePointerBitCastOrAddrSpaceCast(
           CapStruct.getPointer(OutlinedCGF), CGM.VoidPtrTy),
@@ -6154,13 +6173,6 @@ void CGOpenMPRuntime::emitTaskgraphCall(CodeGenFunction &CGF,
     Args.push_back(NumPreallocs);
     std::vector<llvm::Type *> ArgTypes{CGM.VoidPtrTy, CGM.Int32Ty, CGM.VoidPtrTy, CGM.VoidPtrTy, CGM.Int32Ty, CGM.Int32Ty, llvm::Type::getInt1Ty(CGF.getLLVMContext()),  CGM.Int32Ty};
     auto *FT = llvm::FunctionType::get(CGF.VoidTy, ArgTypes, false);
-    std::pair<StringRef, StringRef> FNames = FnT->getName().split(".");
-    std::string ModuleName = CGF.CGM.getModule().getName().str();
-    size_t lastindex = ModuleName.find_last_of(".");
-    ModuleName = ModuleName.substr(0, lastindex);
-    ModuleName = ModuleName.substr(ModuleName.find_last_of("/\\") + 1);
-    std::string setName =
-        ModuleName + "_kmp_set_tdg_" + FNames.first.str() + "_" + FNames.second.str();
     CGF.Builder.CreateCall(CGM.CreateRuntimeFunction(FT, setName), Args);
   } else {
     CGF.EmitRuntimeCall(OMPBuilder.getOrCreateRuntimeFunction(
