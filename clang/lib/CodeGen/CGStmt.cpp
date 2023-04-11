@@ -2908,7 +2908,7 @@ Address CodeGenFunction::GeneratePrivateCopyCapturedStmtArgument(
     } else {
       const auto *DRE1 = dyn_cast<DeclRefExpr>(*I);
       const auto *DRE2 = dyn_cast<DeclRefExpr>(VarToReplicate);
-      if (DRE1->getDecl() == DRE2->getDecl()) {
+      if (DRE1 && DRE2 && DRE1->getDecl() == DRE2->getDecl()) {
 
         llvm::Value *OriginalVarEmitted = EmitScalarExpr((*I));
         llvm::Type *OriginalVarType = OriginalVarEmitted->getType();
