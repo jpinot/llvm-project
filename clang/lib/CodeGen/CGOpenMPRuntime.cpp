@@ -6051,6 +6051,7 @@ void CGOpenMPRuntime::emitTaskwaitCall(CodeGenFunction &CGF, SourceLocation Loc,
 }
 
 void markFunctionsInlineInsideTaskgraph(llvm::Function &F) {
+
   if (!F.hasFnAttribute(llvm::Attribute::AlwaysInline)){
     F.removeFnAttr(llvm::Attribute::NoInline);
     F.removeFnAttr(llvm::Attribute::OptimizeNone);
@@ -6061,7 +6062,7 @@ void markFunctionsInlineInsideTaskgraph(llvm::Function &F) {
     for (llvm::Instruction &I : bb) {
       if (llvm::CallBase *call = dyn_cast<llvm::CallBase>(&I)) {
         llvm::Function *CalledFunction = call->getCalledFunction();
-        if(!CalledFunction->isDeclaration())
+        if(CalledFunction && !CalledFunction->isIntrinsic() && !CalledFunction->isDeclaration())
           markFunctionsInlineInsideTaskgraph(*(call->getCalledFunction()));
       }
     }

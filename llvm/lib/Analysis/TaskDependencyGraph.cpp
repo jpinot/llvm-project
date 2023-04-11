@@ -1562,42 +1562,37 @@ void TaskDependencyGraphData::findOpenMPTasks(Function &F, DominatorTree &DT,
     Worklist.erase(WIt);
 
     for (Instruction &I : *BB) {
+        // Look for task without deps
+        if (CallInst *II = dyn_cast<CallInst>(&I)) {
+          if (II->getCalledFunction()) {
+          bool hasDeps = false;
+          bool isTask = false;
+          if (II->getCalledFunction()->getName() ==
+              "__kmpc_omp_task_with_deps") {
+            hasDeps = true;
+            isTask = true;
+          } else if (II->getCalledFunction()->getName() == "__kmpc_omp_task") {
+            hasDeps = false;
+            isTask = true;
+          }
+          if (isTask) {
+            TaskInfo TaskFound;
+            TaskFound.id = NumTasks;
+            if (Prealloc)
+              TaskFound.pragmaId = findPragmaId(*II, TaskFound, F, DT);
+            else
+              TaskFound.pragmaId = -1;
+            ++NumTasks;
+            // Fill Task Deps and Ident info
+            if (hasDeps)
+              obtainTaskInfo(TaskFound, *II, DT);
 
-      // Look for task with deps calls
-      if (CallInst *II = dyn_cast<CallInst>(&I)) {
-        if (II->getCalledFunction() &&
-            II->getCalledFunction()->getName() == "__kmpc_omp_task_with_deps") {
-          TaskInfo TaskFound;
-          TaskFound.id = NumTasks;
-          if (Prealloc)
-            TaskFound.pragmaId = findPragmaId(*II, TaskFound, F, DT);
-          else
-            TaskFound.pragmaId = -1;
-          ++NumTasks;
-          // Fill Task Deps and Ident info
-          obtainTaskInfo(TaskFound, *II, DT);
-          obtainTaskIdent(TaskFound, *II);
-          // Store Task info
-          FunctionTasks.push_back(TaskFound);
+            obtainTaskIdent(TaskFound, *II);
+            // Store Task info
+            FunctionTasks.push_back(TaskFound);
+          }
+          }
         }
-      }
-      // Look for task without deps
-      if (CallInst *II = dyn_cast<CallInst>(&I)) {
-        if (II->getCalledFunction() &&
-            II->getCalledFunction()->getName() == "__kmpc_omp_task") {
-          TaskInfo TaskFound;
-          TaskFound.id = NumTasks;
-          if (Prealloc)
-            TaskFound.pragmaId = findPragmaId(*II, TaskFound, F, DT);
-          else
-            TaskFound.pragmaId = -1;
-          ++NumTasks;
-          // Fill Task Ident info
-          obtainTaskIdent(TaskFound, *II);
-          // Store Task info
-          FunctionTasks.push_back(TaskFound);
-        }
-      }
     }
     // Do not revisite BB
     for (auto It = succ_begin(BB); It != succ_end(BB); ++It) {
