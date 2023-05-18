@@ -6150,14 +6150,15 @@ void CGOpenMPRuntime::emitTaskgraphCall(CodeGenFunction &CGF,
                         "_" + FNames.second.str();
 
   uint32_t dynamicTDGId = hash_str_uint32(setName);
+  llvm::Value *isSingleBasicBlock = CGF.Builder.getInt1(1);
   std::vector<llvm::Value *> Args{
       emitUpdateLocation(CGF, Loc),
       getThreadID(CGF, Loc),
-      CGF.Builder.getInt64(dynamicTDGId),
+      CGF.Builder.getInt32(dynamicTDGId),
       CGF.Builder.CreatePointerBitCastOrAddrSpaceCast(FnT,  CGM.VoidPtrTy),
       CGF.Builder.CreatePointerBitCastOrAddrSpaceCast(
           CapStruct.getPointer(OutlinedCGF), CGM.VoidPtrTy),
-      CGF.Builder.getInt32(tdgType), Condition, Nowait};
+      CGF.Builder.getInt32(tdgType), Condition, Nowait, isSingleBasicBlock};
   // Static TDG
   if (tdgType) {
     if (!FnT->hasFnAttribute("llvm.omp.taskgraph.static"))
@@ -6172,7 +6173,8 @@ void CGOpenMPRuntime::emitTaskgraphCall(CodeGenFunction &CGF,
     // Erase tdg id and add numpreallocs
     Args.erase(Args.begin() + 2);
     Args.push_back(NumPreallocs);
-    std::vector<llvm::Type *> ArgTypes{CGM.VoidPtrTy, CGM.Int32Ty, CGM.VoidPtrTy, CGM.VoidPtrTy, CGM.Int32Ty, CGM.Int32Ty, llvm::Type::getInt1Ty(CGF.getLLVMContext()),  CGM.Int32Ty};
+    std::vector<llvm::Type *> ArgTypes{CGM.VoidPtrTy, CGM.Int32Ty, CGM.VoidPtrTy, CGM.VoidPtrTy, CGM.Int32Ty, CGM.Int32Ty, \
+                                      llvm::Type::getInt1Ty(CGF.getLLVMContext()), llvm::Type::getInt1Ty(CGF.getLLVMContext()), CGM.Int32Ty};
     auto *FT = llvm::FunctionType::get(CGF.VoidTy, ArgTypes, false);
     CGF.Builder.CreateCall(CGM.CreateRuntimeFunction(FT, setName), Args);
   } else {
