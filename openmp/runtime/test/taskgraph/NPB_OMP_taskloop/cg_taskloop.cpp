@@ -1,4 +1,4 @@
-// RUN: %libomp-cxx-compile-and-run
+// RUN: %libomp-tdg-cxx-compile-and-run
 /*
 MIT License
 
@@ -526,6 +526,7 @@ int test_cg_taskloop()
 			}
 		}
 	}
+    return 0;
 }
 
 /*

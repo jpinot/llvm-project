@@ -1,4 +1,4 @@
-//RUN: %libomp-compile-and-run
+//RUN: %libomp-tdg-compile-and-run
 #include "../square.h"
 
 int test_multiple_static_tdg()

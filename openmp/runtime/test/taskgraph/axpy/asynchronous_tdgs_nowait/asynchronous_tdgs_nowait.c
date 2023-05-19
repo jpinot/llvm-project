@@ -1,4 +1,4 @@
-// RUN: %libomp-compile-and-run
+// RUN: %libomp-tdg-compile-and-run
 #include "../axpy.h"
 
 #include <stdio.h>
@@ -68,6 +68,5 @@ int main()
             num_failed++;
         }
     }
-    
     return num_failed;
 }
