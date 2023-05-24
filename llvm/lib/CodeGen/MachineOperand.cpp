@@ -53,6 +53,11 @@ static MachineFunction *getMFIfAvailable(MachineOperand &MO) {
       getMFIfAvailable(const_cast<const MachineOperand &>(MO)));
 }
 
+unsigned MachineOperand::getOperandNo() const {
+  assert(getParent() && "Operand does not belong to any instruction!");
+  return getParent()->getOperandNo(this);
+}
+
 void MachineOperand::setReg(Register Reg) {
   if (getReg() == Reg)
     return; // No change.
@@ -118,7 +123,7 @@ void MachineOperand::setIsDef(bool Val) {
 
 bool MachineOperand::isRenamable() const {
   assert(isReg() && "Wrong MachineOperand accessor");
-  assert(Register::isPhysicalRegister(getReg()) &&
+  assert(getReg().isPhysical() &&
          "isRenamable should only be checked on physical registers");
   if (!IsRenamable)
     return false;
@@ -136,7 +141,7 @@ bool MachineOperand::isRenamable() const {
 
 void MachineOperand::setIsRenamable(bool Val) {
   assert(isReg() && "Wrong MachineOperand accessor");
-  assert(Register::isPhysicalRegister(getReg()) &&
+  assert(getReg().isPhysical() &&
          "setIsRenamable should only be called on physical registers");
   IsRenamable = Val;
 }
@@ -800,13 +805,13 @@ void MachineOperand::print(raw_ostream &OS, ModuleSlotTracker &MST,
       OS << "undef ";
     if (isEarlyClobber())
       OS << "early-clobber ";
-    if (Register::isPhysicalRegister(getReg()) && isRenamable())
+    if (getReg().isPhysical() && isRenamable())
       OS << "renamable ";
     // isDebug() is exactly true for register operands of a DBG_VALUE. So we
     // simply infer it when parsing and do not need to print it.
 
     const MachineRegisterInfo *MRI = nullptr;
-    if (Register::isVirtualRegister(Reg)) {
+    if (Reg.isVirtual()) {
       if (const MachineFunction *MF = getMFIfAvailable(*this)) {
         MRI = &MF->getRegInfo();
       }
@@ -821,7 +826,7 @@ void MachineOperand::print(raw_ostream &OS, ModuleSlotTracker &MST,
         OS << ".subreg" << SubReg;
     }
     // Print the register class / bank.
-    if (Register::isVirtualRegister(Reg)) {
+    if (Reg.isVirtual()) {
       if (const MachineFunction *MF = getMFIfAvailable(*this)) {
         const MachineRegisterInfo &MRI = MF->getRegInfo();
         if (IsStandalone || !PrintDef || MRI.def_empty(Reg)) {
@@ -986,7 +991,7 @@ void MachineOperand::print(raw_ostream &OS, ModuleSlotTracker &MST,
   case MachineOperand::MO_Predicate: {
     auto Pred = static_cast<CmpInst::Predicate>(getPredicate());
     OS << (CmpInst::isIntPredicate(Pred) ? "int" : "float") << "pred("
-       << CmpInst::getPredicateName(Pred) << ')';
+       << Pred << ')';
     break;
   }
   case MachineOperand::MO_ShuffleMask:
@@ -1022,10 +1027,10 @@ unsigned MachinePointerInfo::getAddrSpace() const { return AddrSpace; }
 /// Offset + Size byte.
 bool MachinePointerInfo::isDereferenceable(unsigned Size, LLVMContext &C,
                                            const DataLayout &DL) const {
-  if (!V.is<const Value *>())
+  if (!isa<const Value *>(V))
     return false;
 
-  const Value *BasePtr = V.get<const Value *>();
+  const Value *BasePtr = cast<const Value *>(V);
   if (BasePtr == nullptr)
     return false;
 
@@ -1070,8 +1075,8 @@ MachineMemOperand::MachineMemOperand(MachinePointerInfo ptrinfo, Flags f,
                                      AtomicOrdering FailureOrdering)
     : PtrInfo(ptrinfo), MemoryType(type), FlagVals(f), BaseAlign(a),
       AAInfo(AAInfo), Ranges(Ranges) {
-  assert((PtrInfo.V.isNull() || PtrInfo.V.is<const PseudoSourceValue *>() ||
-          isa<PointerType>(PtrInfo.V.get<const Value *>()->getType())) &&
+  assert((PtrInfo.V.isNull() || isa<const PseudoSourceValue *>(PtrInfo.V) ||
+          isa<PointerType>(cast<const Value *>(PtrInfo.V)->getType())) &&
          "invalid pointer value");
   assert((isLoad() || isStore()) && "Not a load/store!");
 

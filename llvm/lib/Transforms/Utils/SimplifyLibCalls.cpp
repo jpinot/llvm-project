@@ -14,7 +14,6 @@
 #include "llvm/Transforms/Utils/SimplifyLibCalls.h"
 #include "llvm/ADT/APSInt.h"
 #include "llvm/ADT/SmallString.h"
-#include "llvm/ADT/Triple.h"
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/Analysis/Loads.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
@@ -29,6 +28,7 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/Utils/BuildLibCalls.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/SizeOpts.h"
@@ -43,6 +43,13 @@ static cl::opt<bool>
                          cl::init(false),
                          cl::desc("Enable unsafe double to float "
                                   "shrinking for math lib calls"));
+
+// Enable conversion of operator new calls with a MemProf hot or cold hint
+// to an operator new call that takes a hot/cold hint. Off by default since
+// not all allocators currently support this extension.
+static cl::opt<bool>
+    OptimizeHotColdNew("optimize-hot-cold-new", cl::Hidden, cl::init(false),
+                       cl::desc("Enable hot/cold operator new library calls"));
 
 //===----------------------------------------------------------------------===//
 // Helper Functions
@@ -511,7 +518,8 @@ Value *LibCallSimplifier::optimizeStrCmp(CallInst *CI, IRBuilderBase &B) {
 
   // strcmp(x, y)  -> cnst  (if both x and y are constant strings)
   if (HasStr1 && HasStr2)
-    return ConstantInt::get(CI->getType(), Str1.compare(Str2));
+    return ConstantInt::get(CI->getType(),
+                            std::clamp(Str1.compare(Str2), -1, 1));
 
   if (HasStr1 && Str1.empty()) // strcmp("", x) -> -*x
     return B.CreateNeg(B.CreateZExt(
@@ -595,7 +603,8 @@ Value *LibCallSimplifier::optimizeStrNCmp(CallInst *CI, IRBuilderBase &B) {
     // Avoid truncating the 64-bit Length to 32 bits in ILP32.
     StringRef SubStr1 = substr(Str1, Length);
     StringRef SubStr2 = substr(Str2, Length);
-    return ConstantInt::get(CI->getType(), SubStr1.compare(SubStr2));
+    return ConstantInt::get(CI->getType(),
+                            std::clamp(SubStr1.compare(SubStr2), -1, 1));
   }
 
   if (HasStr1 && Str1.empty()) // strncmp("", x, n) -> -*x
@@ -1475,7 +1484,7 @@ static Value *optimizeMemCmpConstantSize(CallInst *CI, Value *LHS, Value *RHS,
   // to legal integers or equality comparison. See block below this.
   if (DL.isLegalInteger(Len * 8) && isOnlyUsedInZeroEqualityComparison(CI)) {
     IntegerType *IntType = IntegerType::get(CI->getContext(), Len * 8);
-    unsigned PrefAlignment = DL.getPrefTypeAlignment(IntType);
+    Align PrefAlignment = DL.getPrefTypeAlign(IntType);
 
     // First, see if we can fold either argument to a constant.
     Value *LHSV = nullptr;
@@ -1649,6 +1658,59 @@ Value *LibCallSimplifier::optimizeRealloc(CallInst *CI, IRBuilderBase &B) {
     return copyFlags(*CI, emitMalloc(CI->getArgOperand(1), B, DL, TLI));
 
   return nullptr;
+}
+
+// When enabled, replace operator new() calls marked with a hot or cold memprof
+// attribute with an operator new() call that takes a hot_cold_t parameter.
+// Currently this is supported by the open source version of tcmalloc, see:
+// https://github.com/google/tcmalloc/blob/master/tcmalloc/new_extension.h
+Value *LibCallSimplifier::optimizeNew(CallInst *CI, IRBuilderBase &B,
+                                      LibFunc &Func) {
+  if (!OptimizeHotColdNew)
+    return nullptr;
+
+  uint8_t HotCold;
+  if (CI->getAttributes().getFnAttr("memprof").getValueAsString() == "cold")
+    HotCold = 0; // Coldest setting.
+  else if (CI->getAttributes().getFnAttr("memprof").getValueAsString() == "hot")
+    HotCold = 255; // Hottest setting.
+  else
+    return nullptr;
+
+  switch (Func) {
+  case LibFunc_Znwm:
+    return emitHotColdNew(CI->getArgOperand(0), B, TLI,
+                          LibFunc_Znwm10hot_cold_t, HotCold);
+  case LibFunc_Znam:
+    return emitHotColdNew(CI->getArgOperand(0), B, TLI,
+                          LibFunc_Znam10hot_cold_t, HotCold);
+  case LibFunc_ZnwmRKSt9nothrow_t:
+    return emitHotColdNewNoThrow(CI->getArgOperand(0), CI->getArgOperand(1), B,
+                                 TLI, LibFunc_ZnwmRKSt9nothrow_t10hot_cold_t,
+                                 HotCold);
+  case LibFunc_ZnamRKSt9nothrow_t:
+    return emitHotColdNewNoThrow(CI->getArgOperand(0), CI->getArgOperand(1), B,
+                                 TLI, LibFunc_ZnamRKSt9nothrow_t10hot_cold_t,
+                                 HotCold);
+  case LibFunc_ZnwmSt11align_val_t:
+    return emitHotColdNewAligned(CI->getArgOperand(0), CI->getArgOperand(1), B,
+                                 TLI, LibFunc_ZnwmSt11align_val_t10hot_cold_t,
+                                 HotCold);
+  case LibFunc_ZnamSt11align_val_t:
+    return emitHotColdNewAligned(CI->getArgOperand(0), CI->getArgOperand(1), B,
+                                 TLI, LibFunc_ZnamSt11align_val_t10hot_cold_t,
+                                 HotCold);
+  case LibFunc_ZnwmSt11align_val_tRKSt9nothrow_t:
+    return emitHotColdNewAlignedNoThrow(
+        CI->getArgOperand(0), CI->getArgOperand(1), CI->getArgOperand(2), B,
+        TLI, LibFunc_ZnwmSt11align_val_tRKSt9nothrow_t10hot_cold_t, HotCold);
+  case LibFunc_ZnamSt11align_val_tRKSt9nothrow_t:
+    return emitHotColdNewAlignedNoThrow(
+        CI->getArgOperand(0), CI->getArgOperand(1), CI->getArgOperand(2), B,
+        TLI, LibFunc_ZnamSt11align_val_tRKSt9nothrow_t10hot_cold_t, HotCold);
+  default:
+    return nullptr;
+  }
 }
 
 //===----------------------------------------------------------------------===//
@@ -1937,7 +1999,8 @@ Value *LibCallSimplifier::replacePowWithExp(CallInst *Pow, IRBuilderBase &B) {
   AttributeList NoAttrs; // Attributes are only meaningful on the original call
 
   // pow(2.0, itofp(x)) -> ldexp(1.0, x)
-  if (match(Base, m_SpecificFP(2.0)) &&
+  // TODO: This does not work for vectors because there is no ldexp intrinsic.
+  if (!Ty->isVectorTy() && match(Base, m_SpecificFP(2.0)) &&
       (isa<SIToFPInst>(Expo) || isa<UIToFPInst>(Expo)) &&
       hasFloatFn(M, TLI, Ty, LibFunc_ldexp, LibFunc_ldexpf, LibFunc_ldexpl)) {
     if (Value *ExpoI = getIntToFPVal(Expo, B, TLI->getIntSize()))
@@ -2215,17 +2278,25 @@ Value *LibCallSimplifier::optimizeExp2(CallInst *CI, IRBuilderBase &B) {
       hasFloatVersion(M, Name))
     Ret = optimizeUnaryDoubleFP(CI, B, TLI, true);
 
+  // Bail out for vectors because the code below only expects scalars.
+  // TODO: This could be allowed if we had a ldexp intrinsic (D14327).
   Type *Ty = CI->getType();
-  Value *Op = CI->getArgOperand(0);
+  if (Ty->isVectorTy())
+    return Ret;
 
   // exp2(sitofp(x)) -> ldexp(1.0, sext(x))  if sizeof(x) <= IntSize
   // exp2(uitofp(x)) -> ldexp(1.0, zext(x))  if sizeof(x) < IntSize
+  Value *Op = CI->getArgOperand(0);
   if ((isa<SIToFPInst>(Op) || isa<UIToFPInst>(Op)) &&
       hasFloatFn(M, TLI, Ty, LibFunc_ldexp, LibFunc_ldexpf, LibFunc_ldexpl)) {
-    if (Value *Exp = getIntToFPVal(Op, B, TLI->getIntSize()))
-      return emitBinaryFloatFnCall(ConstantFP::get(Ty, 1.0), Exp, TLI,
-                                   LibFunc_ldexp, LibFunc_ldexpf,
-                                   LibFunc_ldexpl, B, AttributeList());
+    if (Value *Exp = getIntToFPVal(Op, B, TLI->getIntSize())) {
+      IRBuilderBase::FastMathFlagGuard Guard(B);
+      B.setFastMathFlags(CI->getFastMathFlags());
+      return copyFlags(
+          *CI, emitBinaryFloatFnCall(ConstantFP::get(Ty, 1.0), Exp, TLI,
+                                     LibFunc_ldexp, LibFunc_ldexpf,
+                                     LibFunc_ldexpl, B, AttributeList()));
+    }
   }
 
   return Ret;
@@ -2577,7 +2648,7 @@ static bool insertSinCosCall(IRBuilderBase &B, Function *OrigCallee, Value *Arg,
   return true;
 }
 
-Value *LibCallSimplifier::optimizeSinCosPi(CallInst *CI, IRBuilderBase &B) {
+Value *LibCallSimplifier::optimizeSinCosPi(CallInst *CI, bool IsSin, IRBuilderBase &B) {
   // Make sure the prototype is as expected, otherwise the rest of the
   // function is probably invalid and likely to abort.
   if (!isTrigLibCall(CI))
@@ -2616,7 +2687,7 @@ Value *LibCallSimplifier::optimizeSinCosPi(CallInst *CI, IRBuilderBase &B) {
   replaceTrigInsts(CosCalls, Cos);
   replaceTrigInsts(SinCosCalls, SinCos);
 
-  return nullptr;
+  return IsSin ? Sin : Cos;
 }
 
 void LibCallSimplifier::classifyArgUse(
@@ -3437,6 +3508,15 @@ Value *LibCallSimplifier::optimizeStringMemoryLibCall(CallInst *CI,
       return optimizeWcslen(CI, Builder);
     case LibFunc_bcopy:
       return optimizeBCopy(CI, Builder);
+    case LibFunc_Znwm:
+    case LibFunc_ZnwmRKSt9nothrow_t:
+    case LibFunc_ZnwmSt11align_val_t:
+    case LibFunc_ZnwmSt11align_val_tRKSt9nothrow_t:
+    case LibFunc_Znam:
+    case LibFunc_ZnamRKSt9nothrow_t:
+    case LibFunc_ZnamSt11align_val_t:
+    case LibFunc_ZnamSt11align_val_tRKSt9nothrow_t:
+      return optimizeNew(CI, Builder, Func);
     default:
       break;
     }
@@ -3459,9 +3539,10 @@ Value *LibCallSimplifier::optimizeFloatingPointLibCall(CallInst *CI,
   switch (Func) {
   case LibFunc_sinpif:
   case LibFunc_sinpi:
+    return optimizeSinCosPi(CI, /*IsSin*/true, Builder);
   case LibFunc_cospif:
   case LibFunc_cospi:
-    return optimizeSinCosPi(CI, Builder);
+    return optimizeSinCosPi(CI, /*IsSin*/false, Builder);
   case LibFunc_powf:
   case LibFunc_pow:
   case LibFunc_powl:

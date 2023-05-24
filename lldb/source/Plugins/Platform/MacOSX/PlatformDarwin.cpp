@@ -106,11 +106,9 @@ llvm::StringRef PlatformDarwin::GetDescriptionStatic() {
   return "Darwin platform plug-in.";
 }
 
-PlatformSP PlatformDarwin::CreateInstance(bool force, const ArchSpec *arch,
-                                          const Debugger *debugger,
-                                          const ScriptedMetadata *metadata) {
-  // We only create subclasses of the PlatformDarwin plugin.
-  return PlatformSP();
+PlatformSP PlatformDarwin::CreateInstance(bool force, const ArchSpec *arch) {
+   // We only create subclasses of the PlatformDarwin plugin.
+   return PlatformSP();
 }
 
 #define LLDB_PROPERTIES_platformdarwin
@@ -166,8 +164,7 @@ void PlatformDarwin::DebuggerInitialize(
     const bool is_global_setting = false;
     PluginManager::CreateSettingForPlatformPlugin(
         debugger, GetGlobalProperties().GetValueProperties(),
-        ConstString("Properties for the Darwin platform plug-in."),
-        is_global_setting);
+        "Properties for the Darwin platform plug-in.", is_global_setting);
     OptionValueString *value = GetGlobalProperties().GetIgnoredExceptionValue();
     value->SetValidator(ExceptionMaskValidator);
   }

@@ -2219,14 +2219,14 @@ bool HexagonInstrInfo::isDependent(const MachineInstr &ProdMI,
       if (RegA == RegB)
         return true;
 
-      if (Register::isPhysicalRegister(RegA))
-        for (MCSubRegIterator SubRegs(RegA, &HRI); SubRegs.isValid(); ++SubRegs)
-          if (RegB == *SubRegs)
+      if (RegA.isPhysical())
+        for (MCPhysReg SubReg : HRI.subregs(RegA))
+          if (RegB == SubReg)
             return true;
 
-      if (Register::isPhysicalRegister(RegB))
-        for (MCSubRegIterator SubRegs(RegB, &HRI); SubRegs.isValid(); ++SubRegs)
-          if (RegA == *SubRegs)
+      if (RegB.isPhysical())
+        for (MCPhysReg SubReg : HRI.subregs(RegB))
+          if (RegA == SubReg)
             return true;
     }
 
@@ -3844,7 +3844,7 @@ int HexagonInstrInfo::getDotOldOp(const MachineInstr &MI) const {
     // All Hexagon architectures have prediction bits on dot-new branches,
     // but only Hexagon V60+ has prediction bits on dot-old ones. Make sure
     // to pick the right opcode when converting back to dot-old.
-    if (!Subtarget.getFeatureBits()[Hexagon::ArchV60]) {
+    if (!Subtarget.hasFeature(Hexagon::ArchV60)) {
       switch (NewOp) {
       case Hexagon::J2_jumptpt:
         NewOp = Hexagon::J2_jumpt;
@@ -4302,10 +4302,10 @@ int HexagonInstrInfo::getOperandLatency(const InstrItineraryData *ItinData,
   // Get DefIdx and UseIdx for super registers.
   const MachineOperand &DefMO = DefMI.getOperand(DefIdx);
 
-  if (DefMO.isReg() && Register::isPhysicalRegister(DefMO.getReg())) {
+  if (DefMO.isReg() && DefMO.getReg().isPhysical()) {
     if (DefMO.isImplicit()) {
-      for (MCSuperRegIterator SR(DefMO.getReg(), &HRI); SR.isValid(); ++SR) {
-        int Idx = DefMI.findRegisterDefOperandIdx(*SR, false, false, &HRI);
+      for (MCPhysReg SR : HRI.superregs(DefMO.getReg())) {
+        int Idx = DefMI.findRegisterDefOperandIdx(SR, false, false, &HRI);
         if (Idx != -1) {
           DefIdx = Idx;
           break;
@@ -4315,8 +4315,8 @@ int HexagonInstrInfo::getOperandLatency(const InstrItineraryData *ItinData,
 
     const MachineOperand &UseMO = UseMI.getOperand(UseIdx);
     if (UseMO.isImplicit()) {
-      for (MCSuperRegIterator SR(UseMO.getReg(), &HRI); SR.isValid(); ++SR) {
-        int Idx = UseMI.findRegisterUseOperandIdx(*SR, false, &HRI);
+      for (MCPhysReg SR : HRI.superregs(UseMO.getReg())) {
+        int Idx = UseMI.findRegisterUseOperandIdx(SR, false, &HRI);
         if (Idx != -1) {
           UseIdx = Idx;
           break;

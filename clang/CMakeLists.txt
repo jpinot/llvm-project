@@ -118,12 +118,10 @@ if(CLANG_BUILT_STANDALONE)
         set(LLVM_UTILS_PROVIDED ON)
         set(CLANG_TEST_DEPS FileCheck count not)
       endif()
-      set(UNITTEST_DIR ${LLVM_THIRD_PARTY_DIR}/unittest)
-      if(EXISTS ${UNITTEST_DIR}/googletest/include/gtest/gtest.h
-          AND NOT EXISTS ${LLVM_LIBRARY_DIR}/${CMAKE_STATIC_LIBRARY_PREFIX}gtest${CMAKE_STATIC_LIBRARY_SUFFIX}
-          AND EXISTS ${UNITTEST_DIR}/CMakeLists.txt)
-        add_subdirectory(${UNITTEST_DIR} third-party/unittest)
-      endif()
+    endif()
+
+    if (NOT TARGET llvm_gtest)
+        message(FATAL_ERROR "llvm-gtest not found. Please install llvm-gtest or disable tests with -DLLVM_INCLUDE_TESTS=OFF")
     endif()
 
     if(LLVM_LIT)
@@ -245,33 +243,14 @@ set(CLANG_DEFAULT_OBJCOPY "objcopy" CACHE STRING
 set(CLANG_DEFAULT_OPENMP_RUNTIME "libomp" CACHE STRING
   "Default OpenMP runtime used by -fopenmp.")
 
+set(CLANG_DEFAULT_OMPSS2_RUNTIME "libnanos6" CACHE STRING
+  "Default OmpSs-2 runtime used by -fompss-2.")
+
 set(CLANG_DEFAULT_NANOS6_HOME "" CACHE STRING
-  "Nanos6 home directory.")
+  "OmpSs-2 nanos6 home directory.")
 
-# OpenMP offloading requires at least sm_35 because we use shuffle instructions
-# to generate efficient code for reductions and the atomicMax instruction on
-# 64-bit integers in the implementation of conditional lastprivate.
-set(CUDA_ARCH_FLAGS "sm_35")
-
-# Try to find the highest Nvidia GPU architecture the system supports
-if (NOT DEFINED CLANG_OPENMP_NVPTX_DEFAULT_ARCH)
-  find_package(CUDA QUIET)
-  if (CUDA_FOUND)
-    cuda_select_nvcc_arch_flags(CUDA_ARCH_FLAGS)
-  endif()
-else()
-  set(CUDA_ARCH_FLAGS ${CLANG_OPENMP_NVPTX_DEFAULT_ARCH})
-endif()
-
-string(REGEX MATCH "sm_([0-9]+)" CUDA_ARCH_MATCH ${CUDA_ARCH_FLAGS})
-if (NOT DEFINED CUDA_ARCH_MATCH OR "${CMAKE_MATCH_1}" LESS 35)
-  set(CLANG_OPENMP_NVPTX_DEFAULT_ARCH "sm_35" CACHE STRING
-    "Default architecture for OpenMP offloading to Nvidia GPUs." FORCE)
-  message(WARNING "Resetting default architecture for OpenMP offloading to Nvidia GPUs to sm_35")
-else()
-  set(CLANG_OPENMP_NVPTX_DEFAULT_ARCH ${CUDA_ARCH_MATCH} CACHE STRING
-    "Default architecture for OpenMP offloading to Nvidia GPUs.")
-endif()
+set(CLANG_DEFAULT_NODES_HOME "" CACHE STRING
+  "OmpSs-2 NODES home directory.")
 
 set(CLANG_SYSTEMZ_DEFAULT_ARCH "z10" CACHE STRING "SystemZ Default Arch")
 
@@ -534,13 +513,11 @@ endif()
 
 
 if( CLANG_INCLUDE_TESTS )
-  if(EXISTS ${LLVM_THIRD_PARTY_DIR}/unittest/googletest/include/gtest/gtest.h)
-    add_subdirectory(unittests)
-    list(APPEND CLANG_TEST_DEPS ClangUnitTests)
-    list(APPEND CLANG_TEST_PARAMS
-      clang_unit_site_config=${CMAKE_CURRENT_BINARY_DIR}/test/Unit/lit.site.cfg
-      )
-  endif()
+  add_subdirectory(unittests)
+  list(APPEND CLANG_TEST_DEPS ClangUnitTests)
+  list(APPEND CLANG_TEST_PARAMS
+    clang_unit_site_config=${CMAKE_CURRENT_BINARY_DIR}/test/Unit/lit.site.cfg
+  )
   add_subdirectory(test)
   add_subdirectory(bindings/python/tests)
 
@@ -623,6 +600,14 @@ if (CLANG_ENABLE_BOOTSTRAP)
     add_dependencies(clang-bootstrap-deps lld)
   endif()
 
+  if (WIN32)
+    # Build llvm-rc and llvm-mt which are needed by the Windows build.
+    add_dependencies(clang-bootstrap-deps llvm-rc)
+    if(LLVM_ENABLE_LIBXML2)
+      add_dependencies(clang-bootstrap-deps llvm-mt)
+    endif()
+  endif()
+
   # If the next stage is LTO we need to depend on LTO and possibly lld or LLVMgold
   if(BOOTSTRAP_LLVM_ENABLE_LTO OR LLVM_ENABLE_LTO AND NOT LLVM_BUILD_INSTRUMENTED)
     if(APPLE)
@@ -637,6 +622,9 @@ if (CLANG_ENABLE_BOOTSTRAP)
       # variable, and have LLVM's CMake append the envar to the archiver calls.
       set(LTO_LIBRARY -DDARWIN_LTO_LIBRARY=${LLVM_SHLIB_OUTPUT_INTDIR}/libLTO.dylib
         -DDYLD_LIBRARY_PATH=${LLVM_LIBRARY_OUTPUT_INTDIR})
+    elseif(MSVC)
+      add_dependencies(clang-bootstrap-deps llvm-lib)
+      set(${CLANG_STAGE}_AR -DCMAKE_AR=${LLVM_RUNTIME_OUTPUT_INTDIR}/llvm-lib)
     elseif(NOT WIN32)
       add_dependencies(clang-bootstrap-deps llvm-ar llvm-ranlib)
       if(NOT BOOTSTRAP_LLVM_ENABLE_LLD AND LLVM_BINUTILS_INCDIR)
@@ -681,8 +669,6 @@ if (CLANG_ENABLE_BOOTSTRAP)
     LLVM_VERSION_SUFFIX
     LLVM_BINUTILS_INCDIR
     CLANG_REPOSITORY_STRING
-    CMAKE_C_COMPILER_LAUNCHER
-    CMAKE_CXX_COMPILER_LAUNCHER
     CMAKE_MAKE_PROGRAM
     CMAKE_OSX_ARCHITECTURES
     CMAKE_BUILD_TYPE
@@ -884,8 +870,6 @@ if (CLANG_BOLT_INSTRUMENT AND NOT LLVM_BUILD_INSTRUMENTED)
   set(CLANGXX_PATH ${CLANG_PATH}++)
   set(CLANG_INSTRUMENTED ${CLANG_PATH}-bolt.inst)
   set(CLANGXX_INSTRUMENTED ${CLANGXX_PATH}-bolt.inst)
-  set(CLANG_OPTIMIZED ${CLANG_PATH}-bolt)
-  set(CLANGXX_OPTIMIZED ${CLANGXX_PATH}-bolt)
 
   # Instrument clang with BOLT
   add_custom_target(clang-instrumented
@@ -963,6 +947,7 @@ if (CLANG_BOLT_INSTRUMENT AND NOT LLVM_BUILD_INSTRUMENTED)
   )
 
   # Optimize original (pre-bolt) Clang using the collected profile
+  set(CLANG_OPTIMIZED ${CMAKE_CURRENT_BINARY_DIR}/clang.bolt)
   add_custom_target(clang-bolt
     DEPENDS ${CLANG_OPTIMIZED}
   )
@@ -973,20 +958,8 @@ if (CLANG_BOLT_INSTRUMENT AND NOT LLVM_BUILD_INSTRUMENTED)
       -data ${CMAKE_CURRENT_BINARY_DIR}/prof.fdata
       -reorder-blocks=ext-tsp -reorder-functions=hfsort+ -split-functions
       -split-all-cold -split-eh -dyno-stats -icf=1 -use-gnu-stack
+    COMMAND ${CMAKE_COMMAND} -E rename ${CLANG_OPTIMIZED} $<TARGET_FILE:clang>
     COMMENT "Optimizing Clang with BOLT"
-    VERBATIM
-  )
-
-  # Make a symlink from clang-bolt to clang++-bolt
-  add_custom_target(clang++-bolt
-    DEPENDS ${CLANGXX_OPTIMIZED}
-  )
-  add_custom_command(OUTPUT ${CLANGXX_OPTIMIZED}
-    DEPENDS clang-bolt
-    COMMAND ${CMAKE_COMMAND} -E create_symlink
-      ${CLANG_OPTIMIZED}
-      ${CLANGXX_OPTIMIZED}
-    COMMENT "Creating symlink from BOLT optimized clang to clang++"
     VERBATIM
   )
 endif()

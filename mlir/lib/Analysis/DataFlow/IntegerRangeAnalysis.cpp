@@ -17,6 +17,7 @@
 #include "mlir/Interfaces/InferIntRangeInterface.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
 #include "llvm/Support/Debug.h"
+#include <optional>
 
 #define DEBUG_TYPE "int-range-analysis"
 
@@ -39,7 +40,7 @@ void IntegerValueRangeLattice::onUpdate(DataFlowSolver *solver) const {
 
   // If the integer range can be narrowed to a constant, update the constant
   // value of the SSA value.
-  Optional<APInt> constant = getValue().getValue().getConstantValue();
+  std::optional<APInt> constant = getValue().getValue().getConstantValue();
   auto value = point.get<Value>();
   auto *cv = solver->getOrCreateState<Lattice<ConstantValue>>(value);
   if (!constant)
@@ -127,6 +128,11 @@ void IntegerRangeAnalysis::visitNonControlFlowArguments(
     ArrayRef<IntegerValueRangeLattice *> argLattices, unsigned firstIndex) {
   if (auto inferrable = dyn_cast<InferIntRangeInterface>(op)) {
     LLVM_DEBUG(llvm::dbgs() << "Inferring ranges for " << *op << "\n");
+    // If the lattice on any operand is unitialized, bail out.
+    if (llvm::any_of(op->getOperands(), [&](Value value) {
+          return getLatticeElementFor(op, value)->getValue().isUninitialized();
+        }))
+      return;
     SmallVector<ConstantIntRanges> argRanges(
         llvm::map_range(op->getOperands(), [&](Value value) {
           return getLatticeElementFor(op, value)->getValue().getValue();

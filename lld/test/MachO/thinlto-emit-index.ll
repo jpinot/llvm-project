@@ -43,9 +43,9 @@
 ; RUN: ls %t/1.o.imports
 
 ;; Ensure LLD generates an empty index for each bitcode file even if all bitcode files are lazy.
-; RUN: rm -f %t/1.o.thinlto.bc
-; RUN: llvm-mc -filetype=obj -triple=x86_64-apple-darwin /dev/null -o dummy.o
-; RUN: %lld --thinlto-emit-index-files -dylib dummy.o --start-lib %t/1.o --end-lib -o %t/8
+; RUN: rm -f %t/dummy.o %t/1.o.thinlto.bc
+; RUN: llvm-mc -filetype=obj -triple=x86_64-apple-darwin /dev/null -o %t/dummy.o
+; RUN: %lld --thinlto-emit-index-files -dylib %t/dummy.o --start-lib %t/1.o --end-lib -o %t/8
 ; RUN: ls %t/8
 ; RUN: ls %t/1.o.thinlto.bc
 
@@ -92,7 +92,6 @@
 ; BACKEND2-NEXT: <FLAGS
 ; BACKEND2-NEXT: <VALUE_GUID op0=1 op1=-5300342847281564238
 ; BACKEND2-NEXT: <COMBINED
-; BACKEND2-NEXT: <BLOCK_COUNT op0=2/>
 ; BACKEND2-NEXT: </GLOBALVAL_SUMMARY_BLOCK
 
 

@@ -80,11 +80,11 @@ MachineInstrBuilder MachineIRBuilder::buildFIDbgValue(int FI,
   assert(
       cast<DILocalVariable>(Variable)->isValidLocationForIntrinsic(getDL()) &&
       "Expected inlined-at fields to agree");
-  return buildInstr(TargetOpcode::DBG_VALUE)
-      .addFrameIndex(FI)
-      .addImm(0)
-      .addMetadata(Variable)
-      .addMetadata(Expr);
+  return insertInstr(buildInstrNoInsert(TargetOpcode::DBG_VALUE)
+                         .addFrameIndex(FI)
+                         .addImm(0)
+                         .addMetadata(Variable)
+                         .addMetadata(Expr));
 }
 
 MachineInstrBuilder MachineIRBuilder::buildConstDbgValue(const Constant &C,
@@ -161,6 +161,15 @@ MachineInstrBuilder MachineIRBuilder::buildGlobalValue(const DstOp &Res,
   auto MIB = buildInstr(TargetOpcode::G_GLOBAL_VALUE);
   Res.addDefToMIB(*getMRI(), MIB);
   MIB.addGlobalAddress(GV);
+  return MIB;
+}
+
+MachineInstrBuilder MachineIRBuilder::buildConstantPool(const DstOp &Res,
+                                                        unsigned Idx) {
+  assert(Res.getLLTTy(*getMRI()).isPointer() && "invalid operand type");
+  auto MIB = buildInstr(TargetOpcode::G_CONSTANT_POOL);
+  Res.addDefToMIB(*getMRI(), MIB);
+  MIB.addConstantPoolIndex(Idx);
   return MIB;
 }
 
@@ -243,7 +252,7 @@ MachineIRBuilder::buildPadVectorWithUndefElements(const DstOp &Res,
   unsigned NumberOfPadElts = ResTy.getNumElements() - Regs.size();
   for (unsigned i = 0; i < NumberOfPadElts; ++i)
     Regs.push_back(Undef);
-  return buildMerge(Res, Regs);
+  return buildMergeLikeInstr(Res, Regs);
 }
 
 MachineInstrBuilder
@@ -262,7 +271,7 @@ MachineIRBuilder::buildDeleteTrailingVectorElements(const DstOp &Res,
   auto Unmerge = buildUnmerge(Op0Ty.getElementType(), Op0);
   for (unsigned i = 0; i < ResTy.getNumElements(); ++i)
     Regs.push_back(Unmerge.getReg(i));
-  return buildMerge(Res, Regs);
+  return buildMergeLikeInstr(Res, Regs);
 }
 
 MachineInstrBuilder MachineIRBuilder::buildBr(MachineBasicBlock &Dest) {
@@ -597,8 +606,19 @@ MachineInstrBuilder MachineIRBuilder::buildUndef(const DstOp &Res) {
   return buildInstr(TargetOpcode::G_IMPLICIT_DEF, {Res}, {});
 }
 
-MachineInstrBuilder MachineIRBuilder::buildMerge(const DstOp &Res,
-                                                 ArrayRef<Register> Ops) {
+MachineInstrBuilder MachineIRBuilder::buildMergeValues(const DstOp &Res,
+                                                       ArrayRef<Register> Ops) {
+  // Unfortunately to convert from ArrayRef<LLT> to ArrayRef<SrcOp>,
+  // we need some temporary storage for the DstOp objects. Here we use a
+  // sufficiently large SmallVector to not go through the heap.
+  SmallVector<SrcOp, 8> TmpVec(Ops.begin(), Ops.end());
+  assert(TmpVec.size() > 1);
+  return buildInstr(TargetOpcode::G_MERGE_VALUES, Res, TmpVec);
+}
+
+MachineInstrBuilder
+MachineIRBuilder::buildMergeLikeInstr(const DstOp &Res,
+                                      ArrayRef<Register> Ops) {
   // Unfortunately to convert from ArrayRef<LLT> to ArrayRef<SrcOp>,
   // we need some temporary storage for the DstOp objects. Here we use a
   // sufficiently large SmallVector to not go through the heap.
@@ -608,8 +628,8 @@ MachineInstrBuilder MachineIRBuilder::buildMerge(const DstOp &Res,
 }
 
 MachineInstrBuilder
-MachineIRBuilder::buildMerge(const DstOp &Res,
-                             std::initializer_list<SrcOp> Ops) {
+MachineIRBuilder::buildMergeLikeInstr(const DstOp &Res,
+                                      std::initializer_list<SrcOp> Ops) {
   assert(Ops.size() > 1);
   return buildInstr(getOpcodeForMerge(Res, Ops), Res, Ops);
 }

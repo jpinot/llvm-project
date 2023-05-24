@@ -458,6 +458,17 @@ public:
   /// \return a MachineInstrBuilder for the newly created instruction.
   MachineInstrBuilder buildGlobalValue(const DstOp &Res, const GlobalValue *GV);
 
+  /// Build and insert \p Res = G_CONSTANT_POOL \p Idx
+  ///
+  /// G_CONSTANT_POOL materializes the address of an object in the constant
+  /// pool.
+  ///
+  /// \pre setBasicBlock or setMI must have been called.
+  /// \pre \p Res must be a generic virtual register with pointer type.
+  ///
+  /// \return a MachineInstrBuilder for the newly created instruction.
+  MachineInstrBuilder buildConstantPool(const DstOp &Res, unsigned Idx);
+
   /// Build and insert \p Res = G_PTR_ADD \p Op0, \p Op1
   ///
   /// G_PTR_ADD adds \p Op1 addressible units to the pointer specified by \p Op0,
@@ -865,8 +876,8 @@ public:
   /// Build and insert G_ASSERT_SEXT, G_ASSERT_ZEXT, or G_ASSERT_ALIGN
   ///
   /// \return a MachineInstrBuilder for the newly created instruction.
-  MachineInstrBuilder buildAssertOp(unsigned Opc, const DstOp &Res, const SrcOp &Op,
-				    unsigned Val) {
+  MachineInstrBuilder buildAssertInstr(unsigned Opc, const DstOp &Res,
+                                       const SrcOp &Op, unsigned Val) {
     return buildInstr(Opc, Res, Op).addImm(Val);
   }
 
@@ -875,7 +886,7 @@ public:
   /// \return a MachineInstrBuilder for the newly created instruction.
   MachineInstrBuilder buildAssertZExt(const DstOp &Res, const SrcOp &Op,
                                       unsigned Size) {
-    return buildAssertOp(TargetOpcode::G_ASSERT_ZEXT, Res, Op, Size);
+    return buildAssertInstr(TargetOpcode::G_ASSERT_ZEXT, Res, Op, Size);
   }
 
   /// Build and insert \p Res = G_ASSERT_SEXT Op, Size
@@ -883,7 +894,7 @@ public:
   /// \return a MachineInstrBuilder for the newly created instruction.
   MachineInstrBuilder buildAssertSExt(const DstOp &Res, const SrcOp &Op,
                                       unsigned Size) {
-    return buildAssertOp(TargetOpcode::G_ASSERT_SEXT, Res, Op, Size);
+    return buildAssertInstr(TargetOpcode::G_ASSERT_SEXT, Res, Op, Size);
   }
 
   /// Build and insert \p Res = G_ASSERT_ALIGN Op, AlignVal
@@ -891,7 +902,8 @@ public:
   /// \return a MachineInstrBuilder for the newly created instruction.
   MachineInstrBuilder buildAssertAlign(const DstOp &Res, const SrcOp &Op,
 				       Align AlignVal) {
-    return buildAssertOp(TargetOpcode::G_ASSERT_ALIGN, Res, Op, AlignVal.value());
+    return buildAssertInstr(TargetOpcode::G_ASSERT_ALIGN, Res, Op,
+                            AlignVal.value());
   }
 
   /// Build and insert `Res = G_LOAD Addr, MMO`.
@@ -968,6 +980,21 @@ public:
   MachineInstrBuilder buildUndef(const DstOp &Res);
 
   /// Build and insert \p Res = G_MERGE_VALUES \p Op0, ...
+  ///
+  /// G_MERGE_VALUES combines the input elements contiguously into a larger
+  /// register. It should only be used when the destination register is not a
+  /// vector.
+  ///
+  /// \pre setBasicBlock or setMI must have been called.
+  /// \pre The entire register \p Res (and no more) must be covered by the input
+  ///      registers.
+  /// \pre The type of all \p Ops registers must be identical.
+  ///
+  /// \return a MachineInstrBuilder for the newly created instruction.
+  MachineInstrBuilder buildMergeValues(const DstOp &Res,
+                                       ArrayRef<Register> Ops);
+
+  /// Build and insert \p Res = G_MERGE_VALUES \p Op0, ...
   ///               or \p Res = G_BUILD_VECTOR \p Op0, ...
   ///               or \p Res = G_CONCAT_VECTORS \p Op0, ...
   ///
@@ -984,9 +1011,10 @@ public:
   /// \return a MachineInstrBuilder for the newly created instruction. The
   ///         opcode of the new instruction will depend on the types of both
   ///         the destination and the sources.
-  MachineInstrBuilder buildMerge(const DstOp &Res, ArrayRef<Register> Ops);
-  MachineInstrBuilder buildMerge(const DstOp &Res,
-                                 std::initializer_list<SrcOp> Ops);
+  MachineInstrBuilder buildMergeLikeInstr(const DstOp &Res,
+                                          ArrayRef<Register> Ops);
+  MachineInstrBuilder buildMergeLikeInstr(const DstOp &Res,
+                                          std::initializer_list<SrcOp> Ops);
 
   /// Build and insert \p Res0, ... = G_UNMERGE_VALUES \p Op
   ///

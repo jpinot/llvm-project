@@ -36,6 +36,7 @@
 #include <cassert>
 #include <cstddef>
 #include <iterator>
+#include <optional>
 #include <string>
 
 namespace llvm {
@@ -977,7 +978,7 @@ protected:
     SourceLocation RequiresKWLoc;
   };
 
-  //===--- C++ Coroutines TS bitfields classes ---===//
+  //===--- C++ Coroutines bitfields classes ---===//
 
   class CoawaitExprBitfields {
     friend class CoawaitExpr;
@@ -1081,7 +1082,7 @@ protected:
     LambdaExprBitfields LambdaExprBits;
     RequiresExprBitfields RequiresExprBits;
 
-    // C++ Coroutines TS expressions
+    // C++ Coroutines expressions
     CoawaitExprBitfields CoawaitBits;
 
     // Obj-C Expressions
@@ -2091,6 +2092,11 @@ public:
                            : nullptr;
   }
 
+  void setConditionVariableDeclStmt(DeclStmt *CondVar) {
+    assert(hasVarStorage());
+    getTrailingObjects<Stmt *>()[varOffset()] = CondVar;
+  }
+
   Stmt *getInit() {
     return hasInitStorage() ? getTrailingObjects<Stmt *>()[initOffset()]
                             : nullptr;
@@ -2148,8 +2154,8 @@ public:
 
   /// If this is an 'if constexpr', determine which substatement will be taken.
   /// Otherwise, or if the condition is value-dependent, returns std::nullopt.
-  Optional<const Stmt*> getNondiscardedCase(const ASTContext &Ctx) const;
-  Optional<Stmt *> getNondiscardedCase(const ASTContext &Ctx);
+  std::optional<const Stmt *> getNondiscardedCase(const ASTContext &Ctx) const;
+  std::optional<Stmt *> getNondiscardedCase(const ASTContext &Ctx);
 
   bool isObjCAvailabilityCheck() const;
 
@@ -2323,6 +2329,11 @@ public:
                            : nullptr;
   }
 
+  void setConditionVariableDeclStmt(DeclStmt *CondVar) {
+    assert(hasVarStorage());
+    getTrailingObjects<Stmt *>()[varOffset()] = CondVar;
+  }
+
   SwitchCase *getSwitchCaseList() { return FirstCase; }
   const SwitchCase *getSwitchCaseList() const { return FirstCase; }
   void setSwitchCaseList(SwitchCase *SC) { FirstCase = SC; }
@@ -2486,6 +2497,11 @@ public:
                            : nullptr;
   }
 
+  void setConditionVariableDeclStmt(DeclStmt *CondVar) {
+    assert(hasVarStorage());
+    getTrailingObjects<Stmt *>()[varOffset()] = CondVar;
+  }
+
   SourceLocation getWhileLoc() const { return WhileStmtBits.WhileLoc; }
   void setWhileLoc(SourceLocation L) { WhileStmtBits.WhileLoc = L; }
 
@@ -2575,6 +2591,8 @@ public:
 /// the init/cond/inc parts of the ForStmt will be null if they were not
 /// specified in the source.
 class ForStmt : public Stmt {
+  friend class ASTStmtReader;
+
   enum { INIT, CONDVAR, COND, INC, BODY, END_EXPR };
   Stmt* SubExprs[END_EXPR]; // SubExprs[INIT] is an expression or declstmt.
   SourceLocation LParenLoc, RParenLoc;
@@ -2602,8 +2620,16 @@ public:
 
   /// If this ForStmt has a condition variable, return the faux DeclStmt
   /// associated with the creation of that condition variable.
+  DeclStmt *getConditionVariableDeclStmt() {
+    return reinterpret_cast<DeclStmt*>(SubExprs[CONDVAR]);
+  }
+
   const DeclStmt *getConditionVariableDeclStmt() const {
     return reinterpret_cast<DeclStmt*>(SubExprs[CONDVAR]);
+  }
+
+  void setConditionVariableDeclStmt(DeclStmt *CondVar) {
+    SubExprs[CONDVAR] = CondVar;
   }
 
   Expr *getCond() { return reinterpret_cast<Expr*>(SubExprs[COND]); }

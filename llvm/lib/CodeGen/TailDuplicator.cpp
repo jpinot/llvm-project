@@ -397,7 +397,7 @@ void TailDuplicator::duplicateInstruction(
       if (!MO.isReg())
         continue;
       Register Reg = MO.getReg();
-      if (!Register::isVirtualRegister(Reg))
+      if (!Reg.isVirtual())
         continue;
       if (MO.isDef()) {
         const TargetRegisterClass *RC = MRI->getRegClass(Reg);
@@ -427,7 +427,13 @@ void TailDuplicator::duplicateInstruction(
           } else {
             // For mapped registers that do not have sub-registers, simply
             // restrict their class to match the original one.
-            ConstrRC = MRI->constrainRegClass(VI->second.Reg, OrigRC);
+
+            // We don't want debug instructions affecting the resulting code so
+            // if we're cloning a debug instruction then just use MappedRC
+            // rather than constraining the register class further.
+            ConstrRC = NewMI.isDebugInstr()
+                           ? MappedRC
+                           : MRI->constrainRegClass(VI->second.Reg, OrigRC);
           }
 
           if (ConstrRC) {
@@ -436,16 +442,13 @@ void TailDuplicator::duplicateInstruction(
             MO.setReg(VI->second.Reg);
             // We have Reg -> VI.Reg:VI.SubReg, so if Reg is used with a
             // sub-register, we need to compose the sub-register indices.
-            MO.setSubReg(TRI->composeSubRegIndices(MO.getSubReg(),
-                                                   VI->second.SubReg));
+            MO.setSubReg(
+                TRI->composeSubRegIndices(VI->second.SubReg, MO.getSubReg()));
           } else {
             // The direct replacement is not possible, due to failing register
             // class constraints. An explicit COPY is necessary. Create one
-            // that can be reused
-            auto *NewRC = MI->getRegClassConstraint(i, TII, TRI);
-            if (NewRC == nullptr)
-              NewRC = OrigRC;
-            Register NewReg = MRI->createVirtualRegister(NewRC);
+            // that can be reused.
+            Register NewReg = MRI->createVirtualRegister(OrigRC);
             BuildMI(*PredBB, NewMI, NewMI.getDebugLoc(),
                     TII->get(TargetOpcode::COPY), NewReg)
                 .addReg(VI->second.Reg, 0, VI->second.SubReg);

@@ -41,9 +41,8 @@ LLDB_PLUGIN_DEFINE(PlatformLinux)
 
 static uint32_t g_initialize_count = 0;
 
-PlatformSP PlatformLinux::CreateInstance(bool force, const ArchSpec *arch,
-                                         const Debugger *debugger,
-                                         const ScriptedMetadata *metadata) {
+
+PlatformSP PlatformLinux::CreateInstance(bool force, const ArchSpec *arch) {
   Log *log = GetLog(LLDBLog::Platform);
   LLDB_LOG(log, "force = {0}, arch=({1}, {2})", force,
            arch ? arch->GetArchitectureName() : "<null>",
@@ -124,7 +123,7 @@ PlatformLinux::PlatformLinux(bool is_host)
         {llvm::Triple::x86_64, llvm::Triple::x86, llvm::Triple::arm,
          llvm::Triple::aarch64, llvm::Triple::mips64, llvm::Triple::mips64,
          llvm::Triple::hexagon, llvm::Triple::mips, llvm::Triple::mips64el,
-         llvm::Triple::mipsel, llvm::Triple::systemz},
+         llvm::Triple::mipsel, llvm::Triple::msp430, llvm::Triple::systemz},
         llvm::Triple::Linux);
   }
 }

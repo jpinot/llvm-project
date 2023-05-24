@@ -1,9 +1,8 @@
 //===----- CGOmpSsRuntime.cpp - Interface to OmpSs Runtimes -------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -1189,13 +1188,9 @@ void CGOmpSsRuntime::EmitDSAShared(
       CaptureMapStack.back().try_emplace(VD, LV.getAddress(CGF));
       DSAValue = LV.getPointer(CGF);
       DSABundleList.push_back(DSAValue);
-      DSABundleList.push_back(llvm::UndefValue::get(CGF.ConvertType(DRE->getType())));
-      TaskInfo.emplace_back(getBundleStr(OSSB_shared), DSABundleList);
     } else {
       DSAValue = CGF.EmitDeclRefLValue(DRE).getPointer(CGF);
       DSABundleList.push_back(DSAValue);
-      DSABundleList.push_back(llvm::UndefValue::get(CGF.ConvertType(DRE->getType())));
-      TaskInfo.emplace_back(getBundleStr(OSSB_shared), DSABundleList);
     }
     QualType Q = VD->getType();
     // int (**p)[sizex][sizey] -> we need to capture sizex sizey only
@@ -1204,8 +1199,15 @@ void CGOmpSsRuntime::EmitDSAShared(
     while (Q->isPointerType()) {
       Q = Q->getPointeeType();
     }
-    if (Q->isVariableArrayType())
+    if (Q->isVariableArrayType()) {
       GatherVLADims(CGF, DSAValue, Q, DimsWithValue, CapturedList, IsPtr);
+      QualType BaseElementTy = CGF.getContext().getBaseElementType(DRE->getType());
+      DSABundleList.push_back(llvm::UndefValue::get(CGF.ConvertType(BaseElementTy)));
+    } else {
+      DSABundleList.push_back(llvm::UndefValue::get(CGF.ConvertType(DRE->getType())));
+    }
+
+    TaskInfo.emplace_back(getBundleStr(OSSB_shared), DSABundleList);
 
     if (!DimsWithValue.empty())
       TaskInfo.emplace_back(getBundleStr(OSSB_vladims), DimsWithValue);
@@ -1238,13 +1240,9 @@ void CGOmpSsRuntime::EmitDSAPrivate(
     CaptureMapStack.back().try_emplace(VD, LV.getAddress(CGF));
     DSAValue = LV.getPointer(CGF);
     DSABundleList.push_back(DSAValue);
-    DSABundleList.push_back(llvm::UndefValue::get(CGF.ConvertType(DRE->getType())));
-    TaskInfo.emplace_back(getBundleStr(OSSB_private), DSABundleList);
   } else {
     DSAValue = CGF.EmitDeclRefLValue(DRE).getPointer(CGF);
     DSABundleList.push_back(DSAValue);
-    DSABundleList.push_back(llvm::UndefValue::get(CGF.ConvertType(DRE->getType())));
-    TaskInfo.emplace_back(getBundleStr(OSSB_private), DSABundleList);
   }
   QualType Q = VD->getType();
   // int (**p)[sizex][sizey] -> we need to capture sizex sizey only
@@ -1253,8 +1251,15 @@ void CGOmpSsRuntime::EmitDSAPrivate(
   while (Q->isPointerType()) {
     Q = Q->getPointeeType();
   }
-  if (Q->isVariableArrayType())
+  if (Q->isVariableArrayType()) {
     GatherVLADims(CGF, DSAValue, Q, DimsWithValue, CapturedList, IsPtr);
+    QualType BaseElementTy = CGF.getContext().getBaseElementType(DRE->getType());
+    DSABundleList.push_back(llvm::UndefValue::get(CGF.ConvertType(BaseElementTy)));
+  } else {
+    DSABundleList.push_back(llvm::UndefValue::get(CGF.ConvertType(DRE->getType())));
+  }
+
+  TaskInfo.emplace_back(getBundleStr(OSSB_private), DSABundleList);
 
   if (!DimsWithValue.empty())
     TaskInfo.emplace_back(getBundleStr(OSSB_vladims), DimsWithValue);
@@ -1292,13 +1297,9 @@ void CGOmpSsRuntime::EmitDSAFirstprivate(
     CaptureMapStack.back().try_emplace(VD, LV.getAddress(CGF));
     DSAValue = LV.getPointer(CGF);
     DSABundleList.push_back(DSAValue);
-    DSABundleList.push_back(llvm::UndefValue::get(CGF.ConvertType(DRE->getType())));
-    TaskInfo.emplace_back(getBundleStr(OSSB_firstprivate), DSABundleList);
   } else {
     DSAValue = CGF.EmitDeclRefLValue(DRE).getPointer(CGF);
     DSABundleList.push_back(DSAValue);
-    DSABundleList.push_back(llvm::UndefValue::get(CGF.ConvertType(DRE->getType())));
-    TaskInfo.emplace_back(getBundleStr(OSSB_firstprivate), DSABundleList);
   }
   QualType Q = VD->getType();
   // int (**p)[sizex][sizey] -> we need to capture sizex sizey only
@@ -1307,8 +1308,15 @@ void CGOmpSsRuntime::EmitDSAFirstprivate(
   while (Q->isPointerType()) {
     Q = Q->getPointeeType();
   }
-  if (Q->isVariableArrayType())
+  if (Q->isVariableArrayType()) {
     GatherVLADims(CGF, DSAValue, Q, DimsWithValue, CapturedList, IsPtr);
+    QualType BaseElementTy = CGF.getContext().getBaseElementType(DRE->getType());
+    DSABundleList.push_back(llvm::UndefValue::get(CGF.ConvertType(BaseElementTy)));
+  } else {
+    DSABundleList.push_back(llvm::UndefValue::get(CGF.ConvertType(DRE->getType())));
+  }
+
+  TaskInfo.emplace_back(getBundleStr(OSSB_firstprivate), DSABundleList);
 
   if (!DimsWithValue.empty())
     TaskInfo.emplace_back(getBundleStr(OSSB_vladims), DimsWithValue);
@@ -1340,7 +1348,7 @@ llvm::Function *CGOmpSsRuntime::createCallWrapperFunc(
     const llvm::DenseMap<const VarDecl *, Address> &CaptureInvolvedMap,
     ArrayRef<QualType> RetTypes,
     bool HasThis, bool HasSwitch, std::string FuncName, std::string RetName,
-    llvm::function_ref<void(CodeGenFunction &, const Expr *E, Optional<llvm::Value *>)> Body) {
+    llvm::function_ref<void(CodeGenFunction &, const Expr *E, std::optional<llvm::Value *>)> Body) {
 
   InDirectiveEmission = false;
 
@@ -1485,7 +1493,7 @@ llvm::Function *CGOmpSsRuntime::createCallWrapperFunc(
     (void)InitScope.Privatize();
 
     // Function body generation
-    Optional<llvm::Value *> SwitchValue;
+    std::optional<llvm::Value *> SwitchValue;
     if (HasSwitch)
       SwitchValue = &*(FuncVar->arg_end() - 1);
     Body(NewCGF, E, SwitchValue);
@@ -1540,7 +1548,7 @@ void CGOmpSsRuntime::EmitMultiDependencyList(
   // For each iterator we have {init, remap, ub, step}
   SmallVector<QualType, 3 + 1> MultiDepRetTypes(
     MDExpr->getDepInits().size()*(3 + 1), CGF.getContext().IntTy);
-  auto Body = [](CodeGenFunction &NewCGF, const Expr *E, Optional<llvm::Value *> Switch) {
+  auto Body = [](CodeGenFunction &NewCGF, const Expr *E, std::optional<llvm::Value *> Switch) {
     auto *MDExpr = cast<OSSMultiDepExpr>(E);
     uint64_t SwitchTyBits =
       NewCGF.CGM.getDataLayout().getTypeSizeInBits(Switch.value()->getType());
@@ -1655,7 +1663,7 @@ void CGOmpSsRuntime::EmitMultiDependencyList(
 void CGOmpSsRuntime::BuildWrapperCallBundleList(
     std::string FuncName,
     CodeGenFunction &CGF, const Expr *E, QualType Q,
-    llvm::function_ref<void(CodeGenFunction &, const Expr *E, Optional<llvm::Value *>)> Body,
+    llvm::function_ref<void(CodeGenFunction &, const Expr *E, std::optional<llvm::Value *>)> Body,
     SmallVectorImpl<llvm::Value *> &List) {
 
   OSSExprInfoGathering CallVisitor(CGF);
@@ -1700,7 +1708,7 @@ void CGOmpSsRuntime::BuildWrapperCallBundleList(
 void CGOmpSsRuntime::EmitWrapperCallBundle(
     std::string Name, std::string FuncName,
     CodeGenFunction &CGF, const Expr *E, QualType Q,
-    llvm::function_ref<void(CodeGenFunction &, const Expr *E, Optional<llvm::Value *>)> Body,
+    llvm::function_ref<void(CodeGenFunction &, const Expr *E, std::optional<llvm::Value *>)> Body,
     SmallVectorImpl<llvm::OperandBundleDef> &TaskInfo) {
 
   SmallVector<llvm::Value *, 4> List;
@@ -1713,7 +1721,7 @@ void CGOmpSsRuntime::EmitScalarWrapperCallBundle(
     CodeGenFunction &CGF, const Expr *E,
     SmallVectorImpl<llvm::OperandBundleDef> &TaskInfo) {
 
-  auto Body = [](CodeGenFunction &NewCGF, const Expr *E, Optional<llvm::Value *>) {
+  auto Body = [](CodeGenFunction &NewCGF, const Expr *E, std::optional<llvm::Value *>) {
     llvm::Value *V = NewCGF.EmitScalarExpr(E);
 
     Address RetAddr = NewCGF.ReturnValue;
@@ -1728,7 +1736,7 @@ void CGOmpSsRuntime::EmitBoolWrapperCallBundle(
     CodeGenFunction &CGF, const Expr *E,
     SmallVectorImpl<llvm::OperandBundleDef> &TaskInfo) {
 
-  auto Body = [](CodeGenFunction &NewCGF, const Expr *E, Optional<llvm::Value *>) {
+  auto Body = [](CodeGenFunction &NewCGF, const Expr *E, std::optional<llvm::Value *>) {
     llvm::Value *V = NewCGF.EvaluateExprAsBool(E);
 
     Address RetAddr = NewCGF.ReturnValue;
@@ -1743,7 +1751,7 @@ void CGOmpSsRuntime::EmitIgnoredWrapperCallBundle(
     CodeGenFunction &CGF, const Expr *E,
     SmallVectorImpl<llvm::OperandBundleDef> &TaskInfo) {
 
-  auto Body = [](CodeGenFunction &NewCGF, const Expr *E, Optional<llvm::Value *>) {
+  auto Body = [](CodeGenFunction &NewCGF, const Expr *E, std::optional<llvm::Value *>) {
     if (const auto *DRE = dyn_cast<DeclRefExpr>(E)) {
       if (DRE->isNonOdrUse() == NOUR_Unevaluated)
         return;
@@ -1770,7 +1778,7 @@ void CGOmpSsRuntime::EmitDependencyList(
 
   CodeGenFunction NewCGF(CGF.CGM);
 
-  auto Body = [&Dep](CodeGenFunction &NewCGF, const Expr *E, Optional<llvm::Value *>) {
+  auto Body = [&Dep](CodeGenFunction &NewCGF, const Expr *E, std::optional<llvm::Value *>) {
     SmallVector<llvm::Value *, 4> List;
     // C long -> LLVM long
     llvm::Type *OSSArgTy = NewCGF.ConvertType(NewCGF.getContext().LongTy);
@@ -2555,7 +2563,7 @@ static VarDecl *createImplicitVarDecl(
 
 static DeclRefExpr *emitTaskCallArg(
     CodeGenFunction &CGF, StringRef Name, QualType Q, SourceLocation Loc,
-    llvm::Optional<const Expr *> InitE = std::nullopt) {
+    std::optional<const Expr *> InitE = std::nullopt) {
 
   ASTContext &Ctx = CGF.getContext();
 
@@ -2731,7 +2739,7 @@ void CGOmpSsRuntime::EmitDirectiveData(
     SmallVector<llvm::Value *> LTypeList;
     for (unsigned i = 0; i < LoopData.NumCollapses; ++i) {
       IndVarList.push_back(CGF.EmitLValue(LoopData.IndVar[i]).getPointer(CGF));
-      auto Body = [](CodeGenFunction &NewCGF, const Expr *E, Optional<llvm::Value *>) {
+      auto Body = [](CodeGenFunction &NewCGF, const Expr *E, std::optional<llvm::Value *>) {
         llvm::Value *V = NewCGF.EmitScalarExpr(E);
 
         Address RetAddr = NewCGF.ReturnValue;
@@ -3113,8 +3121,6 @@ RValue CGOmpSsRuntime::emitTaskFunction(CodeGenFunction &CGF,
       EmitDSAFirstprivate(CGF, FpDataTy, TaskInfo, CapturedList);
     }
 
-    OSSOutlineGlobalVarVisitor OutlineGlobalVarVisitor(CGF);
-
     if (const Expr *E = Attr->getIfExpr()) {
       TaskInfo.emplace_back(getBundleStr(OSSB_if), CGF.EvaluateExprAsBool(E));
     }
@@ -3145,12 +3151,11 @@ RValue CGOmpSsRuntime::emitTaskFunction(CodeGenFunction &CGF,
           llvm::ConstantInt::getSigned(
             CGF.ConvertType(CGF.getContext().IntTy),
             convertDeviceTypeToInt(Attr->getDevice())));
-
-      TaskInfo.emplace_back(
-        getBundleStr(OSSB_device_dev_func),
-        llvm::ConstantDataArray::getString(
-          CGM.getLLVMContext(), CGF.CGM.getMangledName(GlobalDecl(FD))));
     }
+    TaskInfo.emplace_back(
+      getBundleStr(OSSB_device_dev_func),
+      llvm::ConstantDataArray::getString(
+        CGM.getLLVMContext(), CGF.CGM.getMangledName(GlobalDecl(FD))));
     if (Attr->ndranges_size() > 0) {
       HasNdrange = true;
       SmallVector<llvm::Value *, 4> Result;
@@ -3165,168 +3170,6 @@ RValue CGOmpSsRuntime::emitTaskFunction(CodeGenFunction &CGF,
       EmitIgnoredWrapperCallBundle(
         getBundleStr(OSSB_onready), "compute_onready", CGF, E, TaskInfo);
     }
-    // in()
-    for (const Expr *E : Attr->ins()) {
-      OutlineGlobalVarVisitor.Visit(E);
-
-      OSSDepDataTy Dep;
-      Dep.OSSSyntax = true;
-      Dep.E = E;
-      EmitDependency(getBundleStr(OSSB_in), CGF, FD, Dep, TaskInfo);
-    }
-    for (const Expr *E : Attr->outs()) {
-      OutlineGlobalVarVisitor.Visit(E);
-
-      OSSDepDataTy Dep;
-      Dep.OSSSyntax = true;
-      Dep.E = E;
-      EmitDependency(getBundleStr(OSSB_out), CGF, FD, Dep, TaskInfo);
-    }
-    for (const Expr *E : Attr->inouts()) {
-      OutlineGlobalVarVisitor.Visit(E);
-
-      OSSDepDataTy Dep;
-      Dep.OSSSyntax = true;
-      Dep.E = E;
-      EmitDependency(getBundleStr(OSSB_inout), CGF, FD, Dep, TaskInfo);
-    }
-    for (const Expr *E : Attr->concurrents()) {
-      OutlineGlobalVarVisitor.Visit(E);
-
-      OSSDepDataTy Dep;
-      Dep.OSSSyntax = true;
-      Dep.E = E;
-      EmitDependency(getBundleStr(OSSB_concurrent), CGF, FD, Dep, TaskInfo);
-    }
-    for (const Expr *E : Attr->commutatives()) {
-      OutlineGlobalVarVisitor.Visit(E);
-
-      OSSDepDataTy Dep;
-      Dep.OSSSyntax = true;
-      Dep.E = E;
-      EmitDependency(getBundleStr(OSSB_commutative), CGF, FD, Dep, TaskInfo);
-    }
-    for (const Expr *E : Attr->weakIns()) {
-      OutlineGlobalVarVisitor.Visit(E);
-
-      OSSDepDataTy Dep;
-      Dep.OSSSyntax = true;
-      Dep.E = E;
-      EmitDependency(getBundleStr(OSSB_weakin), CGF, FD, Dep, TaskInfo);
-    }
-    for (const Expr *E : Attr->weakOuts()) {
-      OutlineGlobalVarVisitor.Visit(E);
-
-      OSSDepDataTy Dep;
-      Dep.OSSSyntax = true;
-      Dep.E = E;
-      EmitDependency(getBundleStr(OSSB_weakout), CGF, FD, Dep, TaskInfo);
-    }
-    for (const Expr *E : Attr->weakInouts()) {
-      OutlineGlobalVarVisitor.Visit(E);
-
-      OSSDepDataTy Dep;
-      Dep.OSSSyntax = true;
-      Dep.E = E;
-      EmitDependency(getBundleStr(OSSB_weakinout), CGF, FD, Dep, TaskInfo);
-    }
-    for (const Expr *E : Attr->weakConcurrents()) {
-      OutlineGlobalVarVisitor.Visit(E);
-
-      OSSDepDataTy Dep;
-      Dep.OSSSyntax = true;
-      Dep.E = E;
-      EmitDependency(getBundleStr(OSSB_weakconcurrent), CGF, FD, Dep, TaskInfo);
-    }
-    for (const Expr *E : Attr->weakCommutatives()) {
-      OutlineGlobalVarVisitor.Visit(E);
-
-      OSSDepDataTy Dep;
-      Dep.OSSSyntax = true;
-      Dep.E = E;
-      EmitDependency(getBundleStr(OSSB_weakcommutative), CGF, FD, Dep, TaskInfo);
-    }
-    // depend(in :)
-    for (const Expr *E : Attr->depIns()) {
-      OutlineGlobalVarVisitor.Visit(E);
-
-      OSSDepDataTy Dep;
-      Dep.OSSSyntax = false;
-      Dep.E = E;
-      EmitDependency(getBundleStr(OSSB_in), CGF, FD, Dep, TaskInfo);
-    }
-    for (const Expr *E : Attr->depOuts()) {
-      OutlineGlobalVarVisitor.Visit(E);
-
-      OSSDepDataTy Dep;
-      Dep.OSSSyntax = false;
-      Dep.E = E;
-      EmitDependency(getBundleStr(OSSB_out), CGF, FD, Dep, TaskInfo);
-    }
-    for (const Expr *E : Attr->depInouts()) {
-      OutlineGlobalVarVisitor.Visit(E);
-
-      OSSDepDataTy Dep;
-      Dep.OSSSyntax = false;
-      Dep.E = E;
-      EmitDependency(getBundleStr(OSSB_inout), CGF, FD, Dep, TaskInfo);
-    }
-    for (const Expr *E : Attr->depConcurrents()) {
-      OutlineGlobalVarVisitor.Visit(E);
-
-      OSSDepDataTy Dep;
-      Dep.OSSSyntax = false;
-      Dep.E = E;
-      EmitDependency(getBundleStr(OSSB_concurrent), CGF, FD, Dep, TaskInfo);
-    }
-    for (const Expr *E : Attr->depCommutatives()) {
-      OutlineGlobalVarVisitor.Visit(E);
-
-      OSSDepDataTy Dep;
-      Dep.OSSSyntax = false;
-      Dep.E = E;
-      EmitDependency(getBundleStr(OSSB_commutative), CGF, FD, Dep, TaskInfo);
-    }
-    for (const Expr *E : Attr->depWeakIns()) {
-      OutlineGlobalVarVisitor.Visit(E);
-
-      OSSDepDataTy Dep;
-      Dep.OSSSyntax = false;
-      Dep.E = E;
-      EmitDependency(getBundleStr(OSSB_weakin), CGF, FD, Dep, TaskInfo);
-    }
-    for (const Expr *E : Attr->depWeakOuts()) {
-      OutlineGlobalVarVisitor.Visit(E);
-
-      OSSDepDataTy Dep;
-      Dep.OSSSyntax = false;
-      Dep.E = E;
-      EmitDependency(getBundleStr(OSSB_weakout), CGF, FD, Dep, TaskInfo);
-    }
-    for (const Expr *E : Attr->depWeakInouts()) {
-      OutlineGlobalVarVisitor.Visit(E);
-
-      OSSDepDataTy Dep;
-      Dep.OSSSyntax = false;
-      Dep.E = E;
-      EmitDependency(getBundleStr(OSSB_weakinout), CGF, FD, Dep, TaskInfo);
-    }
-    for (const Expr *E : Attr->depWeakConcurrents()) {
-      OutlineGlobalVarVisitor.Visit(E);
-
-      OSSDepDataTy Dep;
-      Dep.OSSSyntax = false;
-      Dep.E = E;
-      EmitDependency(getBundleStr(OSSB_weakconcurrent), CGF, FD, Dep, TaskInfo);
-    }
-    for (const Expr *E : Attr->depWeakCommutatives()) {
-      OutlineGlobalVarVisitor.Visit(E);
-
-      OSSDepDataTy Dep;
-      Dep.OSSSyntax = false;
-      Dep.E = E;
-      EmitDependency(getBundleStr(OSSB_weakcommutative), CGF, FD, Dep, TaskInfo);
-    }
 
     assert(Attr->reductions_size() == Attr->reductionLHSs_size() &&
            Attr->reductions_size() == Attr->reductionRHSs_size() &&
@@ -3335,6 +3178,177 @@ RValue CGOmpSsRuntime::emitTaskFunction(CodeGenFunction &CGF,
     assert(Attr->reductionListSizes_size() == Attr->reductionClauseType_size() &&
            Attr->reductionListSizes_size() == Attr->nameSpecifierLocs_size() &&
            Attr->reductionListSizes_size() == Attr->declNameInfos_size());
+
+    // Add global variables as shared
+    {
+      OSSOutlineGlobalVarVisitor OutlineGlobalVarVisitor(CGF);
+      for (const Expr *E : Attr->ins()) { OutlineGlobalVarVisitor.Visit(E); }
+      for (const Expr *E : Attr->outs()) { OutlineGlobalVarVisitor.Visit(E); }
+      for (const Expr *E : Attr->inouts()) { OutlineGlobalVarVisitor.Visit(E); }
+      for (const Expr *E : Attr->concurrents()) { OutlineGlobalVarVisitor.Visit(E); }
+      for (const Expr *E : Attr->commutatives()) { OutlineGlobalVarVisitor.Visit(E); }
+      for (const Expr *E : Attr->weakIns()) { OutlineGlobalVarVisitor.Visit(E); }
+      for (const Expr *E : Attr->weakOuts()) { OutlineGlobalVarVisitor.Visit(E); }
+      for (const Expr *E : Attr->weakInouts()) { OutlineGlobalVarVisitor.Visit(E); }
+      for (const Expr *E : Attr->weakConcurrents()) { OutlineGlobalVarVisitor.Visit(E); }
+      for (const Expr *E : Attr->weakCommutatives()) { OutlineGlobalVarVisitor.Visit(E); }
+      for (const Expr *E : Attr->depIns()) { OutlineGlobalVarVisitor.Visit(E); }
+      for (const Expr *E : Attr->depOuts()) { OutlineGlobalVarVisitor.Visit(E); }
+      for (const Expr *E : Attr->depInouts()) { OutlineGlobalVarVisitor.Visit(E); }
+      for (const Expr *E : Attr->depConcurrents()) { OutlineGlobalVarVisitor.Visit(E); }
+      for (const Expr *E : Attr->depCommutatives()) { OutlineGlobalVarVisitor.Visit(E); }
+      for (const Expr *E : Attr->depWeakIns()) { OutlineGlobalVarVisitor.Visit(E); }
+      for (const Expr *E : Attr->depWeakOuts()) { OutlineGlobalVarVisitor.Visit(E); }
+      for (const Expr *E : Attr->depWeakInouts()) { OutlineGlobalVarVisitor.Visit(E); }
+      for (const Expr *E : Attr->depWeakConcurrents()) { OutlineGlobalVarVisitor.Visit(E); }
+      for (const Expr *E : Attr->depWeakCommutatives()) { OutlineGlobalVarVisitor.Visit(E); }
+      for (const Expr *E : Attr->depWeakCommutatives()) { OutlineGlobalVarVisitor.Visit(E); }
+      for (const Expr *E : Attr->depWeakCommutatives()) { OutlineGlobalVarVisitor.Visit(E); }
+      for (const Expr *E : Attr->depWeakCommutatives()) { OutlineGlobalVarVisitor.Visit(E); }
+      for (const Expr *E : Attr->depWeakCommutatives()) { OutlineGlobalVarVisitor.Visit(E); }
+      for (const Expr *E : Attr->depWeakCommutatives()) { OutlineGlobalVarVisitor.Visit(E); }
+      for (const Expr *E : Attr->depWeakCommutatives()) { OutlineGlobalVarVisitor.Visit(E); }
+      for (const Expr *E : Attr->depWeakCommutatives()) { OutlineGlobalVarVisitor.Visit(E); }
+      for (const Expr *E : Attr->depWeakCommutatives()) { OutlineGlobalVarVisitor.Visit(E); }
+      for (const Expr *E : Attr->depWeakCommutatives()) { OutlineGlobalVarVisitor.Visit(E); }
+      // Note: reductions over globals are not allowed in task outline
+      for (const Expr *E : OutlineGlobalVarVisitor.getSharedGlobals()) {
+        const DeclRefExpr *DRE = cast<DeclRefExpr>(E);
+        const VarDecl *VD = cast<VarDecl>(DRE->getDecl());
+        SmallVector<llvm::Value *> DSABundleList;
+        LValue LV = CGF.EmitLValue(DRE);
+        llvm::Value *DSAValue = LV.getPointer(CGF);
+        if (VD->getType()->isReferenceType() && !getTaskCaptureAddr(VD).isValid())
+          CaptureMapStack.back().try_emplace(VD, LV.getAddress(CGF));
+        DSABundleList.push_back(DSAValue);
+        DSABundleList.push_back(llvm::UndefValue::get(CGF.ConvertType(DRE->getType())));
+        TaskInfo.emplace_back(getBundleStr(OSSB_shared), DSABundleList);
+      }
+    }
+
+    // in()
+    for (const Expr *E : Attr->ins()) {
+      OSSDepDataTy Dep;
+      Dep.OSSSyntax = true;
+      Dep.E = E;
+      EmitDependency(getBundleStr(OSSB_in), CGF, FD, Dep, TaskInfo);
+    }
+    for (const Expr *E : Attr->outs()) {
+      OSSDepDataTy Dep;
+      Dep.OSSSyntax = true;
+      Dep.E = E;
+      EmitDependency(getBundleStr(OSSB_out), CGF, FD, Dep, TaskInfo);
+    }
+    for (const Expr *E : Attr->inouts()) {
+      OSSDepDataTy Dep;
+      Dep.OSSSyntax = true;
+      Dep.E = E;
+      EmitDependency(getBundleStr(OSSB_inout), CGF, FD, Dep, TaskInfo);
+    }
+    for (const Expr *E : Attr->concurrents()) {
+      OSSDepDataTy Dep;
+      Dep.OSSSyntax = true;
+      Dep.E = E;
+      EmitDependency(getBundleStr(OSSB_concurrent), CGF, FD, Dep, TaskInfo);
+    }
+    for (const Expr *E : Attr->commutatives()) {
+      OSSDepDataTy Dep;
+      Dep.OSSSyntax = true;
+      Dep.E = E;
+      EmitDependency(getBundleStr(OSSB_commutative), CGF, FD, Dep, TaskInfo);
+    }
+    for (const Expr *E : Attr->weakIns()) {
+      OSSDepDataTy Dep;
+      Dep.OSSSyntax = true;
+      Dep.E = E;
+      EmitDependency(getBundleStr(OSSB_weakin), CGF, FD, Dep, TaskInfo);
+    }
+    for (const Expr *E : Attr->weakOuts()) {
+      OSSDepDataTy Dep;
+      Dep.OSSSyntax = true;
+      Dep.E = E;
+      EmitDependency(getBundleStr(OSSB_weakout), CGF, FD, Dep, TaskInfo);
+    }
+    for (const Expr *E : Attr->weakInouts()) {
+      OSSDepDataTy Dep;
+      Dep.OSSSyntax = true;
+      Dep.E = E;
+      EmitDependency(getBundleStr(OSSB_weakinout), CGF, FD, Dep, TaskInfo);
+    }
+    for (const Expr *E : Attr->weakConcurrents()) {
+      OSSDepDataTy Dep;
+      Dep.OSSSyntax = true;
+      Dep.E = E;
+      EmitDependency(getBundleStr(OSSB_weakconcurrent), CGF, FD, Dep, TaskInfo);
+    }
+    for (const Expr *E : Attr->weakCommutatives()) {
+      OSSDepDataTy Dep;
+      Dep.OSSSyntax = true;
+      Dep.E = E;
+      EmitDependency(getBundleStr(OSSB_weakcommutative), CGF, FD, Dep, TaskInfo);
+    }
+    // depend(in :)
+    for (const Expr *E : Attr->depIns()) {
+      OSSDepDataTy Dep;
+      Dep.OSSSyntax = false;
+      Dep.E = E;
+      EmitDependency(getBundleStr(OSSB_in), CGF, FD, Dep, TaskInfo);
+    }
+    for (const Expr *E : Attr->depOuts()) {
+      OSSDepDataTy Dep;
+      Dep.OSSSyntax = false;
+      Dep.E = E;
+      EmitDependency(getBundleStr(OSSB_out), CGF, FD, Dep, TaskInfo);
+    }
+    for (const Expr *E : Attr->depInouts()) {
+      OSSDepDataTy Dep;
+      Dep.OSSSyntax = false;
+      Dep.E = E;
+      EmitDependency(getBundleStr(OSSB_inout), CGF, FD, Dep, TaskInfo);
+    }
+    for (const Expr *E : Attr->depConcurrents()) {
+      OSSDepDataTy Dep;
+      Dep.OSSSyntax = false;
+      Dep.E = E;
+      EmitDependency(getBundleStr(OSSB_concurrent), CGF, FD, Dep, TaskInfo);
+    }
+    for (const Expr *E : Attr->depCommutatives()) {
+      OSSDepDataTy Dep;
+      Dep.OSSSyntax = false;
+      Dep.E = E;
+      EmitDependency(getBundleStr(OSSB_commutative), CGF, FD, Dep, TaskInfo);
+    }
+    for (const Expr *E : Attr->depWeakIns()) {
+      OSSDepDataTy Dep;
+      Dep.OSSSyntax = false;
+      Dep.E = E;
+      EmitDependency(getBundleStr(OSSB_weakin), CGF, FD, Dep, TaskInfo);
+    }
+    for (const Expr *E : Attr->depWeakOuts()) {
+      OSSDepDataTy Dep;
+      Dep.OSSSyntax = false;
+      Dep.E = E;
+      EmitDependency(getBundleStr(OSSB_weakout), CGF, FD, Dep, TaskInfo);
+    }
+    for (const Expr *E : Attr->depWeakInouts()) {
+      OSSDepDataTy Dep;
+      Dep.OSSSyntax = false;
+      Dep.E = E;
+      EmitDependency(getBundleStr(OSSB_weakinout), CGF, FD, Dep, TaskInfo);
+    }
+    for (const Expr *E : Attr->depWeakConcurrents()) {
+      OSSDepDataTy Dep;
+      Dep.OSSSyntax = false;
+      Dep.E = E;
+      EmitDependency(getBundleStr(OSSB_weakconcurrent), CGF, FD, Dep, TaskInfo);
+    }
+    for (const Expr *E : Attr->depWeakCommutatives()) {
+      OSSDepDataTy Dep;
+      Dep.OSSSyntax = false;
+      Dep.E = E;
+      EmitDependency(getBundleStr(OSSB_weakcommutative), CGF, FD, Dep, TaskInfo);
+    }
+
     auto reductions_it = Attr->reductions_begin();
     auto reductionLHSs_it = Attr->reductionLHSs_begin();
     auto reductionRHSs_it = Attr->reductionRHSs_begin();
@@ -3348,8 +3362,6 @@ RValue CGOmpSsRuntime::emitTaskFunction(CodeGenFunction &CGF,
         const Expr *RHS = *(reductionRHSs_it++);
         const Expr *ReductionOp = *(reductionOps_it++);
 
-        OutlineGlobalVarVisitor.Visit(Ref);
-
         BinaryOperatorKind ReductionKind = (BinaryOperatorKind)*(reductionKinds_it++);
         OSSReductionDataTy Red{Ref, LHS, RHS, ReductionOp, ReductionKind};
         EmitReduction(getBundleStr(CKind == OSSC_weakreduction ? OSSB_weakreduction : OSSB_reduction),
@@ -3359,14 +3371,6 @@ RValue CGOmpSsRuntime::emitTaskFunction(CodeGenFunction &CGF,
       }
     }
 
-    for (const Expr *E : OutlineGlobalVarVisitor.getSharedGlobals()) {
-      SmallVector<llvm::Value *> DSABundleList;
-      llvm::Value *DSAValue = CGF.EmitLValue(E).getPointer(CGF);
-      DSABundleList.push_back(DSAValue);
-      DSABundleList.push_back(llvm::UndefValue::get(CGF.ConvertType(E->getType())));
-      TaskInfo.emplace_back(getBundleStr(OSSB_shared), DSABundleList);
-    }
-
     if (!CapturedList.empty())
       TaskInfo.emplace_back(getBundleStr(OSSB_captured), CapturedList);
 
@@ -3374,7 +3378,8 @@ RValue CGOmpSsRuntime::emitTaskFunction(CodeGenFunction &CGF,
     // Get location information.
     llvm::DebugLoc DbgLoc = DI->SourceLocToDebugLoc(Attr->getLocation());
 
-    StringRef Name = FD->getName();
+    StringRef Name = CGM.getModule().getSourceFileName();
+    Name = llvm::sys::path::filename(Name);
     TaskInfo.emplace_back(
       getBundleStr(OSSB_decl_source),
       llvm::ConstantDataArray::getString(

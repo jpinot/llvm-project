@@ -10,17 +10,18 @@
 //
 // Thread-related code.
 //===----------------------------------------------------------------------===//
+#include "asan_thread.h"
+
 #include "asan_allocator.h"
 #include "asan_interceptors.h"
+#include "asan_mapping.h"
 #include "asan_poisoning.h"
 #include "asan_stack.h"
-#include "asan_thread.h"
-#include "asan_mapping.h"
+#include "lsan/lsan_common.h"
 #include "sanitizer_common/sanitizer_common.h"
 #include "sanitizer_common/sanitizer_placement_new.h"
 #include "sanitizer_common/sanitizer_stackdepot.h"
 #include "sanitizer_common/sanitizer_tls_get_addr.h"
-#include "lsan/lsan_common.h"
 
 namespace __asan {
 
@@ -306,6 +307,7 @@ void AsanThread::SetThreadStackAndTls(const InitOptions *options) {
   GetThreadStackAndTls(tid() == kMainTid, &stack_bottom_, &stack_size,
                        &tls_begin_, &tls_size);
   stack_top_ = RoundDownTo(stack_bottom_ + stack_size, ASAN_SHADOW_GRANULARITY);
+  stack_bottom_ = RoundDownTo(stack_bottom_, ASAN_SHADOW_GRANULARITY);
   tls_end_ = tls_begin_ + tls_size;
   dtls_ = DTLS_Get();
 
@@ -507,15 +509,30 @@ bool GetThreadRangesLocked(tid_t os_id, uptr *stack_begin, uptr *stack_end,
 
 void GetAllThreadAllocatorCachesLocked(InternalMmapVector<uptr> *caches) {}
 
-void ForEachExtraStackRange(tid_t os_id, RangeIteratorCallback callback,
-                            void *arg) {
+void GetThreadExtraStackRangesLocked(tid_t os_id,
+                                     InternalMmapVector<Range> *ranges) {
   __asan::AsanThread *t = __asan::GetAsanThreadByOsIDLocked(os_id);
   if (!t)
     return;
   __asan::FakeStack *fake_stack = t->get_fake_stack();
   if (!fake_stack)
     return;
-  fake_stack->ForEachFakeFrame(callback, arg);
+
+  fake_stack->ForEachFakeFrame(
+      [](uptr begin, uptr end, void *arg) {
+        reinterpret_cast<InternalMmapVector<Range> *>(arg)->push_back(
+            {begin, end});
+      },
+      ranges);
+}
+
+void GetThreadExtraStackRangesLocked(InternalMmapVector<Range> *ranges) {
+  GetAsanThreadRegistryLocked()->RunCallbackForEachThreadLocked(
+      [](ThreadContextBase *tctx, void *arg) {
+        GetThreadExtraStackRangesLocked(
+            tctx->os_id, reinterpret_cast<InternalMmapVector<Range> *>(arg));
+      },
+      ranges);
 }
 
 void GetAdditionalThreadContextPtrsLocked(InternalMmapVector<uptr> *ptrs) {

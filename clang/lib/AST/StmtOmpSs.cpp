@@ -1,9 +1,8 @@
 //===--- StmtOmpSs.cpp - Classes for OmpSs directives -------------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -30,7 +29,7 @@ void OSSChildren::setClauses(ArrayRef<OSSClause *> Clauses) {
 }
 
 MutableArrayRef<Stmt *> OSSChildren::getChildren() {
-  return llvm::makeMutableArrayRef(getTrailingObjects<Stmt *>(), NumChildren);
+  return llvm::MutableArrayRef(getTrailingObjects<Stmt *>(), NumChildren);
 }
 
 OSSChildren *OSSChildren::Create(void *Mem, ArrayRef<OSSClause *> Clauses) {
@@ -122,13 +121,13 @@ OSSTaskForDirective::Create(const ASTContext &C, SourceLocation StartLoc,
   Expr **LB;
   Expr **UB;
   Expr **Step;
-  llvm::Optional<bool>* TestIsLessOp;
+  std::optional<bool>* TestIsLessOp;
   bool *TestIsStrictOp;
   IndVar = new (C) Expr*[Exprs.size()];
   LB = new (C) Expr*[Exprs.size()];
   UB = new (C) Expr*[Exprs.size()];
   Step = new (C) Expr*[Exprs.size()];
-  TestIsLessOp = new (C) llvm::Optional<bool>[Exprs.size()];
+  TestIsLessOp = new (C) std::optional<bool>[Exprs.size()];
   TestIsStrictOp = new (C) bool[Exprs.size()];
   for (size_t i = 0; i < Exprs.size(); ++i) {
     IndVar[i] = Exprs[i].IndVar;
@@ -167,13 +166,13 @@ OSSTaskIterDirective::Create(const ASTContext &C, SourceLocation StartLoc,
     Expr **LB;
     Expr **UB;
     Expr **Step;
-    llvm::Optional<bool>* TestIsLessOp;
+    std::optional<bool>* TestIsLessOp;
     bool *TestIsStrictOp;
     IndVar = new (C) Expr*[Exprs.size()];
     LB = new (C) Expr*[Exprs.size()];
     UB = new (C) Expr*[Exprs.size()];
     Step = new (C) Expr*[Exprs.size()];
-    TestIsLessOp = new (C) llvm::Optional<bool>[Exprs.size()];
+    TestIsLessOp = new (C) std::optional<bool>[Exprs.size()];
     TestIsStrictOp = new (C) bool[Exprs.size()];
     for (size_t i = 0; i < Exprs.size(); ++i) {
       IndVar[i] = Exprs[i].IndVar;
@@ -211,13 +210,13 @@ OSSTaskLoopDirective::Create(const ASTContext &C, SourceLocation StartLoc,
   Expr **LB;
   Expr **UB;
   Expr **Step;
-  llvm::Optional<bool>* TestIsLessOp;
+  std::optional<bool>* TestIsLessOp;
   bool *TestIsStrictOp;
   IndVar = new (C) Expr*[Exprs.size()];
   LB = new (C) Expr*[Exprs.size()];
   UB = new (C) Expr*[Exprs.size()];
   Step = new (C) Expr*[Exprs.size()];
-  TestIsLessOp = new (C) llvm::Optional<bool>[Exprs.size()];
+  TestIsLessOp = new (C) std::optional<bool>[Exprs.size()];
   TestIsStrictOp = new (C) bool[Exprs.size()];
   for (size_t i = 0; i < Exprs.size(); ++i) {
     IndVar[i] = Exprs[i].IndVar;
@@ -254,13 +253,13 @@ OSSTaskLoopForDirective::Create(const ASTContext &C, SourceLocation StartLoc,
   Expr **LB;
   Expr **UB;
   Expr **Step;
-  llvm::Optional<bool>* TestIsLessOp;
+  std::optional<bool>* TestIsLessOp;
   bool *TestIsStrictOp;
   IndVar = new (C) Expr*[Exprs.size()];
   LB = new (C) Expr*[Exprs.size()];
   UB = new (C) Expr*[Exprs.size()];
   Step = new (C) Expr*[Exprs.size()];
-  TestIsLessOp = new (C) llvm::Optional<bool>[Exprs.size()];
+  TestIsLessOp = new (C) std::optional<bool>[Exprs.size()];
   TestIsStrictOp = new (C) bool[Exprs.size()];
   for (size_t i = 0; i < Exprs.size(); ++i) {
     IndVar[i] = Exprs[i].IndVar;

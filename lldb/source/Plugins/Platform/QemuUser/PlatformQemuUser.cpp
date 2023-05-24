@@ -98,14 +98,12 @@ void PlatformQemuUser::DebuggerInitialize(Debugger &debugger) {
           debugger, ConstString(GetPluginNameStatic()))) {
     PluginManager::CreateSettingForPlatformPlugin(
         debugger, GetGlobalProperties().GetValueProperties(),
-        ConstString("Properties for the qemu-user platform plugin."),
+        "Properties for the qemu-user platform plugin.",
         /*is_global_property=*/true);
   }
 }
 
-PlatformSP PlatformQemuUser::CreateInstance(bool force, const ArchSpec *arch,
-                                            const Debugger *debugger,
-                                            const ScriptedMetadata *metadata) {
+PlatformSP PlatformQemuUser::CreateInstance(bool force, const ArchSpec *arch) {
   if (force)
     return PlatformSP(new PlatformQemuUser());
   return nullptr;

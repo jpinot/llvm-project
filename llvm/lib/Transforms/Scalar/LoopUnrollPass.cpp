@@ -1132,7 +1132,7 @@ tryToUnrollLoop(Loop *L, DominatorTree &DT, LoopInfo *LI, ScalarEvolution &SE,
                 const TargetTransformInfo &TTI, AssumptionCache &AC,
                 OptimizationRemarkEmitter &ORE, BlockFrequencyInfo *BFI,
                 ProfileSummaryInfo *PSI, bool PreserveLCSSA, int OptLevel,
-                bool OnlyWhenForced, bool ForgetAllSCEV,
+                bool OnlyFullUnroll, bool OnlyWhenForced, bool ForgetAllSCEV,
                 std::optional<unsigned> ProvidedCount,
                 std::optional<unsigned> ProvidedThreshold,
                 std::optional<bool> ProvidedAllowPartial,
@@ -1141,6 +1141,7 @@ tryToUnrollLoop(Loop *L, DominatorTree &DT, LoopInfo *LI, ScalarEvolution &SE,
                 std::optional<bool> ProvidedAllowPeeling,
                 std::optional<bool> ProvidedAllowProfileBasedPeeling,
                 std::optional<unsigned> ProvidedFullUnrollMaxCount) {
+
   LLVM_DEBUG(dbgs() << "Loop Unroll: F["
                     << L->getHeader()->getParent()->getName() << "] Loop %"
                     << L->getHeader()->getName() << "\n");
@@ -1312,6 +1313,13 @@ tryToUnrollLoop(Loop *L, DominatorTree &DT, LoopInfo *LI, ScalarEvolution &SE,
     return LoopUnrollResult::Unmodified;
   }
 
+  // Do not attempt partial/runtime unrolling in FullLoopUnrolling
+  if (OnlyFullUnroll && !(UP.Count >= MaxTripCount)) {
+    LLVM_DEBUG(
+        dbgs() << "Not attempting partial/runtime unroll in FullLoopUnroll.\n");
+    return LoopUnrollResult::Unmodified;
+  }
+
   // At this point, UP.Runtime indicates that run-time unrolling is allowed.
   // However, we only want to actually perform it if we don't know the trip
   // count and the unroll count doesn't divide the known trip multiple.
@@ -1428,10 +1436,10 @@ public:
 
     LoopUnrollResult Result = tryToUnrollLoop(
         L, DT, LI, SE, TTI, AC, ORE, nullptr, nullptr, PreserveLCSSA, OptLevel,
-        OnlyWhenForced, ForgetAllSCEV, ProvidedCount, ProvidedThreshold,
-        ProvidedAllowPartial, ProvidedRuntime, ProvidedUpperBound,
-        ProvidedAllowPeeling, ProvidedAllowProfileBasedPeeling,
-        ProvidedFullUnrollMaxCount);
+        /*OnlyFullUnroll*/ false, OnlyWhenForced, ForgetAllSCEV, ProvidedCount,
+        ProvidedThreshold, ProvidedAllowPartial, ProvidedRuntime,
+        ProvidedUpperBound, ProvidedAllowPeeling,
+        ProvidedAllowProfileBasedPeeling, ProvidedFullUnrollMaxCount);
 
     if (Result == LoopUnrollResult::FullyUnrolled)
       LPM.markLoopAsDeleted(*L);
@@ -1505,8 +1513,8 @@ PreservedAnalyses LoopFullUnrollPass::run(Loop &L, LoopAnalysisManager &AM,
   bool Changed =
       tryToUnrollLoop(&L, AR.DT, &AR.LI, AR.SE, AR.TTI, AR.AC, ORE,
                       /*BFI*/ nullptr, /*PSI*/ nullptr,
-                      /*PreserveLCSSA*/ true, OptLevel, OnlyWhenForced,
-                      ForgetSCEV, /*Count*/ std::nullopt,
+                      /*PreserveLCSSA*/ true, OptLevel, /*OnlyFullUnroll*/ true,
+                      OnlyWhenForced, ForgetSCEV, /*Count*/ std::nullopt,
                       /*Threshold*/ std::nullopt, /*AllowPartial*/ false,
                       /*Runtime*/ false, /*UpperBound*/ false,
                       /*AllowPeeling*/ true,
@@ -1631,8 +1639,9 @@ PreservedAnalyses LoopUnrollPass::run(Function &F,
     // flavors of unrolling during construction time (by setting UnrollOpts).
     LoopUnrollResult Result = tryToUnrollLoop(
         &L, DT, &LI, SE, TTI, AC, ORE, BFI, PSI,
-        /*PreserveLCSSA*/ true, UnrollOpts.OptLevel, UnrollOpts.OnlyWhenForced,
-        UnrollOpts.ForgetSCEV, /*Count*/ std::nullopt,
+        /*PreserveLCSSA*/ true, UnrollOpts.OptLevel, /*OnlyFullUnroll*/ false,
+        UnrollOpts.OnlyWhenForced, UnrollOpts.ForgetSCEV,
+        /*Count*/ std::nullopt,
         /*Threshold*/ std::nullopt, UnrollOpts.AllowPartial,
         UnrollOpts.AllowRuntime, UnrollOpts.AllowUpperBound, LocalAllowPeeling,
         UnrollOpts.AllowProfileBasedPeeling, UnrollOpts.FullUnrollMaxCount);
@@ -1659,7 +1668,7 @@ void LoopUnrollPass::printPipeline(
     raw_ostream &OS, function_ref<StringRef(StringRef)> MapClassName2PassName) {
   static_cast<PassInfoMixin<LoopUnrollPass> *>(this)->printPipeline(
       OS, MapClassName2PassName);
-  OS << "<";
+  OS << '<';
   if (UnrollOpts.AllowPartial != std::nullopt)
     OS << (*UnrollOpts.AllowPartial ? "" : "no-") << "partial;";
   if (UnrollOpts.AllowPeeling != std::nullopt)
@@ -1672,7 +1681,7 @@ void LoopUnrollPass::printPipeline(
     OS << (*UnrollOpts.AllowProfileBasedPeeling ? "" : "no-")
        << "profile-peeling;";
   if (UnrollOpts.FullUnrollMaxCount != std::nullopt)
-    OS << "full-unroll-max=" << UnrollOpts.FullUnrollMaxCount << ";";
-  OS << "O" << UnrollOpts.OptLevel;
-  OS << ">";
+    OS << "full-unroll-max=" << UnrollOpts.FullUnrollMaxCount << ';';
+  OS << 'O' << UnrollOpts.OptLevel;
+  OS << '>';
 }

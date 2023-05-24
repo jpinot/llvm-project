@@ -61,7 +61,7 @@ void kmp_insert_task_in_indexer(kmp_task_t *task);
 #endif // LIBOMP_TASKGRAPH
 
 #ifdef KMP_SUPPORT_GRAPH_OUTPUT
-static std::atomic<kmp_int32> kmp_node_id_seed = ATOMIC_VAR_INIT(0);
+static std::atomic<kmp_int32> kmp_node_id_seed = 0;
 #endif
 
 static void __kmp_init_node(kmp_depnode_t *node) {

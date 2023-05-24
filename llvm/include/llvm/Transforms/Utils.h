@@ -87,7 +87,7 @@ FunctionPass *createAddDiscriminatorsPass();
 //   %Y = load i32* %X
 //   ret i32 %Y
 //
-FunctionPass *createPromoteMemoryToRegisterPass();
+FunctionPass *createPromoteMemoryToRegisterPass(bool IsForced = false);
 
 //===----------------------------------------------------------------------===//
 //
@@ -99,17 +99,6 @@ FunctionPass *createPromoteMemoryToRegisterPass();
 //
 Pass *createLoopSimplifyPass();
 extern char &LoopSimplifyID;
-
-/// This function returns a new pass that downgrades the debug info in the
-/// module to line tables only.
-ModulePass *createStripNonLineTableDebugLegacyPass();
-
-//===----------------------------------------------------------------------===//
-//
-// InjectTLIMappingsLegacy - populates the VFABI attribute with the
-// scalar-to-vector mappings from the TargetLibraryInfo.
-//
-FunctionPass *createInjectTLIMappingsLegacyPass();
 
 //===----------------------------------------------------------------------===//
 //
@@ -125,13 +114,6 @@ FunctionPass *createUnifyLoopExitsPass();
 // into a natural loop.
 //
 FunctionPass *createFixIrreduciblePass();
-
-//===----------------------------------------------------------------------===//
-//
-// AssumeSimplify - remove redundant assumes and merge assumes in the same
-// BasicBlock when possible.
-//
-FunctionPass *createAssumeSimplifyPass();
 
 //===----------------------------------------------------------------------===//
 //

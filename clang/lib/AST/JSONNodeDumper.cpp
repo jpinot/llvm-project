@@ -3,6 +3,7 @@
 #include "clang/Basic/SourceManager.h"
 #include "clang/Basic/Specifiers.h"
 #include "clang/Lex/Lexer.h"
+#include <optional>
 
 using namespace clang;
 
@@ -740,7 +741,7 @@ void JSONNodeDumper::VisitObjCInterfaceType(const ObjCInterfaceType *OIT) {
 }
 
 void JSONNodeDumper::VisitPackExpansionType(const PackExpansionType *PET) {
-  if (llvm::Optional<unsigned> N = PET->getNumExpansions())
+  if (std::optional<unsigned> N = PET->getNumExpansions())
     JOS.attribute("numExpansions", *N);
 }
 
@@ -770,6 +771,12 @@ void JSONNodeDumper::VisitNamedDecl(const NamedDecl *ND) {
     // FIXME: There are likely other contexts in which it makes no sense to ask
     // for a mangled name.
     if (isa<RequiresExprBodyDecl>(ND->getDeclContext()))
+      return;
+
+    // If the declaration is dependent or is in a dependent context, then the
+    // mangling is unlikely to be meaningful (and in some cases may cause
+    // "don't know how to mangle this" assertion failures.
+    if (ND->isTemplated())
       return;
 
     // Mangled names are not meaningful for locals, and may not be well-defined

@@ -13,9 +13,7 @@
 
 using namespace clang::ast_matchers;
 
-namespace clang {
-namespace tidy {
-namespace bugprone {
+namespace clang::tidy::bugprone {
 
 static std::optional<uint64_t> tryEvaluateSizeExpr(const Expr *SizeExpr,
                                                    const ASTContext &Ctx) {
@@ -28,9 +26,9 @@ static std::optional<uint64_t> tryEvaluateSizeExpr(const Expr *SizeExpr,
 
 void SuspiciousMemoryComparisonCheck::registerMatchers(MatchFinder *Finder) {
   Finder->addMatcher(
-      callExpr(allOf(callee(namedDecl(
-                         anyOf(hasName("::memcmp"), hasName("::std::memcmp")))),
-                     unless(isInstantiationDependent())))
+      callExpr(callee(namedDecl(
+                   anyOf(hasName("::memcmp"), hasName("::std::memcmp")))),
+               unless(isInstantiationDependent()))
           .bind("call"),
       this);
 }
@@ -81,6 +79,4 @@ void SuspiciousMemoryComparisonCheck::check(
   }
 }
 
-} // namespace bugprone
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::bugprone

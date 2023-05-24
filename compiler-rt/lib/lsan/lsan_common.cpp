@@ -270,13 +270,20 @@ static inline bool MaybeUserPointer(uptr p) {
   if (p < kMinAddress)
     return false;
 #  if defined(__x86_64__)
+  // TODO: add logic similar to ARM when Intel LAM is available.
   // Accept only canonical form user-space addresses.
   return ((p >> 47) == 0);
 #  elif defined(__mips64)
   return ((p >> 40) == 0);
 #  elif defined(__aarch64__)
+  // TBI (Top Byte Ignore) feature of AArch64: bits [63:56] are ignored in
+  // address translation and can be used to store a tag.
+  constexpr uptr kPointerMask = 255ULL << 48;
   // Accept up to 48 bit VMA.
-  return ((p >> 48) == 0);
+  return ((p & kPointerMask) == 0);
+#  elif defined(__loongarch_lp64)
+  // Allow 47-bit user-space VMA at current.
+  return ((p >> 47) == 0);
 #  else
   return true;
 #  endif
@@ -350,9 +357,12 @@ void ScanGlobalRange(uptr begin, uptr end, Frontier *frontier) {
   }
 }
 
-void ForEachExtraStackRangeCb(uptr begin, uptr end, void *arg) {
-  Frontier *frontier = reinterpret_cast<Frontier *>(arg);
-  ScanRangeForPointers(begin, end, frontier, "FAKE STACK", kReachable);
+void ScanExtraStackRanges(const InternalMmapVector<Range> &ranges,
+                          Frontier *frontier) {
+  for (uptr i = 0; i < ranges.size(); i++) {
+    ScanRangeForPointers(ranges[i].begin, ranges[i].end, frontier, "FAKE STACK",
+                         kReachable);
+  }
 }
 
 #  if SANITIZER_FUCHSIA
@@ -394,6 +404,7 @@ static void ProcessThreads(SuspendedThreadsList const &suspended_threads,
                            Frontier *frontier, tid_t caller_tid,
                            uptr caller_sp) {
   InternalMmapVector<uptr> registers;
+  InternalMmapVector<Range> extra_ranges;
   for (uptr i = 0; i < suspended_threads.ThreadCount(); i++) {
     tid_t os_id = static_cast<tid_t>(suspended_threads.GetThreadID(i));
     LOG_THREADS("Processing thread %llu.\n", os_id);
@@ -454,7 +465,9 @@ static void ProcessThreads(SuspendedThreadsList const &suspended_threads,
       }
       ScanRangeForPointers(stack_begin, stack_end, frontier, "STACK",
                            kReachable);
-      ForEachExtraStackRange(os_id, ForEachExtraStackRangeCb, frontier);
+      extra_ranges.clear();
+      GetThreadExtraStackRangesLocked(os_id, &extra_ranges);
+      ScanExtraStackRanges(extra_ranges, frontier);
     }
 
     if (flags()->use_tls) {
@@ -850,7 +863,7 @@ void LeakReport::AddLeakedChunks(const LeakedChunks &chunks) {
       leaks_.push_back(leak);
     }
     if (flags()->report_objects) {
-      LeakedObject obj = {leaks_[i].id, chunk, leaked_size};
+      LeakedObject obj = {leaks_[i].id, GetUserAddr(chunk), leaked_size};
       leaked_objects_.push_back(obj);
     }
   }
@@ -935,7 +948,7 @@ void LeakReport::PrintSummary() {
 
 uptr LeakReport::ApplySuppressions() {
   LeakSuppressionContext *suppressions = GetSuppressionContext();
-  uptr new_suppressions = false;
+  uptr new_suppressions = 0;
   for (uptr i = 0; i < leaks_.size(); i++) {
     if (suppressions->Suppress(leaks_[i].stack_trace_id, leaks_[i].hit_count,
                                leaks_[i].total_size)) {
@@ -984,7 +997,7 @@ void __lsan_ignore_object(const void *p) {
   // Cannot use PointsIntoChunk or LsanMetadata here, since the allocator is not
   // locked.
   Lock l(&global_mutex);
-  IgnoreObjectResult res = IgnoreObjectLocked(p);
+  IgnoreObjectResult res = IgnoreObject(p);
   if (res == kIgnoreObjectInvalid)
     VReport(1, "__lsan_ignore_object(): no heap object found at %p\n", p);
   if (res == kIgnoreObjectAlreadyIgnored)

@@ -707,10 +707,6 @@ static void InitializeCPlusPlusFeatureTestMacros(const LangOptions &LangOpts,
   if (LangOpts.Char8)
     Builder.defineMacro("__cpp_char8_t", "202207L");
   Builder.defineMacro("__cpp_impl_destroying_delete", "201806L");
-
-  // TS features.
-  if (LangOpts.Coroutines)
-    Builder.defineMacro("__cpp_coroutines", "201703L");
 }
 
 /// InitializeOpenCLFeatureTestMacros - Define OpenCL macros based on target
@@ -1267,8 +1263,13 @@ static void InitializePredefinedMacros(const TargetInfo &TI,
   }
 
   // OmpSs-2
-  if (LangOpts.OmpSs)
+  if (LangOpts.OmpSs) {
     Builder.defineMacro("_OMPSS_2", "1");
+    if (LangOpts.OmpSsRuntimeName == std::string("libnodes"))
+      Builder.defineMacro("_OMPSS_2_NODES", "1");
+    else
+      Builder.defineMacro("_OMPSS_2_NANOS6", "1");
+  }
 
   // CUDA device path compilaton
   if (LangOpts.CUDAIsDevice && !LangOpts.HIP) {
@@ -1321,11 +1322,10 @@ void clang::InitializePreprocessor(
   llvm::raw_string_ostream Predefines(PredefineBuffer);
   MacroBuilder Builder(Predefines);
 
-  // Emit line markers for various builtin sections of the file.  We don't do
-  // this in asm preprocessor mode, because "# 4" is not a line marker directive
-  // in this mode.
-  if (!PP.getLangOpts().AsmPreprocessor)
-    Builder.append("# 1 \"<built-in>\" 3");
+  // Emit line markers for various builtin sections of the file. The 3 here
+  // marks <built-in> as being a system header, which suppresses warnings when
+  // the same macro is defined multiple times.
+  Builder.append("# 1 \"<built-in>\" 3");
 
   // Install things like __POWERPC__, __GNUC__, etc into the macro table.
   if (InitOpts.UsePredefines) {
@@ -1363,8 +1363,7 @@ void clang::InitializePreprocessor(
 
   // Add on the predefines from the driver.  Wrap in a #line directive to report
   // that they come from the command line.
-  if (!PP.getLangOpts().AsmPreprocessor)
-    Builder.append("# 1 \"<command line>\" 1");
+  Builder.append("# 1 \"<command line>\" 1");
 
   // Process #define's and #undef's in the order they are given.
   for (unsigned i = 0, e = InitOpts.Macros.size(); i != e; ++i) {
@@ -1376,8 +1375,7 @@ void clang::InitializePreprocessor(
   }
 
   // Exit the command line and go back to <built-in> (2 is LC_LEAVE).
-  if (!PP.getLangOpts().AsmPreprocessor)
-    Builder.append("# 1 \"<built-in>\" 2");
+  Builder.append("# 1 \"<built-in>\" 2");
 
   // If -imacros are specified, include them now.  These are processed before
   // any -include directives.

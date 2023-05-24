@@ -28,8 +28,8 @@
 #include "lldb/Utility/Status.h"
 #include "lldb/Utility/StreamString.h"
 
-#include "llvm/ADT/Triple.h"
-#include "llvm/Support/Host.h"
+#include "llvm/TargetParser/Host.h"
+#include "llvm/TargetParser/Triple.h"
 
 // Define these constants from FreeBSD mman.h for use when targeting remote
 // FreeBSD systems even when host has different values.
@@ -44,9 +44,8 @@ LLDB_PLUGIN_DEFINE(PlatformFreeBSD)
 
 static uint32_t g_initialize_count = 0;
 
-PlatformSP PlatformFreeBSD::CreateInstance(bool force, const ArchSpec *arch,
-                                           const Debugger *debugger,
-                                           const ScriptedMetadata *metadata) {
+
+PlatformSP PlatformFreeBSD::CreateInstance(bool force, const ArchSpec *arch) {
   Log *log = GetLog(LLDBLog::Platform);
   LLDB_LOG(log, "force = {0}, arch=({1}, {2})", force,
            arch ? arch->GetArchitectureName() : "<null>",

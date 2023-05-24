@@ -75,15 +75,15 @@ namespace {
     }
 
   private:
-    MachineFrameInfo *MFI;
-    MachineRegisterInfo *MRI;
-    const TargetRegisterInfo *TRI;
-    const TargetInstrInfo *TII;
+    MachineFrameInfo *MFI = nullptr;
+    MachineRegisterInfo *MRI = nullptr;
+    const TargetRegisterInfo *TRI = nullptr;
+    const TargetInstrInfo *TII = nullptr;
     RegisterClassInfo RegClassInfo;
     const RegClassFilterFunc ShouldAllocateClass;
 
     /// Basic block currently being allocated.
-    MachineBasicBlock *MBB;
+    MachineBasicBlock *MBB = nullptr;
 
     /// Maps virtual regs to the frame index where these values are spilled.
     IndexedMap<int, VirtReg2IndexFunctor> StackSlotForVirtReg;
@@ -106,7 +106,7 @@ namespace {
       }
     };
 
-    using LiveRegMap = SparseSet<LiveReg>;
+    using LiveRegMap = SparseSet<LiveReg, identity<unsigned>, uint16_t>;
     /// This map contains entries for each virtual register that is currently
     /// available in a physical register.
     LiveRegMap LiveVirtRegs;
@@ -302,7 +302,7 @@ INITIALIZE_PASS(RegAllocFast, "regallocfast", "Fast Register Allocator", false,
                 false)
 
 bool RegAllocFast::shouldAllocateRegister(const Register Reg) const {
-  assert(Register::isVirtualRegister(Reg));
+  assert(Reg.isVirtual());
   const TargetRegisterClass &RC = *MRI->getRegClass(Reg);
   return ShouldAllocateClass(*TRI, RC);
 }
@@ -849,7 +849,7 @@ void RegAllocFast::allocVirtReg(MachineInstr &MI, LiveReg &LR,
 void RegAllocFast::allocVirtRegUndef(MachineOperand &MO) {
   assert(MO.isUndef() && "expected undef use");
   Register VirtReg = MO.getReg();
-  assert(Register::isVirtualRegister(VirtReg) && "Expected virtreg");
+  assert(VirtReg.isVirtual() && "Expected virtreg");
   if (!shouldAllocateRegister(VirtReg))
     return;
 
@@ -948,6 +948,23 @@ void RegAllocFast::defineVirtReg(MachineInstr &MI, unsigned OpNum,
                         << LRI->Reloaded << '\n');
       bool Kill = LRI->LastUse == nullptr;
       spill(SpillBefore, VirtReg, PhysReg, Kill, LRI->LiveOut);
+
+      // We need to place additional spills for each indirect destination of an
+      // INLINEASM_BR.
+      if (MI.getOpcode() == TargetOpcode::INLINEASM_BR) {
+        int FI = StackSlotForVirtReg[VirtReg];
+        const TargetRegisterClass &RC = *MRI->getRegClass(VirtReg);
+        for (MachineOperand &MO : MI.operands()) {
+          if (MO.isMBB()) {
+            MachineBasicBlock *Succ = MO.getMBB();
+            TII->storeRegToStackSlot(*Succ, Succ->begin(), PhysReg, Kill,
+                FI, &RC, TRI, VirtReg);
+            ++NumStores;
+            Succ->addLiveIn(PhysReg);
+          }
+        }
+      }
+
       LRI->LastUse = nullptr;
     }
     LRI->LiveOut = false;
@@ -1304,9 +1321,11 @@ void RegAllocFast::allocateInstruction(MachineInstr &MI) {
       if (!MO.isReg() || !MO.isDef())
         continue;
 
+      Register Reg = MO.getReg();
+
       // subreg defs don't free the full register. We left the subreg number
       // around as a marker in setPhysReg() to recognize this case here.
-      if (MO.getSubReg() != 0) {
+      if (Reg.isPhysical() && MO.getSubReg() != 0) {
         MO.setSubReg(0);
         continue;
       }
@@ -1317,7 +1336,6 @@ void RegAllocFast::allocateInstruction(MachineInstr &MI) {
       // Do not free tied operands and early clobbers.
       if ((MO.isTied() && !TiedOpIsUndef(MO, I)) || MO.isEarlyClobber())
         continue;
-      Register Reg = MO.getReg();
       if (!Reg)
         continue;
       if (Reg.isVirtual()) {
@@ -1446,7 +1464,7 @@ void RegAllocFast::handleDebugValue(MachineInstr &MI) {
   // Ignore DBG_VALUEs that aren't based on virtual registers. These are
   // mostly constants and frame indices.
   for (Register Reg : MI.getUsedDebugRegs()) {
-    if (!Register::isVirtualRegister(Reg))
+    if (!Reg.isVirtual())
       continue;
     if (!shouldAllocateRegister(Reg))
       continue;

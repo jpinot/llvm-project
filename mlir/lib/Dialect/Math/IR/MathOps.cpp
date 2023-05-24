@@ -10,6 +10,7 @@
 #include "mlir/Dialect/CommonFolders.h"
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/IR/Builders.h"
+#include <optional>
 
 using namespace mlir;
 using namespace mlir::math;
@@ -45,7 +46,7 @@ OpFoldResult math::AbsIOp::fold(FoldAdaptor adaptor) {
 
 OpFoldResult math::AtanOp::fold(FoldAdaptor adaptor) {
   return constFoldUnaryOpConditional<FloatAttr>(
-      adaptor.getOperands(), [](const APFloat &a) -> Optional<APFloat> {
+      adaptor.getOperands(), [](const APFloat &a) -> std::optional<APFloat> {
         switch (a.getSizeInBits(a.getSemantics())) {
         case 64:
           return APFloat(atan(a.convertToDouble()));
@@ -64,7 +65,7 @@ OpFoldResult math::AtanOp::fold(FoldAdaptor adaptor) {
 OpFoldResult math::Atan2Op::fold(FoldAdaptor adaptor) {
   return constFoldBinaryOpConditional<FloatAttr>(
       adaptor.getOperands(),
-      [](const APFloat &a, const APFloat &b) -> Optional<APFloat> {
+      [](const APFloat &a, const APFloat &b) -> std::optional<APFloat> {
         if (a.isZero() && b.isZero())
           return llvm::APFloat::getNaN(a.getSemantics());
 
@@ -112,7 +113,7 @@ OpFoldResult math::CopySignOp::fold(FoldAdaptor adaptor) {
 
 OpFoldResult math::CosOp::fold(FoldAdaptor adaptor) {
   return constFoldUnaryOpConditional<FloatAttr>(
-      adaptor.getOperands(), [](const APFloat &a) -> Optional<APFloat> {
+      adaptor.getOperands(), [](const APFloat &a) -> std::optional<APFloat> {
         switch (a.getSizeInBits(a.getSemantics())) {
         case 64:
           return APFloat(cos(a.convertToDouble()));
@@ -130,7 +131,7 @@ OpFoldResult math::CosOp::fold(FoldAdaptor adaptor) {
 
 OpFoldResult math::SinOp::fold(FoldAdaptor adaptor) {
   return constFoldUnaryOpConditional<FloatAttr>(
-      adaptor.getOperands(), [](const APFloat &a) -> Optional<APFloat> {
+      adaptor.getOperands(), [](const APFloat &a) -> std::optional<APFloat> {
         switch (a.getSizeInBits(a.getSemantics())) {
         case 64:
           return APFloat(sin(a.convertToDouble()));
@@ -148,9 +149,8 @@ OpFoldResult math::SinOp::fold(FoldAdaptor adaptor) {
 
 OpFoldResult math::CountLeadingZerosOp::fold(FoldAdaptor adaptor) {
   return constFoldUnaryOp<IntegerAttr>(
-      adaptor.getOperands(), [](const APInt &a) {
-        return APInt(a.getBitWidth(), a.countLeadingZeros());
-      });
+      adaptor.getOperands(),
+      [](const APInt &a) { return APInt(a.getBitWidth(), a.countl_zero()); });
 }
 
 //===----------------------------------------------------------------------===//
@@ -159,9 +159,8 @@ OpFoldResult math::CountLeadingZerosOp::fold(FoldAdaptor adaptor) {
 
 OpFoldResult math::CountTrailingZerosOp::fold(FoldAdaptor adaptor) {
   return constFoldUnaryOp<IntegerAttr>(
-      adaptor.getOperands(), [](const APInt &a) {
-        return APInt(a.getBitWidth(), a.countTrailingZeros());
-      });
+      adaptor.getOperands(),
+      [](const APInt &a) { return APInt(a.getBitWidth(), a.countr_zero()); });
 }
 
 //===----------------------------------------------------------------------===//
@@ -170,9 +169,8 @@ OpFoldResult math::CountTrailingZerosOp::fold(FoldAdaptor adaptor) {
 
 OpFoldResult math::CtPopOp::fold(FoldAdaptor adaptor) {
   return constFoldUnaryOp<IntegerAttr>(
-      adaptor.getOperands(), [](const APInt &a) {
-        return APInt(a.getBitWidth(), a.countPopulation());
-      });
+      adaptor.getOperands(),
+      [](const APInt &a) { return APInt(a.getBitWidth(), a.popcount()); });
 }
 
 //===----------------------------------------------------------------------===//
@@ -181,7 +179,7 @@ OpFoldResult math::CtPopOp::fold(FoldAdaptor adaptor) {
 
 OpFoldResult math::ErfOp::fold(FoldAdaptor adaptor) {
   return constFoldUnaryOpConditional<FloatAttr>(
-      adaptor.getOperands(), [](const APFloat &a) -> Optional<APFloat> {
+      adaptor.getOperands(), [](const APFloat &a) -> std::optional<APFloat> {
         switch (a.getSizeInBits(a.getSemantics())) {
         case 64:
           return APFloat(erf(a.convertToDouble()));
@@ -200,7 +198,7 @@ OpFoldResult math::ErfOp::fold(FoldAdaptor adaptor) {
 OpFoldResult math::IPowIOp::fold(FoldAdaptor adaptor) {
   return constFoldBinaryOpConditional<IntegerAttr>(
       adaptor.getOperands(),
-      [](const APInt &base, const APInt &power) -> Optional<APInt> {
+      [](const APInt &base, const APInt &power) -> std::optional<APInt> {
         unsigned width = base.getBitWidth();
         auto zeroValue = APInt::getZero(width);
         APInt oneValue{width, 1ULL, /*isSigned=*/true};
@@ -250,7 +248,7 @@ OpFoldResult math::IPowIOp::fold(FoldAdaptor adaptor) {
 
 OpFoldResult math::LogOp::fold(FoldAdaptor adaptor) {
   return constFoldUnaryOpConditional<FloatAttr>(
-      adaptor.getOperands(), [](const APFloat &a) -> Optional<APFloat> {
+      adaptor.getOperands(), [](const APFloat &a) -> std::optional<APFloat> {
         if (a.isNegative())
           return {};
 
@@ -270,7 +268,7 @@ OpFoldResult math::LogOp::fold(FoldAdaptor adaptor) {
 
 OpFoldResult math::Log2Op::fold(FoldAdaptor adaptor) {
   return constFoldUnaryOpConditional<FloatAttr>(
-      adaptor.getOperands(), [](const APFloat &a) -> Optional<APFloat> {
+      adaptor.getOperands(), [](const APFloat &a) -> std::optional<APFloat> {
         if (a.isNegative())
           return {};
 
@@ -290,7 +288,7 @@ OpFoldResult math::Log2Op::fold(FoldAdaptor adaptor) {
 
 OpFoldResult math::Log10Op::fold(FoldAdaptor adaptor) {
   return constFoldUnaryOpConditional<FloatAttr>(
-      adaptor.getOperands(), [](const APFloat &a) -> Optional<APFloat> {
+      adaptor.getOperands(), [](const APFloat &a) -> std::optional<APFloat> {
         if (a.isNegative())
           return {};
 
@@ -311,7 +309,7 @@ OpFoldResult math::Log10Op::fold(FoldAdaptor adaptor) {
 
 OpFoldResult math::Log1pOp::fold(FoldAdaptor adaptor) {
   return constFoldUnaryOpConditional<FloatAttr>(
-      adaptor.getOperands(), [](const APFloat &a) -> Optional<APFloat> {
+      adaptor.getOperands(), [](const APFloat &a) -> std::optional<APFloat> {
         switch (a.getSizeInBits(a.getSemantics())) {
         case 64:
           if ((a + APFloat(1.0)).isNegative())
@@ -334,7 +332,7 @@ OpFoldResult math::Log1pOp::fold(FoldAdaptor adaptor) {
 OpFoldResult math::PowFOp::fold(FoldAdaptor adaptor) {
   return constFoldBinaryOpConditional<FloatAttr>(
       adaptor.getOperands(),
-      [](const APFloat &a, const APFloat &b) -> Optional<APFloat> {
+      [](const APFloat &a, const APFloat &b) -> std::optional<APFloat> {
         if (a.getSizeInBits(a.getSemantics()) == 64 &&
             b.getSizeInBits(b.getSemantics()) == 64)
           return APFloat(pow(a.convertToDouble(), b.convertToDouble()));
@@ -353,7 +351,7 @@ OpFoldResult math::PowFOp::fold(FoldAdaptor adaptor) {
 
 OpFoldResult math::SqrtOp::fold(FoldAdaptor adaptor) {
   return constFoldUnaryOpConditional<FloatAttr>(
-      adaptor.getOperands(), [](const APFloat &a) -> Optional<APFloat> {
+      adaptor.getOperands(), [](const APFloat &a) -> std::optional<APFloat> {
         if (a.isNegative())
           return {};
 
@@ -374,7 +372,7 @@ OpFoldResult math::SqrtOp::fold(FoldAdaptor adaptor) {
 
 OpFoldResult math::ExpOp::fold(FoldAdaptor adaptor) {
   return constFoldUnaryOpConditional<FloatAttr>(
-      adaptor.getOperands(), [](const APFloat &a) -> Optional<APFloat> {
+      adaptor.getOperands(), [](const APFloat &a) -> std::optional<APFloat> {
         switch (a.getSizeInBits(a.getSemantics())) {
         case 64:
           return APFloat(exp(a.convertToDouble()));
@@ -392,7 +390,7 @@ OpFoldResult math::ExpOp::fold(FoldAdaptor adaptor) {
 
 OpFoldResult math::Exp2Op::fold(FoldAdaptor adaptor) {
   return constFoldUnaryOpConditional<FloatAttr>(
-      adaptor.getOperands(), [](const APFloat &a) -> Optional<APFloat> {
+      adaptor.getOperands(), [](const APFloat &a) -> std::optional<APFloat> {
         switch (a.getSizeInBits(a.getSemantics())) {
         case 64:
           return APFloat(exp2(a.convertToDouble()));
@@ -410,7 +408,7 @@ OpFoldResult math::Exp2Op::fold(FoldAdaptor adaptor) {
 
 OpFoldResult math::ExpM1Op::fold(FoldAdaptor adaptor) {
   return constFoldUnaryOpConditional<FloatAttr>(
-      adaptor.getOperands(), [](const APFloat &a) -> Optional<APFloat> {
+      adaptor.getOperands(), [](const APFloat &a) -> std::optional<APFloat> {
         switch (a.getSizeInBits(a.getSemantics())) {
         case 64:
           return APFloat(expm1(a.convertToDouble()));
@@ -428,7 +426,7 @@ OpFoldResult math::ExpM1Op::fold(FoldAdaptor adaptor) {
 
 OpFoldResult math::TanOp::fold(FoldAdaptor adaptor) {
   return constFoldUnaryOpConditional<FloatAttr>(
-      adaptor.getOperands(), [](const APFloat &a) -> Optional<APFloat> {
+      adaptor.getOperands(), [](const APFloat &a) -> std::optional<APFloat> {
         switch (a.getSizeInBits(a.getSemantics())) {
         case 64:
           return APFloat(tan(a.convertToDouble()));
@@ -446,7 +444,7 @@ OpFoldResult math::TanOp::fold(FoldAdaptor adaptor) {
 
 OpFoldResult math::TanhOp::fold(FoldAdaptor adaptor) {
   return constFoldUnaryOpConditional<FloatAttr>(
-      adaptor.getOperands(), [](const APFloat &a) -> Optional<APFloat> {
+      adaptor.getOperands(), [](const APFloat &a) -> std::optional<APFloat> {
         switch (a.getSizeInBits(a.getSemantics())) {
         case 64:
           return APFloat(tanh(a.convertToDouble()));
@@ -490,7 +488,7 @@ OpFoldResult math::FloorOp::fold(FoldAdaptor adaptor) {
 
 OpFoldResult math::RoundOp::fold(FoldAdaptor adaptor) {
   return constFoldUnaryOpConditional<FloatAttr>(
-      adaptor.getOperands(), [](const APFloat &a) -> Optional<APFloat> {
+      adaptor.getOperands(), [](const APFloat &a) -> std::optional<APFloat> {
         switch (a.getSizeInBits(a.getSemantics())) {
         case 64:
           return APFloat(round(a.convertToDouble()));
@@ -508,7 +506,7 @@ OpFoldResult math::RoundOp::fold(FoldAdaptor adaptor) {
 
 OpFoldResult math::TruncOp::fold(FoldAdaptor adaptor) {
   return constFoldUnaryOpConditional<FloatAttr>(
-      adaptor.getOperands(), [](const APFloat &a) -> Optional<APFloat> {
+      adaptor.getOperands(), [](const APFloat &a) -> std::optional<APFloat> {
         switch (a.getSizeInBits(a.getSemantics())) {
         case 64:
           return APFloat(trunc(a.convertToDouble()));
@@ -524,5 +522,5 @@ OpFoldResult math::TruncOp::fold(FoldAdaptor adaptor) {
 Operation *math::MathDialect::materializeConstant(OpBuilder &builder,
                                                   Attribute value, Type type,
                                                   Location loc) {
-  return builder.create<arith::ConstantOp>(loc, value, type);
+  return arith::ConstantOp::materialize(builder, value, type, loc);
 }

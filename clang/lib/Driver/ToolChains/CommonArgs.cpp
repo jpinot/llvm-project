@@ -54,15 +54,15 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
-#include "llvm/Support/Host.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Support/ScopedPrinter.h"
-#include "llvm/Support/TargetParser.h"
 #include "llvm/Support/Threading.h"
 #include "llvm/Support/VirtualFileSystem.h"
 #include "llvm/Support/YAMLParser.h"
+#include "llvm/TargetParser/Host.h"
+#include "llvm/TargetParser/TargetParser.h"
 #include <optional>
 
 using namespace clang::driver;
@@ -331,6 +331,9 @@ static std::string getAMDGPUTargetGPU(const llvm::Triple &T,
         .Case("aruba", "cayman")
         .Default(GPUName.str());
   }
+  if (Arg *A = Args.getLastArg(options::OPT_march_EQ)) {
+    return getProcessorFromTargetID(T, A->getValue()).str();
+  }
   return "";
 }
 
@@ -410,7 +413,7 @@ std::string tools::getCPUName(const Driver &D, const ArgList &Args,
   case llvm::Triple::ppcle:
   case llvm::Triple::ppc64:
   case llvm::Triple::ppc64le:
-    return ppc::getPPCTargetCPU(Args, T);
+    return ppc::getPPCTargetCPU(D, Args, T);
 
   case llvm::Triple::csky:
     if (const Arg *A = Args.getLastArg(options::OPT_mcpu_EQ))
@@ -567,6 +570,7 @@ void tools::addLTOOptions(const ToolChain &ToolChain, const ArgList &Args,
                           ArgStringList &CmdArgs, const InputInfo &Output,
                           const InputInfo &Input, bool IsThinLTO) {
   const bool IsOSAIX = ToolChain.getTriple().isOSAIX();
+  const bool IsAMDGCN = ToolChain.getTriple().isAMDGCN();
   const char *Linker = Args.MakeArgString(ToolChain.GetLinkerPath());
   const Driver &D = ToolChain.getDriver();
   if (llvm::sys::path::filename(Linker) != "ld.lld" &&
@@ -631,9 +635,12 @@ void tools::addLTOOptions(const ToolChain &ToolChain, const ArgList &Args,
         OOpt = "2";
     } else if (A->getOption().matches(options::OPT_O0))
       OOpt = "0";
-    if (!OOpt.empty())
+    if (!OOpt.empty()) {
       CmdArgs.push_back(
           Args.MakeArgString(Twine(PluginOptPrefix) + ExtraDash + "O" + OOpt));
+      if (IsAMDGCN)
+        CmdArgs.push_back(Args.MakeArgString(Twine("--lto-CGO") + OOpt));
+    }
   }
 
   if (Args.hasArg(options::OPT_gsplit_dwarf))
@@ -676,9 +683,16 @@ void tools::addLTOOptions(const ToolChain &ToolChain, const ArgList &Args,
       CmdArgs.push_back(
           Args.MakeArgString(Twine(PluginOptPrefix) + "-strict-dwarf=true"));
 
-    if (Args.getLastArg(options::OPT_mabi_EQ_vec_extabi))
-      CmdArgs.push_back(
-          Args.MakeArgString(Twine(PluginOptPrefix) + "-vec-extabi"));
+    for (const Arg *A : Args.filtered_reverse(options::OPT_mabi_EQ)) {
+      StringRef V = A->getValue();
+      if (V == "vec-default")
+        break;
+      if (V == "vec-extabi") {
+        CmdArgs.push_back(
+            Args.MakeArgString(Twine(PluginOptPrefix) + "-vec-extabi"));
+        break;
+      }
+    }
   }
 
   bool UseSeparateSections =
@@ -757,6 +771,12 @@ void tools::addLTOOptions(const ToolChain &ToolChain, const ArgList &Args,
       D.Diag(clang::diag::warn_drv_fjmc_for_elf_only);
   }
 
+  if (Args.hasFlag(options::OPT_femulated_tls, options::OPT_fno_emulated_tls,
+                   ToolChain.getTriple().hasDefaultEmulatedTLS())) {
+    CmdArgs.push_back(
+        Args.MakeArgString(Twine(PluginOptPrefix) + "-emulated-tls"));
+  }
+
   if (Args.hasFlag(options::OPT_fstack_size_section,
                    options::OPT_fno_stack_size_section, false))
     CmdArgs.push_back(
@@ -791,22 +811,6 @@ void tools::addLTOOptions(const ToolChain &ToolChain, const ArgList &Args,
                          /*IsLTO=*/true, PluginOptPrefix);
 }
 
-void tools::addOpenMPRuntimeSpecificRPath(const ToolChain &TC,
-                                          const ArgList &Args,
-                                          ArgStringList &CmdArgs) {
-
-  if (Args.hasFlag(options::OPT_fopenmp_implicit_rpath,
-                   options::OPT_fno_openmp_implicit_rpath, true)) {
-    // Default to clang lib / lib64 folder, i.e. the same location as device
-    // runtime
-    SmallString<256> DefaultLibPath =
-        llvm::sys::path::parent_path(TC.getDriver().Dir);
-    llvm::sys::path::append(DefaultLibPath, CLANG_INSTALL_LIBDIR_BASENAME);
-    CmdArgs.push_back("-rpath");
-    CmdArgs.push_back(Args.MakeArgString(DefaultLibPath));
-  }
-}
-
 void tools::addOpenMPRuntimeLibraryPath(const ToolChain &TC,
                                         const ArgList &Args,
                                         ArgStringList &CmdArgs) {
@@ -827,10 +831,11 @@ void tools::addArchSpecificRPath(const ToolChain &TC, const ArgList &Args,
                     options::OPT_fno_rtlib_add_rpath, DefaultValue))
     return;
 
-  std::string CandidateRPath = TC.getArchSpecificLibPath();
-  if (TC.getVFS().exists(CandidateRPath)) {
-    CmdArgs.push_back("-rpath");
-    CmdArgs.push_back(Args.MakeArgString(CandidateRPath));
+  for (const auto &CandidateRPath : TC.getArchSpecificLibPaths()) {
+    if (TC.getVFS().exists(CandidateRPath)) {
+      CmdArgs.push_back("-rpath");
+      CmdArgs.push_back(Args.MakeArgString(CandidateRPath));
+    }
   }
 }
 
@@ -873,14 +878,10 @@ bool tools::addOpenMPRuntime(ArgStringList &CmdArgs, const ToolChain &TC,
   if (IsOffloadingHost)
     CmdArgs.push_back("-lomptarget");
 
-  if (IsOffloadingHost && TC.getDriver().isUsingLTO(/* IsOffload */ true) &&
-      !Args.hasArg(options::OPT_nogpulib))
+  if (IsOffloadingHost && !Args.hasArg(options::OPT_nogpulib))
     CmdArgs.push_back("-lomptarget.devicertl");
 
   addArchSpecificRPath(TC, Args, CmdArgs);
-
-  if (RTKind == Driver::OMPRT_OMP)
-    addOpenMPRuntimeSpecificRPath(TC, Args, CmdArgs);
   addOpenMPRuntimeLibraryPath(TC, Args, CmdArgs);
 
   return true;
@@ -924,16 +925,43 @@ void tools::addFortranRuntimeLibraryPath(const ToolChain &TC,
 void tools::addOmpSsRuntimeLibs(
     ArgStringList &CmdArgs, const ToolChain &TC, const ArgList &Args) {
 
-  // -fdo-not-use-nanos6 means ignoring nanos6
-  if (Args.getLastArg(options::OPT_fdo_not_use_nanos6))
+  // -fdo-not-use-ompss-2-rt means ignoring OmpSs-2 runtime
+  if (Args.getLastArg(options::OPT_fdo_not_use_ompss_runtime))
+    return;
+  if (!Args.hasFlag(options::OPT_fompss, options::OPT_fompss_EQ, options::OPT_fno_ompss, false))
     return;
 
-  std::string RuntimeDefaultHome(CLANG_DEFAULT_NANOS6_HOME);
-  std::optional<std::string> RuntimeHome =
+  std::string Nanos6DefaultHome(CLANG_DEFAULT_NANOS6_HOME);
+  std::optional<std::string> Nanos6Home =
     llvm::sys::Process::GetEnv("NANOS6_HOME");
 
-  // First look at environment NANOS6_HOME,
-  // then CMAKE defined variable.
+  std::string NODESDefaultHome(CLANG_DEFAULT_NODES_HOME);
+  std::optional<std::string> NODESHome =
+    llvm::sys::Process::GetEnv("NODES_HOME");
+
+  Driver::OmpSsRuntimeKind RTKind = TC.getDriver().getOmpSsRuntime(Args);
+
+  std::string RuntimeDefaultHome;
+  std::optional<std::string> RuntimeHome;
+  std::string RuntimeLibPrefix;
+  switch (RTKind) {
+  case Driver::OSSRT_NANOS6:
+    RuntimeDefaultHome = Nanos6DefaultHome;
+    RuntimeHome = Nanos6Home;
+    RuntimeLibPrefix = "nanos6";
+    break;
+  case Driver::OSSRT_NODES:
+    RuntimeDefaultHome = NODESDefaultHome;
+    RuntimeHome = NODESHome;
+    RuntimeLibPrefix = "nodes";
+    break;
+  case Driver::OSSRT_Unknown:
+    // Already diagnosed.
+    return;
+  }
+
+  // First look at environment,then CMAKE
+  // defined variable.
   //
   // Default to compiler lib dir. in case both are not defined.
   std::string HomePath;
@@ -944,7 +972,7 @@ void tools::addOmpSsRuntimeLibs(
   }
 
   if (!HomePath.empty()) {
-    CmdArgs.push_back(Args.MakeArgString(HomePath + "/lib/nanos6-main-wrapper.o"));
+    CmdArgs.push_back(Args.MakeArgString(HomePath + "/lib/" + RuntimeLibPrefix + "-main-wrapper.o"));
     CmdArgs.push_back("-z");
     CmdArgs.push_back("lazy");
     CmdArgs.push_back("-L");
@@ -953,29 +981,53 @@ void tools::addOmpSsRuntimeLibs(
     CmdArgs.push_back(Args.MakeArgString(HomePath + "/lib"));
   } else {
     // Fallback to compiler installed dir.
-    CmdArgs.push_back(Args.MakeArgString(std::string(TC.getDriver().getInstalledDir()) + "/../lib/nanos6-main-wrapper.o"));
+    CmdArgs.push_back(Args.MakeArgString(std::string(TC.getDriver().getInstalledDir()) + "/../lib/" + RuntimeLibPrefix + "-main-wrapper.o"));
     CmdArgs.push_back("-z");
     CmdArgs.push_back("lazy");
     CmdArgs.push_back("-rpath");
     CmdArgs.push_back(Args.MakeArgString(std::string(TC.getDriver().getInstalledDir()) + "/../lib"));
   }
-  CmdArgs.push_back("-lnanos6");
+  CmdArgs.push_back(Args.MakeArgString(std::string("-l") + RuntimeLibPrefix));
   CmdArgs.push_back("-ldl");
 }
 
 void tools::addOmpSsRuntimeInclude(
     ArgStringList &CmdArgs, const ToolChain &TC, const ArgList &Args) {
 
-  // -fdo-not-use-nanos6 means ignoring nanos6
-  if (Args.getLastArg(options::OPT_fdo_not_use_nanos6))
+  // -fdo-not-use-ompss-2-rt means ignoring OmpSs-2 runtime
+  if (Args.getLastArg(options::OPT_fdo_not_use_ompss_runtime))
+    return;
+  if (!Args.hasFlag(options::OPT_fompss, options::OPT_fompss_EQ, options::OPT_fno_ompss, false))
     return;
 
-  std::string RuntimeDefaultHome(CLANG_DEFAULT_NANOS6_HOME);
-  std::optional<std::string> RuntimeHome =
+  std::string Nanos6DefaultHome(CLANG_DEFAULT_NANOS6_HOME);
+  std::optional<std::string> Nanos6Home =
     llvm::sys::Process::GetEnv("NANOS6_HOME");
 
-  // First look at environment NANOS6_HOME,
-  // then CMAKE defined variable.
+  std::string NODESDefaultHome(CLANG_DEFAULT_NODES_HOME);
+  std::optional<std::string> NODESHome =
+    llvm::sys::Process::GetEnv("NODES_HOME");
+
+  Driver::OmpSsRuntimeKind RTKind = TC.getDriver().getOmpSsRuntime(Args);
+
+  std::string RuntimeDefaultHome;
+  std::optional<std::string> RuntimeHome;
+  switch (RTKind) {
+  case Driver::OSSRT_NANOS6:
+    RuntimeDefaultHome = Nanos6DefaultHome;
+    RuntimeHome = Nanos6Home;
+    break;
+  case Driver::OSSRT_NODES:
+    RuntimeDefaultHome = NODESDefaultHome;
+    RuntimeHome = NODESHome;
+    break;
+  case Driver::OSSRT_Unknown:
+    // Already diagnosed.
+    return;
+  }
+
+  // First look at environment,then CMAKE
+  // defined variable.
   //
   // Default to compiler lib dir. in case both are not defined.
   std::string HomePath;
@@ -1047,7 +1099,7 @@ void tools::linkSanitizerRuntimeDeps(const ToolChain &TC,
   CmdArgs.push_back(getAsNeededOption(TC, false));
   // There's no libpthread or librt on RTEMS & Android.
   if (TC.getTriple().getOS() != llvm::Triple::RTEMS &&
-      !TC.getTriple().isAndroid()) {
+      !TC.getTriple().isAndroid() && !TC.getTriple().isOHOSFamily()) {
     CmdArgs.push_back("-lpthread");
     if (!TC.getTriple().isOSOpenBSD())
       CmdArgs.push_back("-lrt");
@@ -1471,6 +1523,10 @@ tools::ParsePICArgs(const ToolChain &ToolChain, const ArgList &Args) {
     }
   }
 
+  // OHOS-specific defaults for PIC/PIE
+  if (Triple.isOHOSFamily() && Triple.getArch() == llvm::Triple::aarch64)
+    PIC = true;
+
   // OpenBSD-specific defaults for PIE
   if (Triple.isOSOpenBSD()) {
     switch (ToolChain.getArch()) {
@@ -1492,10 +1548,6 @@ tools::ParsePICArgs(const ToolChain &ToolChain, const ArgList &Args) {
       break;
     }
   }
-
-  // AMDGPU-specific defaults for PIC.
-  if (Triple.getArch() == llvm::Triple::amdgcn)
-    PIC = true;
 
   // The last argument relating to either PIC or PIE wins, and no
   // other argument is used. If the last argument is any flavor of the
@@ -1671,6 +1723,48 @@ unsigned tools::ParseFunctionAlignment(const ToolChain &TC,
   return Value ? llvm::Log2_32_Ceil(std::min(Value, 65536u)) : Value;
 }
 
+void tools::addDebugInfoKind(
+    ArgStringList &CmdArgs, llvm::codegenoptions::DebugInfoKind DebugInfoKind) {
+  switch (DebugInfoKind) {
+  case llvm::codegenoptions::DebugDirectivesOnly:
+    CmdArgs.push_back("-debug-info-kind=line-directives-only");
+    break;
+  case llvm::codegenoptions::DebugLineTablesOnly:
+    CmdArgs.push_back("-debug-info-kind=line-tables-only");
+    break;
+  case llvm::codegenoptions::DebugInfoConstructor:
+    CmdArgs.push_back("-debug-info-kind=constructor");
+    break;
+  case llvm::codegenoptions::LimitedDebugInfo:
+    CmdArgs.push_back("-debug-info-kind=limited");
+    break;
+  case llvm::codegenoptions::FullDebugInfo:
+    CmdArgs.push_back("-debug-info-kind=standalone");
+    break;
+  case llvm::codegenoptions::UnusedTypeInfo:
+    CmdArgs.push_back("-debug-info-kind=unused-types");
+    break;
+  default:
+    break;
+  }
+}
+
+// Convert an arg of the form "-gN" or "-ggdbN" or one of their aliases
+// to the corresponding DebugInfoKind.
+llvm::codegenoptions::DebugInfoKind tools::debugLevelToInfoKind(const Arg &A) {
+  assert(A.getOption().matches(options::OPT_gN_Group) &&
+         "Not a -g option that specifies a debug-info level");
+  if (A.getOption().matches(options::OPT_g0) ||
+      A.getOption().matches(options::OPT_ggdb0))
+    return llvm::codegenoptions::NoDebugInfo;
+  if (A.getOption().matches(options::OPT_gline_tables_only) ||
+      A.getOption().matches(options::OPT_ggdb1))
+    return llvm::codegenoptions::DebugLineTablesOnly;
+  if (A.getOption().matches(options::OPT_gline_directives_only))
+    return llvm::codegenoptions::DebugDirectivesOnly;
+  return llvm::codegenoptions::DebugInfoConstructor;
+}
+
 static unsigned ParseDebugDefaultVersion(const ToolChain &TC,
                                          const ArgList &Args) {
   const Arg *A = Args.getLastArg(options::OPT_fdebug_default_version);
@@ -1761,6 +1855,12 @@ static LibGccType getLibGccType(const ToolChain &TC, const Driver &D,
 static void AddUnwindLibrary(const ToolChain &TC, const Driver &D,
                              ArgStringList &CmdArgs, const ArgList &Args) {
   ToolChain::UnwindLibType UNW = TC.GetUnwindLibType(Args);
+  // By default OHOS binaries are linked statically to libunwind.
+  if (TC.getTriple().isOHOSFamily() && UNW == ToolChain::UNW_CompilerRT) {
+    CmdArgs.push_back("-l:libunwind.a");
+    return;
+  }
+
   // Targets that don't use unwind libraries.
   if ((TC.getTriple().isAndroid() && UNW == ToolChain::UNW_Libgcc) ||
       TC.getTriple().isOSIAMCU() || TC.getTriple().isOSBinFormatWasm() ||
@@ -1860,22 +1960,29 @@ SmallString<128> tools::getStatsFileName(const llvm::opt::ArgList &Args,
                                          const InputInfo &Input,
                                          const Driver &D) {
   const Arg *A = Args.getLastArg(options::OPT_save_stats_EQ);
-  if (!A)
+  if (!A && !D.CCPrintInternalStats)
     return {};
 
-  StringRef SaveStats = A->getValue();
   SmallString<128> StatsFile;
-  if (SaveStats == "obj" && Output.isFilename()) {
-    StatsFile.assign(Output.getFilename());
-    llvm::sys::path::remove_filename(StatsFile);
-  } else if (SaveStats != "cwd") {
-    D.Diag(diag::err_drv_invalid_value) << A->getAsString(Args) << SaveStats;
-    return {};
-  }
+  if (A) {
+    StringRef SaveStats = A->getValue();
+    if (SaveStats == "obj" && Output.isFilename()) {
+      StatsFile.assign(Output.getFilename());
+      llvm::sys::path::remove_filename(StatsFile);
+    } else if (SaveStats != "cwd") {
+      D.Diag(diag::err_drv_invalid_value) << A->getAsString(Args) << SaveStats;
+      return {};
+    }
 
-  StringRef BaseName = llvm::sys::path::filename(Input.getBaseInput());
-  llvm::sys::path::append(StatsFile, BaseName);
-  llvm::sys::path::replace_extension(StatsFile, "stats");
+    StringRef BaseName = llvm::sys::path::filename(Input.getBaseInput());
+    llvm::sys::path::append(StatsFile, BaseName);
+    llvm::sys::path::replace_extension(StatsFile, "stats");
+  } else {
+    assert(D.CCPrintInternalStats);
+    StatsFile.assign(D.CCPrintInternalStatReportFilename.empty()
+                         ? "-"
+                         : D.CCPrintInternalStatReportFilename);
+  }
   return StatsFile;
 }
 
@@ -2035,8 +2142,7 @@ bool tools::SDLSearch(const Driver &D, const llvm::opt::ArgList &DriverArgs,
 /// Search if a user provided archive file lib<libname>.a exists in any of
 /// the library paths. If so, add a new command to clang-offload-bundler to
 /// unbundle this archive and create a temporary device specific archive. Name
-/// of this SDL is passed to the llvm-link (for amdgcn) or to the
-/// clang-nvlink-wrapper (for nvptx) commands by the driver.
+/// of this SDL is passed to the llvm-link tool.
 bool tools::GetSDLFromOffloadArchive(
     Compilation &C, const Driver &D, const Tool &T, const JobAction &JA,
     const InputInfoList &Inputs, const llvm::opt::ArgList &DriverArgs,
@@ -2160,17 +2266,6 @@ void tools::AddStaticDeviceLibsLinking(Compilation &C, const Tool &T,
                       Arch, Target, isBitCodeSDL, postClangLink);
 }
 
-// Wrapper function used for post clang linking of bitcode SDLS for nvptx by
-// the CUDA toolchain.
-void tools::AddStaticDeviceLibsPostLinking(const Driver &D,
-                                const llvm::opt::ArgList &DriverArgs,
-                                llvm::opt::ArgStringList &CC1Args,
-                                StringRef Arch, StringRef Target,
-                                bool isBitCodeSDL, bool postClangLink) {
-  AddStaticDeviceLibs(nullptr, nullptr, nullptr, nullptr, D, DriverArgs,
-                      CC1Args, Arch, Target, isBitCodeSDL, postClangLink);
-}
-
 // User defined Static Device Libraries(SDLs) can be passed to clang for
 // offloading GPU compilers. Like static host libraries, the use of a SDL is
 // specified with the -l command line option. The primary difference between
@@ -2183,11 +2278,9 @@ void tools::AddStaticDeviceLibsPostLinking(const Driver &D,
 //           compilation. For AMDGPU, these libraries are linked one time
 //           during the application link phase.
 //
-// * Machine-code SDLs: They are archive files. For NVPTX, the archive members
-//           contain cubin for Nvidia GPUs and are linked one time during the
-//           link phase by the CUDA SDK linker called nvlink.	For AMDGPU, the
-//           process for machine code SDLs is still in development. But they
-//           will be linked by the LLVM tool lld.
+// * Machine-code SDLs: They are archive files. For AMDGPU, the process for
+//           machine code SDLs is still in development. But they will be linked
+//           by the LLVM tool lld.
 //
 // * Bundled objects that contain both host and device codes: Bundled objects
 //           may also contain library code compiled from source. For NVPTX, the
@@ -2252,10 +2345,9 @@ void tools::AddStaticDeviceLibs(Compilation *C, const Tool *T,
   }
 
   // The search stops as soon as an SDL file is found. The driver then provides
-  // the full filename of the SDL to the llvm-link or clang-nvlink-wrapper
-  // command. If no SDL is found after searching each LINKPATH with
-  // SEARCH-ORDER, it is possible that an archive file lib<libname>.a exists
-  // and may contain bundled object files.
+  // the full filename of the SDL to the llvm-link command. If no SDL is found
+  // after searching each LINKPATH with SEARCH-ORDER, it is possible that an
+  // archive file lib<libname>.a exists and may contain bundled object files.
   for (auto SDLName : SDLNames) {
     // This is the only call to SDLSearch
     if (!SDLSearch(D, DriverArgs, CC1Args, LibraryPaths, SDLName, Arch, Target,
@@ -2269,26 +2361,13 @@ void tools::AddStaticDeviceLibs(Compilation *C, const Tool *T,
 
 static llvm::opt::Arg *
 getAMDGPUCodeObjectArgument(const Driver &D, const llvm::opt::ArgList &Args) {
-  // The last of -mcode-object-v3, -mno-code-object-v3 and
-  // -mcode-object-version=<version> wins.
-  return Args.getLastArg(options::OPT_mcode_object_v3_legacy,
-                         options::OPT_mno_code_object_v3_legacy,
-                         options::OPT_mcode_object_version_EQ);
+  return Args.getLastArg(options::OPT_mcode_object_version_EQ);
 }
 
 void tools::checkAMDGPUCodeObjectVersion(const Driver &D,
                                          const llvm::opt::ArgList &Args) {
   const unsigned MinCodeObjVer = 2;
   const unsigned MaxCodeObjVer = 5;
-
-  // Emit warnings for legacy options even if they are overridden.
-  if (Args.hasArg(options::OPT_mno_code_object_v3_legacy))
-    D.Diag(diag::warn_drv_deprecated_arg) << "-mno-code-object-v3"
-                                          << "-mcode-object-version=2";
-
-  if (Args.hasArg(options::OPT_mcode_object_v3_legacy))
-    D.Diag(diag::warn_drv_deprecated_arg) << "-mcode-object-v3"
-                                          << "-mcode-object-version=3";
 
   if (auto *CodeObjArg = getAMDGPUCodeObjectArgument(D, Args)) {
     if (CodeObjArg->getOption().getID() ==
@@ -2306,17 +2385,8 @@ void tools::checkAMDGPUCodeObjectVersion(const Driver &D,
 unsigned tools::getAMDGPUCodeObjectVersion(const Driver &D,
                                            const llvm::opt::ArgList &Args) {
   unsigned CodeObjVer = 4; // default
-  if (auto *CodeObjArg = getAMDGPUCodeObjectArgument(D, Args)) {
-    if (CodeObjArg->getOption().getID() ==
-        options::OPT_mno_code_object_v3_legacy) {
-      CodeObjVer = 2;
-    } else if (CodeObjArg->getOption().getID() ==
-               options::OPT_mcode_object_v3_legacy) {
-      CodeObjVer = 3;
-    } else {
-      StringRef(CodeObjArg->getValue()).getAsInteger(0, CodeObjVer);
-    }
-  }
+  if (auto *CodeObjArg = getAMDGPUCodeObjectArgument(D, Args))
+    StringRef(CodeObjArg->getValue()).getAsInteger(0, CodeObjVer);
   return CodeObjVer;
 }
 

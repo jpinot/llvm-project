@@ -21,6 +21,7 @@
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MD5.h"
+#include <optional>
 
 static llvm::cl::opt<bool>
     EnableValueProfiling("enable-value-profiling",
@@ -1035,7 +1036,7 @@ void CodeGenPGO::loadRegionCounts(llvm::IndexedInstrProfReader *PGOReader,
   llvm::Expected<llvm::InstrProfRecord> RecordExpected =
       PGOReader->getInstrProfRecord(FuncName, FunctionHash);
   if (auto E = RecordExpected.takeError()) {
-    auto IPE = llvm::InstrProfError::take(std::move(E));
+    auto IPE = std::get<0>(llvm::InstrProfError::take(std::move(E)));
     if (IPE == llvm::instrprof_error::unknown_function)
       CGM.getPGOStats().addMissing(IsInMainFile);
     else if (IPE == llvm::instrprof_error::hash_mismatch)
@@ -1116,7 +1117,7 @@ CodeGenFunction::createProfileWeightsForLoop(const Stmt *Cond,
                                              uint64_t LoopCount) const {
   if (!PGO.haveRegionCounts())
     return nullptr;
-  Optional<uint64_t> CondCount = PGO.getStmtCount(Cond);
+  std::optional<uint64_t> CondCount = PGO.getStmtCount(Cond);
   if (!CondCount || *CondCount == 0)
     return nullptr;
   return createProfileWeights(LoopCount,

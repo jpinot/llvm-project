@@ -17,9 +17,7 @@
 
 using namespace clang::ast_matchers;
 
-namespace clang {
-namespace tidy {
-namespace bugprone {
+namespace clang::tidy::bugprone {
 
 constexpr llvm::StringLiteral FunctionExprName = "FunctionExpr";
 constexpr llvm::StringLiteral CastExprName = "CastExpr";
@@ -530,10 +528,10 @@ AST_MATCHER_P(Expr, hasDefinition, ast_matchers::internal::Matcher<Expr>,
 
   const char *const VarDeclName = "variable-declaration";
   auto DREHasDefinition = ignoringImpCasts(declRefExpr(
-      allOf(to(varDecl().bind(VarDeclName)),
-            hasAncestor(compoundStmt(hasDescendant(binaryOperator(
-                hasLHS(declRefExpr(to(varDecl(equalsBoundNode(VarDeclName))))),
-                hasRHS(ignoringImpCasts(InnerMatcher)))))))));
+      to(varDecl().bind(VarDeclName)),
+      hasAncestor(compoundStmt(hasDescendant(binaryOperator(
+          hasLHS(declRefExpr(to(varDecl(equalsBoundNode(VarDeclName))))),
+          hasRHS(ignoringImpCasts(InnerMatcher))))))));
 
   if (DREHasDefinition.matches(*SimpleNode, Finder, Builder))
     return true;
@@ -583,9 +581,8 @@ void NotNullTerminatedResultCheck::registerMatchers(MatchFinder *Finder) {
 
   // - Example:  std::string str = "foo";  str.size();
   auto SizeOrLength =
-      cxxMemberCallExpr(
-          allOf(on(expr(AnyOfStringTy).bind("Foo")),
-                has(memberExpr(member(hasAnyName("size", "length"))))))
+      cxxMemberCallExpr(on(expr(AnyOfStringTy).bind("Foo")),
+                        has(memberExpr(member(hasAnyName("size", "length")))))
           .bind(WrongLengthExprName);
 
   // - Example:  char src[] = "foo";       sizeof(src);
@@ -643,8 +640,8 @@ void NotNullTerminatedResultCheck::registerMatchers(MatchFinder *Finder) {
 
   // - Example:  foo[bar[baz]].qux; (or just ParmVarDecl)
   auto DestUnknownDecl =
-      declRefExpr(allOf(to(varDecl(AnyOfCharTy).bind(DestVarDeclName)),
-                        expr().bind(UnknownDestName)))
+      declRefExpr(to(varDecl(AnyOfCharTy).bind(DestVarDeclName)),
+                  expr().bind(UnknownDestName))
           .bind(DestExprName);
 
   auto AnyOfDestDecl = ignoringImpCasts(
@@ -661,10 +658,10 @@ void NotNullTerminatedResultCheck::registerMatchers(MatchFinder *Finder) {
       hasRHS(ignoringImpCasts(
           anyOf(characterLiteral(equals(0U)), integerLiteral(equals(0))))));
 
-  auto SrcDecl = declRefExpr(
-      allOf(to(decl().bind(SrcVarDeclName)),
-            anyOf(hasAncestor(cxxMemberCallExpr().bind(SrcExprName)),
-                  expr().bind(SrcExprName))));
+  auto SrcDecl =
+      declRefExpr(to(decl().bind(SrcVarDeclName)),
+                  anyOf(hasAncestor(cxxMemberCallExpr().bind(SrcExprName)),
+                        expr().bind(SrcExprName)));
 
   auto AnyOfSrcDecl =
       ignoringImpCasts(anyOf(stringLiteral().bind(SrcExprName),
@@ -1010,6 +1007,4 @@ void NotNullTerminatedResultCheck::xfrmFix(
   lengthArgHandle(LengthHandleKind::Increase, Result, Diag);
 }
 
-} // namespace bugprone
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::bugprone

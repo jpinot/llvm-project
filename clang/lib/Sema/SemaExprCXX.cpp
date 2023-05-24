@@ -44,6 +44,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/TypeSize.h"
+#include <optional>
 using namespace clang;
 using namespace sema;
 
@@ -390,7 +391,7 @@ ParsedType Sema::getDestructorName(SourceLocation TildeLoc,
     //
     // also looks for type-name in the scope. Unfortunately, we can't
     // reasonably apply this fallback for dependent nested-name-specifiers.
-    if (SS.getScopeRep()->getPrefix()) {
+    if (SS.isValid() && SS.getScopeRep()->getPrefix()) {
       if (ParsedType T = LookupInScope()) {
         Diag(SS.getEndLoc(), diag::ext_qualified_dtor_named_in_lexical_scope)
             << FixItHint::CreateRemoval(SS.getRange());
@@ -1121,30 +1122,26 @@ static QualType adjustCVQualifiersForCXXThisWithinLambda(
   //  regarding capture information.
 
   // 1) Climb down the function scope info stack.
-  for (int I = FunctionScopes.size() - 1; I >= 0; --I) {
-    if (isa<LambdaScopeInfo>(FunctionScopes[I]) &&
+  for (int I = FunctionScopes.size();
+       I-- && isa<LambdaScopeInfo>(FunctionScopes[I]) &&
        (!CurLSI || !CurLSI->Lambda || CurLSI->Lambda->getDeclContext() ==
-         cast<LambdaScopeInfo>(FunctionScopes[I])->CallOperator)) {
-      CurLSI = cast<LambdaScopeInfo>(FunctionScopes[I]);
+                       cast<LambdaScopeInfo>(FunctionScopes[I])->CallOperator);
+       CurDC = getLambdaAwareParentOfDeclContext(CurDC)) {
 
-      if (!CurLSI->isCXXThisCaptured()) {
-        CurDC = getLambdaAwareParentOfDeclContext(CurDC);
-        continue;
-      }
-
-      auto C = CurLSI->getCXXThisCapture();
-
-      if (C.isCopyCapture()) {
-        ClassType.removeLocalCVRQualifiers(Qualifiers::CVRMask);
-        if (CurLSI->CallOperator->isConst())
-          ClassType.addConst();
-        return ASTCtx.getPointerType(ClassType);
-      }
-      CurDC = getLambdaAwareParentOfDeclContext(CurDC);
-    } else if (IsOmpSs && FunctionScopes[I]->HasOSSExecutableDirective) {
+    if (IsOmpSs && FunctionScopes[I]->HasOSSExecutableDirective)
       continue;
-    } else {
-      break;
+
+    CurLSI = cast<LambdaScopeInfo>(FunctionScopes[I]);
+
+    if (!CurLSI->isCXXThisCaptured())
+        continue;
+
+    auto C = CurLSI->getCXXThisCapture();
+
+    if (C.isCopyCapture()) {
+      if (!CurLSI->Mutable)
+        ClassType.addConst();
+      return ASTCtx.getPointerType(ClassType);
     }
   }
 
@@ -1181,7 +1178,6 @@ static QualType adjustCVQualifiersForCXXThisWithinLambda(
     while (Closure &&
            IsThisCaptured(Closure, IsByCopyCapture, IsConstCapture)) {
       if (IsByCopyCapture) {
-        ClassType.removeLocalCVRQualifiers(Qualifiers::CVRMask);
         if (IsConstCapture)
           ClassType.addConst();
         return ASTCtx.getPointerType(ClassType);
@@ -1374,15 +1370,7 @@ bool Sema::CheckCXXThisCapture(SourceLocation Loc, const bool Explicit,
 
     // The type of the corresponding data member (not a 'this' pointer if 'by
     // copy').
-    QualType CaptureType = ThisTy;
-    if (ByCopy) {
-      // If we are capturing the object referred to by '*this' by copy, ignore
-      // any cv qualifiers inherited from the type of the member function for
-      // the type of the closure-type's corresponding data member and any use
-      // of 'this'.
-      CaptureType = ThisTy->getPointeeType();
-      CaptureType.removeLocalCVRQualifiers(Qualifiers::CVRMask);
-    }
+    QualType CaptureType = ByCopy ? ThisTy->getPointeeType() : ThisTy;
 
     bool isNested = NumCapturingClosures > 1;
     CSI->addThisCapture(isNested, Loc, CaptureType, ByCopy);
@@ -1494,69 +1482,60 @@ Sema::BuildCXXTypeConstructExpr(TypeSourceInfo *TInfo,
   // C++2b:
   //   Otherwise, if the type contains a placeholder type, it is replaced by the
   //   type determined by placeholder type deduction.
-  if (const DeducedType *Deduced = Ty->getContainedDeducedType();
-      Deduced && !Deduced->isDeduced()) {
-    if (isa<DeducedTemplateSpecializationType>(Deduced)) {
-      Ty = DeduceTemplateSpecializationFromInitializer(TInfo, Entity, Kind,
-                                                       Exprs);
-      if (Ty.isNull())
-        return ExprError();
-      Entity = InitializedEntity::InitializeTemporary(TInfo, Ty);
-    } else {
-      assert(isa<AutoType>(Deduced));
-      MultiExprArg Inits = Exprs;
-      if (ListInitialization) {
-        auto *ILE = cast<InitListExpr>(Exprs[0]);
-        Inits = MultiExprArg(ILE->getInits(), ILE->getNumInits());
-      }
-
-      if (Inits.empty())
-        return ExprError(
-            Diag(TyBeginLoc, diag::err_auto_expr_init_no_expression)
-            << Ty << FullRange);
-      if (Inits.size() > 1) {
-        Expr *FirstBad = Inits[1];
-        return ExprError(Diag(FirstBad->getBeginLoc(),
-                              diag::err_auto_expr_init_multiple_expressions)
-                         << Ty << FullRange);
-      }
-      if (getLangOpts().CPlusPlus2b) {
-        if (Ty->getAs<AutoType>())
-          Diag(TyBeginLoc, diag::warn_cxx20_compat_auto_expr) << FullRange;
-      }
-      Expr *Deduce = Inits[0];
-      if (isa<InitListExpr>(Deduce))
-        return ExprError(
-            Diag(Deduce->getBeginLoc(), diag::err_auto_expr_init_paren_braces)
-            << ListInitialization << Ty << FullRange);
-      QualType DeducedType;
-      TemplateDeductionInfo Info(Deduce->getExprLoc());
-      TemplateDeductionResult Result =
-          DeduceAutoType(TInfo->getTypeLoc(), Deduce, DeducedType, Info);
-      if (Result != TDK_Success && Result != TDK_AlreadyDiagnosed)
-        return ExprError(Diag(TyBeginLoc, diag::err_auto_expr_deduction_failure)
-                         << Ty << Deduce->getType() << FullRange
-                         << Deduce->getSourceRange());
-      if (DeducedType.isNull()) {
-        assert(Result == TDK_AlreadyDiagnosed);
-        return ExprError();
-      }
-
-      Ty = DeducedType;
-      Entity = InitializedEntity::InitializeTemporary(TInfo, Ty);
+  DeducedType *Deduced = Ty->getContainedDeducedType();
+  if (Deduced && !Deduced->isDeduced() &&
+      isa<DeducedTemplateSpecializationType>(Deduced)) {
+    Ty = DeduceTemplateSpecializationFromInitializer(TInfo, Entity,
+                                                     Kind, Exprs);
+    if (Ty.isNull())
+      return ExprError();
+    Entity = InitializedEntity::InitializeTemporary(TInfo, Ty);
+  } else if (Deduced && !Deduced->isDeduced()) {
+    MultiExprArg Inits = Exprs;
+    if (ListInitialization) {
+      auto *ILE = cast<InitListExpr>(Exprs[0]);
+      Inits = MultiExprArg(ILE->getInits(), ILE->getNumInits());
     }
+
+    if (Inits.empty())
+      return ExprError(Diag(TyBeginLoc, diag::err_auto_expr_init_no_expression)
+                       << Ty << FullRange);
+    if (Inits.size() > 1) {
+      Expr *FirstBad = Inits[1];
+      return ExprError(Diag(FirstBad->getBeginLoc(),
+                            diag::err_auto_expr_init_multiple_expressions)
+                       << Ty << FullRange);
+    }
+    if (getLangOpts().CPlusPlus2b) {
+      if (Ty->getAs<AutoType>())
+        Diag(TyBeginLoc, diag::warn_cxx20_compat_auto_expr) << FullRange;
+    }
+    Expr *Deduce = Inits[0];
+    if (isa<InitListExpr>(Deduce))
+      return ExprError(
+          Diag(Deduce->getBeginLoc(), diag::err_auto_expr_init_paren_braces)
+          << ListInitialization << Ty << FullRange);
+    QualType DeducedType;
+    TemplateDeductionInfo Info(Deduce->getExprLoc());
+    TemplateDeductionResult Result =
+        DeduceAutoType(TInfo->getTypeLoc(), Deduce, DeducedType, Info);
+    if (Result != TDK_Success && Result != TDK_AlreadyDiagnosed)
+      return ExprError(Diag(TyBeginLoc, diag::err_auto_expr_deduction_failure)
+                       << Ty << Deduce->getType() << FullRange
+                       << Deduce->getSourceRange());
+    if (DeducedType.isNull()) {
+      assert(Result == TDK_AlreadyDiagnosed);
+      return ExprError();
+    }
+
+    Ty = DeducedType;
+    Entity = InitializedEntity::InitializeTemporary(TInfo, Ty);
   }
 
-  if (Ty->isDependentType() || CallExpr::hasAnyTypeDependentArguments(Exprs)) {
-    // FIXME: CXXUnresolvedConstructExpr does not model list-initialization
-    // directly. We work around this by dropping the locations of the braces.
-    SourceRange Locs = ListInitialization
-                           ? SourceRange()
-                           : SourceRange(LParenOrBraceLoc, RParenOrBraceLoc);
-    return CXXUnresolvedConstructExpr::Create(Context, Ty.getNonReferenceType(),
-                                              TInfo, Locs.getBegin(), Exprs,
-                                              Locs.getEnd());
-  }
+  if (Ty->isDependentType() || CallExpr::hasAnyTypeDependentArguments(Exprs))
+    return CXXUnresolvedConstructExpr::Create(
+        Context, Ty.getNonReferenceType(), TInfo, LParenOrBraceLoc, Exprs,
+        RParenOrBraceLoc, ListInitialization);
 
   // C++ [expr.type.conv]p1:
   // If the expression list is a parenthesized single expression, the type
@@ -1605,6 +1584,9 @@ Sema::BuildCXXTypeConstructExpr(TypeSourceInfo *TInfo,
   Expr *Inner = Result.get();
   if (CXXBindTemporaryExpr *BTE = dyn_cast_or_null<CXXBindTemporaryExpr>(Inner))
     Inner = BTE->getSubExpr();
+  if (auto *CE = dyn_cast<ConstantExpr>(Inner);
+      CE && CE->isImmediateInvocation())
+    Inner = CE->getSubExpr();
   if (!isa<CXXTemporaryObjectExpr>(Inner) &&
       !isa<CXXScalarValueInitExpr>(Inner)) {
     // If we created a CXXTemporaryObjectExpr, that node also represents the
@@ -1862,7 +1844,7 @@ Sema::ActOnCXXNew(SourceLocation StartLoc, bool UseGlobal,
                   SourceLocation PlacementLParen, MultiExprArg PlacementArgs,
                   SourceLocation PlacementRParen, SourceRange TypeIdParens,
                   Declarator &D, Expr *Initializer) {
-  Optional<Expr *> ArraySize;
+  std::optional<Expr *> ArraySize;
   // If the specified type is an array, unwrap it and save the expression.
   if (D.getNumTypeObjects() > 0 &&
       D.getTypeObject(0).Kind == DeclaratorChunk::Array) {
@@ -1954,7 +1936,7 @@ Sema::isUnavailableAlignedAllocationFunction(const FunctionDecl &FD) const {
     return false;
   if (FD.isDefined())
     return false;
-  Optional<unsigned> AlignmentParam;
+  std::optional<unsigned> AlignmentParam;
   if (FD.isReplaceableGlobalAllocationFunction(&AlignmentParam) &&
       AlignmentParam)
     return true;
@@ -1980,17 +1962,14 @@ void Sema::diagnoseUnavailableAlignedAllocation(const FunctionDecl &FD,
   }
 }
 
-ExprResult
-Sema::BuildCXXNew(SourceRange Range, bool UseGlobal,
-                  SourceLocation PlacementLParen,
-                  MultiExprArg PlacementArgs,
-                  SourceLocation PlacementRParen,
-                  SourceRange TypeIdParens,
-                  QualType AllocType,
-                  TypeSourceInfo *AllocTypeInfo,
-                  Optional<Expr *> ArraySize,
-                  SourceRange DirectInitRange,
-                  Expr *Initializer) {
+ExprResult Sema::BuildCXXNew(SourceRange Range, bool UseGlobal,
+                             SourceLocation PlacementLParen,
+                             MultiExprArg PlacementArgs,
+                             SourceLocation PlacementRParen,
+                             SourceRange TypeIdParens, QualType AllocType,
+                             TypeSourceInfo *AllocTypeInfo,
+                             std::optional<Expr *> ArraySize,
+                             SourceRange DirectInitRange, Expr *Initializer) {
   SourceRange TypeRange = AllocTypeInfo->getTypeLoc().getSourceRange();
   SourceLocation StartLoc = Range.getBegin();
 
@@ -2034,62 +2013,60 @@ Sema::BuildCXXNew(SourceRange Range, bool UseGlobal,
                                                      DirectInitRange.getEnd());
 
   // C++11 [dcl.spec.auto]p6. Deduce the type which 'auto' stands in for.
-  if (const DeducedType *Deduced = AllocType->getContainedDeducedType();
-      Deduced && !Deduced->isDeduced()) {
-    if (isa<DeducedTemplateSpecializationType>(Deduced)) {
-      if (ArraySize)
-        return ExprError(
-            Diag(*ArraySize ? (*ArraySize)->getExprLoc() : TypeRange.getBegin(),
-                 diag::err_deduced_class_template_compound_type)
-            << /*array*/ 2
-            << (*ArraySize ? (*ArraySize)->getSourceRange() : TypeRange));
+  auto *Deduced = AllocType->getContainedDeducedType();
+  if (Deduced && !Deduced->isDeduced() &&
+      isa<DeducedTemplateSpecializationType>(Deduced)) {
+    if (ArraySize)
+      return ExprError(
+          Diag(*ArraySize ? (*ArraySize)->getExprLoc() : TypeRange.getBegin(),
+               diag::err_deduced_class_template_compound_type)
+          << /*array*/ 2
+          << (*ArraySize ? (*ArraySize)->getSourceRange() : TypeRange));
 
-      InitializedEntity Entity =
-          InitializedEntity::InitializeNew(StartLoc, AllocType);
-      AllocType = DeduceTemplateSpecializationFromInitializer(
-          AllocTypeInfo, Entity, Kind, Exprs);
-      if (AllocType.isNull())
-        return ExprError();
-    } else {
-      assert(isa<AutoType>(Deduced));
-      MultiExprArg Inits = Exprs;
-      bool Braced = (initStyle == CXXNewExpr::ListInit);
-      if (Braced) {
-        auto *ILE = cast<InitListExpr>(Exprs[0]);
-        Inits = MultiExprArg(ILE->getInits(), ILE->getNumInits());
-      }
-
-      if (initStyle == CXXNewExpr::NoInit || Inits.empty())
-        return ExprError(Diag(StartLoc, diag::err_auto_new_requires_ctor_arg)
-                         << AllocType << TypeRange);
-      if (Inits.size() > 1) {
-        Expr *FirstBad = Inits[1];
-        return ExprError(Diag(FirstBad->getBeginLoc(),
-                              diag::err_auto_new_ctor_multiple_expressions)
-                         << AllocType << TypeRange);
-      }
-      if (Braced && !getLangOpts().CPlusPlus17)
-        Diag(Initializer->getBeginLoc(), diag::ext_auto_new_list_init)
-            << AllocType << TypeRange;
-      Expr *Deduce = Inits[0];
-      if (isa<InitListExpr>(Deduce))
-        return ExprError(
-            Diag(Deduce->getBeginLoc(), diag::err_auto_expr_init_paren_braces)
-            << Braced << AllocType << TypeRange);
-      QualType DeducedType;
-      TemplateDeductionInfo Info(Deduce->getExprLoc());
-      TemplateDeductionResult Result = DeduceAutoType(
-          AllocTypeInfo->getTypeLoc(), Deduce, DeducedType, Info);
-      if (Result != TDK_Success && Result != TDK_AlreadyDiagnosed)
-        return ExprError(Diag(StartLoc, diag::err_auto_new_deduction_failure)
-                         << AllocType << Deduce->getType() << TypeRange
-                         << Deduce->getSourceRange());
-      if (DeducedType.isNull()) {
-        assert(Result == TDK_AlreadyDiagnosed);
-        return ExprError();
-      }
-      AllocType = DeducedType;
+    InitializedEntity Entity
+      = InitializedEntity::InitializeNew(StartLoc, AllocType);
+    AllocType = DeduceTemplateSpecializationFromInitializer(
+        AllocTypeInfo, Entity, Kind, Exprs);
+    if (AllocType.isNull())
+      return ExprError();
+  } else if (Deduced && !Deduced->isDeduced()) {
+    MultiExprArg Inits = Exprs;
+    bool Braced = (initStyle == CXXNewExpr::ListInit);
+    if (Braced) {
+      auto *ILE = cast<InitListExpr>(Exprs[0]);
+      Inits = MultiExprArg(ILE->getInits(), ILE->getNumInits());
     }
+
+    if (initStyle == CXXNewExpr::NoInit || Inits.empty())
+      return ExprError(Diag(StartLoc, diag::err_auto_new_requires_ctor_arg)
+                       << AllocType << TypeRange);
+    if (Inits.size() > 1) {
+      Expr *FirstBad = Inits[1];
+      return ExprError(Diag(FirstBad->getBeginLoc(),
+                            diag::err_auto_new_ctor_multiple_expressions)
+                       << AllocType << TypeRange);
+    }
+    if (Braced && !getLangOpts().CPlusPlus17)
+      Diag(Initializer->getBeginLoc(), diag::ext_auto_new_list_init)
+          << AllocType << TypeRange;
+    Expr *Deduce = Inits[0];
+    if (isa<InitListExpr>(Deduce))
+      return ExprError(
+          Diag(Deduce->getBeginLoc(), diag::err_auto_expr_init_paren_braces)
+          << Braced << AllocType << TypeRange);
+    QualType DeducedType;
+    TemplateDeductionInfo Info(Deduce->getExprLoc());
+    TemplateDeductionResult Result =
+        DeduceAutoType(AllocTypeInfo->getTypeLoc(), Deduce, DeducedType, Info);
+    if (Result != TDK_Success && Result != TDK_AlreadyDiagnosed)
+      return ExprError(Diag(StartLoc, diag::err_auto_new_deduction_failure)
+                       << AllocType << Deduce->getType() << TypeRange
+                       << Deduce->getSourceRange());
+    if (DeducedType.isNull()) {
+      assert(Result == TDK_AlreadyDiagnosed);
+      return ExprError();
+    }
+    AllocType = DeducedType;
   }
 
   // Per C++0x [expr.new]p5, the type being constructed may be a
@@ -2133,7 +2110,7 @@ Sema::BuildCXXNew(SourceRange Range, bool UseGlobal,
   //   conversion function to integral or unscoped enumeration type exists.
   // C++1y [expr.new]p6: The expression [...] is implicitly converted to
   //   std::size_t.
-  llvm::Optional<uint64_t> KnownArraySize;
+  std::optional<uint64_t> KnownArraySize;
   if (ArraySize && *ArraySize && !(*ArraySize)->isTypeDependent()) {
     ExprResult ConvertedSize;
     if (getLangOpts().CPlusPlus14) {
@@ -2227,7 +2204,7 @@ Sema::BuildCXXNew(SourceRange Range, bool UseGlobal,
     // FIXME: Per CWG1464, we are required to check the value prior to
     // converting to size_t. This will never find a negative array size in
     // C++14 onwards, because Value is always unsigned here!
-    if (Optional<llvm::APSInt> Value =
+    if (std::optional<llvm::APSInt> Value =
             (*ArraySize)->getIntegerConstantExpr(Context)) {
       if (Value->isSigned() && Value->isNegative()) {
         return ExprError(Diag((*ArraySize)->getBeginLoc(),
@@ -2314,7 +2291,7 @@ Sema::BuildCXXNew(SourceRange Range, bool UseGlobal,
         SizeTyWidth, Context.getTypeSizeInChars(AllocType).getQuantity());
 
     // How many bytes do we want to allocate here?
-    llvm::Optional<llvm::APInt> AllocationSize;
+    std::optional<llvm::APInt> AllocationSize;
     if (!ArraySize && !AllocType->isDependentType()) {
       // For non-array operator new, we only want to allocate one element.
       AllocationSize = SingleEltSize;
@@ -2999,7 +2976,7 @@ void Sema::DeclareGlobalNewDelete() {
   //   functions are replaceable ([new.delete]); these are attached to the
   //   global module ([module.unit]).
   if (getLangOpts().CPlusPlusModules && getCurrentModule())
-    PushGlobalModuleFragment(SourceLocation(), /*IsImplicit=*/true);
+    PushGlobalModuleFragment(SourceLocation());
 
   // C++ [basic.std.dynamic]p2:
   //   [...] The following allocation and deallocation functions (18.4) are
@@ -3043,10 +3020,10 @@ void Sema::DeclareGlobalNewDelete() {
 
     // The implicitly declared "std::bad_alloc" should live in global module
     // fragment.
-    if (GlobalModuleFragment) {
+    if (TheGlobalModuleFragment) {
       getStdBadAlloc()->setModuleOwnershipKind(
           Decl::ModuleOwnershipKind::ReachableWhenImported);
-      getStdBadAlloc()->setLocalOwningModule(GlobalModuleFragment);
+      getStdBadAlloc()->setLocalOwningModule(TheGlobalModuleFragment);
     }
   }
   if (!StdAlignValT && getLangOpts().AlignedAllocation) {
@@ -3058,10 +3035,10 @@ void Sema::DeclareGlobalNewDelete() {
 
     // The implicitly declared "std::align_val_t" should live in global module
     // fragment.
-    if (GlobalModuleFragment) {
+    if (TheGlobalModuleFragment) {
       AlignValT->setModuleOwnershipKind(
           Decl::ModuleOwnershipKind::ReachableWhenImported);
-      AlignValT->setLocalOwningModule(GlobalModuleFragment);
+      AlignValT->setLocalOwningModule(TheGlobalModuleFragment);
     }
 
     AlignValT->setIntegerType(Context.getSizeType());
@@ -3190,10 +3167,10 @@ void Sema::DeclareGlobalAllocationFunction(DeclarationName Name,
     // module all the time. But in the implementation, the global module
     // is only meaningful when we're in a module unit. So here we attach
     // these allocation functions to global module conditionally.
-    if (GlobalModuleFragment) {
+    if (TheGlobalModuleFragment) {
       Alloc->setModuleOwnershipKind(
           Decl::ModuleOwnershipKind::ReachableWhenImported);
-      Alloc->setLocalOwningModule(GlobalModuleFragment);
+      Alloc->setLocalOwningModule(TheGlobalModuleFragment);
     }
 
     Alloc->addAttr(VisibilityAttr::CreateImplicit(
@@ -4903,8 +4880,11 @@ static bool CheckUnaryTypeTraitTypeCompleteness(Sema &S, TypeTrait UTT,
   case UTT_IsStandardLayout:
   case UTT_IsPOD:
   case UTT_IsLiteral:
-  // By analogy, is_trivially_relocatable imposes the same constraints.
+  // By analogy, is_trivially_relocatable and is_trivially_equality_comparable
+  // impose the same constraints.
   case UTT_IsTriviallyRelocatable:
+  case UTT_IsTriviallyEqualityComparable:
+  case UTT_CanPassInRegs:
   // Per the GCC type traits documentation, T shall be a complete type, cv void,
   // or an array of unknown bound. But GCC actually imposes the same constraints
   // as above.
@@ -5393,6 +5373,13 @@ static bool EvaluateUnaryTypeTrait(Sema &Self, TypeTrait UTT,
     return T.isTriviallyRelocatableType(C);
   case UTT_IsReferenceable:
     return T.isReferenceable();
+  case UTT_CanPassInRegs:
+    if (CXXRecordDecl *RD = T->getAsCXXRecordDecl(); RD && !T.hasQualifiers())
+      return RD->canPassInRegisters();
+    Self.Diag(KeyLoc, diag::err_builtin_pass_in_regs_non_class) << T;
+    return false;
+  case UTT_IsTriviallyEqualityComparable:
+    return T.isTriviallyEqualityComparableType(C);
   }
 }
 
@@ -8253,12 +8240,12 @@ static inline bool VariableCanNeverBeAConstantExpression(VarDecl *Var,
   const VarDecl *DefVD = nullptr;
 
   // If there is no initializer - this can not be a constant expression.
-  if (!Var->getAnyInitializer(DefVD)) return true;
+  const Expr *Init = Var->getAnyInitializer(DefVD);
+  if (!Init)
+    return true;
   assert(DefVD);
-  if (DefVD->isWeak()) return false;
-  EvaluatedStmt *Eval = DefVD->ensureEvaluatedStmt();
-
-  Expr *Init = cast<Expr>(Eval->Value);
+  if (DefVD->isWeak())
+    return false;
 
   if (Var->getType()->isDependentType() || Init->isValueDependent()) {
     // FIXME: Teach the constant evaluator to deal with the non-dependent parts
@@ -8318,7 +8305,7 @@ static void CheckIfAnyEnclosingLambdasMustCaptureAnyPotentialCaptures(
 
     // If we have a capture-capable lambda for the variable, go ahead and
     // capture the variable in that lambda (and all its enclosing lambdas).
-    if (const Optional<unsigned> Index =
+    if (const std::optional<unsigned> Index =
             getStackIndexOfNearestEnclosingCaptureCapableLambda(
                 S.FunctionScopes, Var, S))
       S.MarkCaptureUsedInEnclosingContext(Var, VarExpr->getExprLoc(), *Index);
@@ -8351,7 +8338,7 @@ static void CheckIfAnyEnclosingLambdasMustCaptureAnyPotentialCaptures(
   if (CurrentLSI->hasPotentialThisCapture()) {
     // If we have a capture-capable lambda for 'this', go ahead and capture
     // 'this' in that lambda (and all its enclosing lambdas).
-    if (const Optional<unsigned> Index =
+    if (const std::optional<unsigned> Index =
             getStackIndexOfNearestEnclosingCaptureCapableLambda(
                 S.FunctionScopes, /*0 is 'this'*/ nullptr, S)) {
       const unsigned FunctionScopeIndexOfCapturableLambda = *Index;
@@ -9040,7 +9027,8 @@ Sema::BuildExprRequirement(
     //     be satisfied.
     TemplateParameterList *TPL =
         ReturnTypeRequirement.getTypeConstraintTemplateParameterList();
-    QualType MatchedType = Context.getReferenceQualifiedType(E);
+    QualType MatchedType =
+        Context.getReferenceQualifiedType(E).getCanonicalType();
     llvm::SmallVector<TemplateArgument, 1> Args;
     Args.push_back(TemplateArgument(MatchedType));
 
@@ -9048,7 +9036,7 @@ Sema::BuildExprRequirement(
 
     TemplateArgumentList TAL(TemplateArgumentList::OnStack, Args);
     MultiLevelTemplateArgumentList MLTAL(Param, TAL.asArray(),
-                                         /*Final=*/true);
+                                         /*Final=*/false);
     MLTAL.addOuterRetainedLevels(TPL->getDepth());
     Expr *IDC = Param->getTypeConstraint()->getImmediatelyDeclaredConstraint();
     ExprResult Constraint = SubstExpr(IDC, MLTAL);

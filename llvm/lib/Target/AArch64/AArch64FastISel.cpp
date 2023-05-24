@@ -189,9 +189,9 @@ private:
   void addLoadStoreOperands(Address &Addr, const MachineInstrBuilder &MIB,
                             MachineMemOperand::Flags Flags,
                             unsigned ScaleFactor, MachineMemOperand *MMO);
-  bool isMemCpySmall(uint64_t Len, unsigned Alignment);
+  bool isMemCpySmall(uint64_t Len, MaybeAlign Alignment);
   bool tryEmitSmallMemCpy(Address Dest, Address Src, uint64_t Len,
-                          unsigned Alignment);
+                          MaybeAlign Alignment);
   bool foldXALUIntrinsic(AArch64CC::CondCode &CC, const Instruction *I,
                          const Value *Cond);
   bool optimizeIntExtLoad(const Instruction *I, MVT RetVT, MVT SrcVT);
@@ -272,7 +272,7 @@ private:
   CCAssignFn *CCAssignFnForCall(CallingConv::ID CC) const;
   bool processCallArgs(CallLoweringInfo &CLI, SmallVectorImpl<MVT> &ArgVTs,
                        unsigned &NumBytes);
-  bool finishCall(CallLoweringInfo &CLI, MVT RetVT, unsigned NumBytes);
+  bool finishCall(CallLoweringInfo &CLI, unsigned NumBytes);
 
 public:
   // Backend specific FastISel code.
@@ -3102,8 +3102,7 @@ bool AArch64FastISel::processCallArgs(CallLoweringInfo &CLI,
   return true;
 }
 
-bool AArch64FastISel::finishCall(CallLoweringInfo &CLI, MVT RetVT,
-                                 unsigned NumBytes) {
+bool AArch64FastISel::finishCall(CallLoweringInfo &CLI, unsigned NumBytes) {
   CallingConv::ID CC = CLI.CallConv;
 
   // Issue CALLSEQ_END
@@ -3111,32 +3110,30 @@ bool AArch64FastISel::finishCall(CallLoweringInfo &CLI, MVT RetVT,
   BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, MIMD, TII.get(AdjStackUp))
     .addImm(NumBytes).addImm(0);
 
-  // Now the return value.
-  if (RetVT != MVT::isVoid) {
-    SmallVector<CCValAssign, 16> RVLocs;
-    CCState CCInfo(CC, false, *FuncInfo.MF, RVLocs, *Context);
-    CCInfo.AnalyzeCallResult(RetVT, CCAssignFnForCall(CC));
+  // Now the return values.
+  SmallVector<CCValAssign, 16> RVLocs;
+  CCState CCInfo(CC, false, *FuncInfo.MF, RVLocs, *Context);
+  CCInfo.AnalyzeCallResult(CLI.Ins, CCAssignFnForCall(CC));
 
-    // Only handle a single return value.
-    if (RVLocs.size() != 1)
-      return false;
-
-    // Copy all of the result registers out of their specified physreg.
-    MVT CopyVT = RVLocs[0].getValVT();
+  Register ResultReg = FuncInfo.CreateRegs(CLI.RetTy);
+  for (unsigned i = 0; i != RVLocs.size(); ++i) {
+    CCValAssign &VA = RVLocs[i];
+    MVT CopyVT = VA.getValVT();
+    unsigned CopyReg = ResultReg + i;
 
     // TODO: Handle big-endian results
     if (CopyVT.isVector() && !Subtarget->isLittleEndian())
       return false;
 
-    Register ResultReg = createResultReg(TLI.getRegClassFor(CopyVT));
-    BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, MIMD,
-            TII.get(TargetOpcode::COPY), ResultReg)
-        .addReg(RVLocs[0].getLocReg());
-    CLI.InRegs.push_back(RVLocs[0].getLocReg());
-
-    CLI.ResultReg = ResultReg;
-    CLI.NumResultRegs = 1;
+    // Copy result out of their specified physreg.
+    BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, MIMD, TII.get(TargetOpcode::COPY),
+            CopyReg)
+        .addReg(VA.getLocReg());
+    CLI.InRegs.push_back(VA.getLocReg());
   }
+
+  CLI.ResultReg = ResultReg;
+  CLI.NumResultRegs = RVLocs.size();
 
   return true;
 }
@@ -3183,13 +3180,6 @@ bool AArch64FastISel::fastLowerCall(CallLoweringInfo &CLI) {
 
   // Let SDISel handle vararg functions.
   if (IsVarArg)
-    return false;
-
-  // FIXME: Only handle *simple* calls for now.
-  MVT RetVT;
-  if (CLI.RetTy->isVoidTy())
-    RetVT = MVT::isVoid;
-  else if (!isTypeLegal(CLI.RetTy, RetVT))
     return false;
 
   for (auto Flag : CLI.OutFlags)
@@ -3287,18 +3277,18 @@ bool AArch64FastISel::fastLowerCall(CallLoweringInfo &CLI) {
   CLI.Call = MIB;
 
   // Finish off the call including any return values.
-  return finishCall(CLI, RetVT, NumBytes);
+  return finishCall(CLI, NumBytes);
 }
 
-bool AArch64FastISel::isMemCpySmall(uint64_t Len, unsigned Alignment) {
+bool AArch64FastISel::isMemCpySmall(uint64_t Len, MaybeAlign Alignment) {
   if (Alignment)
-    return Len / Alignment <= 4;
+    return Len / Alignment->value() <= 4;
   else
     return Len < 32;
 }
 
 bool AArch64FastISel::tryEmitSmallMemCpy(Address Dest, Address Src,
-                                         uint64_t Len, unsigned Alignment) {
+                                         uint64_t Len, MaybeAlign Alignment) {
   // Make sure we don't bloat code by inlining very large memcpy's.
   if (!isMemCpySmall(Len, Alignment))
     return false;
@@ -3309,7 +3299,7 @@ bool AArch64FastISel::tryEmitSmallMemCpy(Address Dest, Address Src,
 
   while (Len) {
     MVT VT;
-    if (!Alignment || Alignment >= 8) {
+    if (!Alignment || *Alignment >= 8) {
       if (Len >= 8)
         VT = MVT::i64;
       else if (Len >= 4)
@@ -3320,10 +3310,11 @@ bool AArch64FastISel::tryEmitSmallMemCpy(Address Dest, Address Src,
         VT = MVT::i8;
       }
     } else {
+      assert(Alignment && "Alignment is set in this branch");
       // Bound based on alignment.
-      if (Len >= 4 && Alignment == 4)
+      if (Len >= 4 && *Alignment == 4)
         VT = MVT::i32;
-      else if (Len >= 2 && Alignment == 2)
+      else if (Len >= 2 && *Alignment == 2)
         VT = MVT::i16;
       else {
         VT = MVT::i8;
@@ -3498,8 +3489,10 @@ bool AArch64FastISel::fastLowerIntrinsicCall(const IntrinsicInst *II) {
       // Small memcpy's are common enough that we want to do them without a call
       // if possible.
       uint64_t Len = cast<ConstantInt>(MTI->getLength())->getZExtValue();
-      unsigned Alignment = MinAlign(MTI->getDestAlignment(),
-                                    MTI->getSourceAlignment());
+      MaybeAlign Alignment;
+      if (MTI->getDestAlign() || MTI->getSourceAlign())
+        Alignment = std::min(MTI->getDestAlign().valueOrOne(),
+                             MTI->getSourceAlign().valueOrOne());
       if (isMemCpySmall(Len, Alignment)) {
         Address Dest, Src;
         if (!computeAddress(MTI->getRawDest(), Dest) ||
@@ -4845,7 +4838,7 @@ bool AArch64FastISel::selectSDiv(const Instruction *I) {
       !(C.isPowerOf2() || C.isNegatedPowerOf2()))
     return selectBinaryOp(I, ISD::SDIV);
 
-  unsigned Lg2 = C.countTrailingZeros();
+  unsigned Lg2 = C.countr_zero();
   Register Src0Reg = getRegForValue(I->getOperand(0));
   if (!Src0Reg)
     return false;

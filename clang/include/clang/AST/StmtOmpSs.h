@@ -1,9 +1,8 @@
 //===- StmtOmpSs.h - Classes for OmpSs directives  ------------*- C++ -*-===//
 //
-//                     The LLVM Cossiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 /// \file
@@ -480,7 +479,7 @@ class OSSLoopDirective : public OSSExecutableDirective {
   Expr **StepExpr;
   /// The type of comparison used in the loop (<, <=, >=, >)
   /// NOTE: optional is used to handle the != eventually
-  llvm::Optional<bool>* TestIsLessOp;
+  std::optional<bool>* TestIsLessOp;
   /// The type of comparison is strict (<, >)
   bool* TestIsStrictOp;
   /// The number of collapsed loops
@@ -525,7 +524,7 @@ protected:
   ///
   /// \param IsLessOp True if is < or <=. false otherwise
   ///
-  void setIsLessOp(llvm::Optional<bool> *IsLessOp) {
+  void setIsLessOp(std::optional<bool> *IsLessOp) {
     TestIsLessOp = IsLessOp;
   }
   /// Sets if the loop comparison type is strict.
@@ -540,7 +539,7 @@ public:
     Expr *LB;
     Expr *UB;
     Expr *Step;
-    llvm::Optional<bool> TestIsLessOp;
+    std::optional<bool> TestIsLessOp;
     bool TestIsStrictOp;
   };
 
@@ -553,7 +552,7 @@ public:
   /// Returns the step expression of the loop.
   Expr **getStep() const { return StepExpr; }
   /// Returns True is the loop comparison type is < or <=.
-  llvm::Optional<bool> *getIsLessOp() const { return TestIsLessOp; }
+  std::optional<bool> *getIsLessOp() const { return TestIsLessOp; }
   /// Returns True is the loop comparison type is < or >.
   bool *getIsStrictOp() const { return TestIsStrictOp; }
 

@@ -45,7 +45,6 @@ def EmitC_ApplyOp : EmitC_Op<"apply", []> {
 
     ```
   }];
-  // TODO: Disallow to apply the operator & (address of) to emitc.constant operations.
   let arguments = (ins
     Arg<StrAttr, "the operator to apply">:$applicableOperator,
     AnyType:$operand
@@ -143,12 +142,11 @@ def EmitC_ConstantOp : EmitC_Op<"constant", [ConstantLike]> {
   let results = (outs AnyType);
 
   let hasFolder = 1;
-  // TODO: Disallow empty constants.
   let hasVerifier = 1;
 }
 
 def EmitC_IncludeOp
-    : EmitC_Op<"include", [Pure, HasParent<"ModuleOp">]> {
+    : EmitC_Op<"include", [HasParent<"ModuleOp">]> {
   let summary = "Include operation";
   let description = [{
     The `include` operation allows to define a source file inclusion via the

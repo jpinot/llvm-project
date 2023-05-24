@@ -162,7 +162,7 @@ namespace {
     struct BlockCacheEntry {
       SmallDenseMap<AssertingVH<Value>, ValueLatticeElement, 4> LatticeElements;
       SmallDenseSet<AssertingVH<Value>, 4> OverDefined;
-      // None indicates that the nonnull pointers for this basic block
+      // std::nullopt indicates that the nonnull pointers for this basic block
       // block have not been computed yet.
       std::optional<NonNullPointerSet> NonNullPointers;
     };
@@ -990,10 +990,11 @@ LazyValueInfoImpl::solveBlockValueOverflowIntrinsic(WithOverflowInst *WO,
 
 std::optional<ValueLatticeElement>
 LazyValueInfoImpl::solveBlockValueIntrinsic(IntrinsicInst *II, BasicBlock *BB) {
+  ValueLatticeElement MetadataVal = getFromRangeMetadata(II);
   if (!ConstantRange::isIntrinsicSupported(II->getIntrinsicID())) {
     LLVM_DEBUG(dbgs() << " compute BB '" << BB->getName()
                       << "' - unknown intrinsic.\n");
-    return getFromRangeMetadata(II);
+    return MetadataVal;
   }
 
   SmallVector<ConstantRange, 2> OpRanges;
@@ -1004,8 +1005,9 @@ LazyValueInfoImpl::solveBlockValueIntrinsic(IntrinsicInst *II, BasicBlock *BB) {
     OpRanges.push_back(*Range);
   }
 
-  return ValueLatticeElement::getRange(
-      ConstantRange::intrinsic(II->getIntrinsicID(), OpRanges));
+  return intersect(ValueLatticeElement::getRange(ConstantRange::intrinsic(
+                       II->getIntrinsicID(), OpRanges)),
+                   MetadataVal);
 }
 
 std::optional<ValueLatticeElement>
@@ -1123,7 +1125,7 @@ static ValueLatticeElement getValueFromICmpCondition(Value *Val, ICmpInst *ICI,
     // bit of Mask.
     if (EdgePred == ICmpInst::ICMP_NE && !Mask->isZero() && C->isZero()) {
       return ValueLatticeElement::getRange(ConstantRange::getNonEmpty(
-          APInt::getOneBitSet(BitWidth, Mask->countTrailingZeros()),
+          APInt::getOneBitSet(BitWidth, Mask->countr_zero()),
           APInt::getZero(BitWidth)));
     }
   }
@@ -1660,11 +1662,15 @@ ConstantRange LazyValueInfo::getConstantRangeAtUse(const Use &U,
   // position where V can be constrained by a select or branch condition.
   const Use *CurrU = &U;
   // TODO: Increase limit?
-  const unsigned MaxUsesToInspect = 2;
+  const unsigned MaxUsesToInspect = 3;
   for (unsigned I = 0; I < MaxUsesToInspect; ++I) {
     std::optional<ValueLatticeElement> CondVal;
     auto *CurrI = cast<Instruction>(CurrU->getUser());
     if (auto *SI = dyn_cast<SelectInst>(CurrI)) {
+      // If the value is undef, a different value may be chosen in
+      // the select condition and at use.
+      if (!isGuaranteedNotToBeUndefOrPoison(SI->getCondition(), AC))
+        break;
       if (CurrU->getOperandNo() == 1)
         CondVal = getValueFromCondition(V, SI->getCondition(), true);
       else if (CurrU->getOperandNo() == 2)
@@ -1680,7 +1686,13 @@ ConstantRange LazyValueInfo::getConstantRangeAtUse(const Use &U,
     // Only follow one-use chain, to allow direct intersection of conditions.
     // If there are multiple uses, we would have to intersect with the union of
     // all conditions at different uses.
-    if (!CurrI->hasOneUse())
+    // Stop walking if we hit a non-speculatable instruction. Even if the
+    // result is only used under a specific condition, executing the
+    // instruction itself may cause side effects or UB already.
+    // This also disallows looking through phi nodes: If the phi node is part
+    // of a cycle, we might end up reasoning about values from different cycle
+    // iterations (PR60629).
+    if (!CurrI->hasOneUse() || !isSafeToSpeculativelyExecute(CurrI))
       break;
     CurrU = &*CurrI->use_begin();
   }

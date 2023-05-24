@@ -1,9 +1,8 @@
 //===- OmpSs.cpp -- Strip parts of Debug Info --------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
@@ -44,6 +43,54 @@ struct DirectiveFinalInfo {
   // before the current lowering directive.
   ValueToValueMapTy VMap;
 };
+
+static void registerCheckVersion(Module &M) {
+  Function *Func = cast<Function>(nanos6Api::registerCtorCheckVersionFuncCallee(M).getCallee());
+  if (Func->empty()) {
+    Func->setLinkage(GlobalValue::InternalLinkage);
+    BasicBlock *EntryBB = BasicBlock::Create(M.getContext(), "entry", Func);
+    Instruction *RetInst = ReturnInst::Create(M.getContext());
+    RetInst->insertInto(EntryBB, EntryBB->end());
+
+    appendToGlobalCtors(M, Func, 65535);
+
+    BasicBlock &Entry = Func->getEntryBlock();
+
+    // struct nanos6_version_t {
+    //   uint64_t family;
+    //   uint64_t majorversion;
+    //   uint64_t minor_version;
+    // };
+
+    Type *Int64Ty = Type::getInt64Ty(M.getContext());
+
+    SmallVector<Constant *, 4> Versions;
+    const size_t NUM_VERSIONS = 1;
+    const size_t TUPLE_SIZE = 3;
+    const size_t TOTAL_ELEMS = TUPLE_SIZE*NUM_VERSIONS;
+    Constant *NumVersionsValue = ConstantInt::get(Int64Ty, NUM_VERSIONS);
+    // family
+    Versions.push_back(
+      ConstantInt::get(Int64Ty, 0));
+    // major_version
+    Versions.push_back(
+      ConstantInt::get(Int64Ty, 1));
+    // minor_version
+    Versions.push_back(
+      ConstantInt::get(Int64Ty, 0));
+
+    GlobalVariable *VersionListValue =
+      new GlobalVariable(M, ArrayType::get(Int64Ty, TOTAL_ELEMS),
+        /*isConstant=*/true, GlobalVariable::InternalLinkage,
+        ConstantArray::get(ArrayType::get(Int64Ty, TOTAL_ELEMS),
+          Versions), "nanos6_versions");
+
+    IRBuilder<> BBBuilder(&Entry.back());
+    Constant *SourceFilenameGV = BBBuilder.CreateGlobalStringPtr(M.getSourceFileName());
+    BBBuilder.CreateCall(
+      nanos6Api::checkVersionFuncCallee(M), {NumVersionsValue, VersionListValue, SourceFilenameGV});
+  }
+}
 
 struct OmpSsDirective {
   Module &M;
@@ -1314,7 +1361,7 @@ struct OmpSsDirective {
     for (const VLAAlign& VAlign : VLAAlignsInfo) {
       auto *V = VAlign.V;
       Type *Ty = DirEnv.getDSAType(V);
-      unsigned TyAlign = VAlign.Align;
+      Align TyAlign = VAlign.TyAlign;
 
       Value *Idx[2];
       Idx[0] = Constant::getNullValue(Int32Ty);
@@ -1324,7 +1371,7 @@ struct OmpSsDirective {
                         TaskArgsDstL, Idx, "gep_dst_" + V->getName());
 
       // Point VLA in task args to an aligned position of the extra space allocated
-      IRB.CreateAlignedStore(TaskArgsDstLi8IdxGEP, GEP, Align(TyAlign));
+      IRB.CreateAlignedStore(TaskArgsDstLi8IdxGEP, GEP, TyAlign);
       // Skip current VLA size
       unsigned SizeB = DL.getTypeAllocSize(Ty);
       Value *VLASize = ConstantInt::get(Int64Ty, SizeB);
@@ -1404,7 +1451,7 @@ struct OmpSsDirective {
     for (size_t i = 0; i < DSAInfo.Firstprivate.size(); ++i) {
       Value *V = DSAInfo.Firstprivate[i];
       Type *Ty = DSAInfo.FirstprivateTy[i];
-      unsigned TyAlign = DL.getPrefTypeAlignment(Ty);
+      Align TyAlign = DL.getPrefTypeAlign(Ty);
 
       // Compute num elements
       Value *NSize = ConstantInt::get(Int64Ty, 1);
@@ -1457,7 +1504,7 @@ struct OmpSsDirective {
       } else {
         unsigned SizeB = DL.getTypeAllocSize(Ty);
         Value *NSizeB = IRB.CreateNUWMul(NSize, ConstantInt::get(Int64Ty, SizeB));
-        IRB.CreateMemCpy(GEPDst, Align(TyAlign), GEPSrc, Align(TyAlign), NSizeB);
+        IRB.CreateMemCpy(GEPDst, TyAlign, GEPSrc, TyAlign, NSizeB);
       }
     }
     for (Value *V : CapturedInfo) {
@@ -1481,6 +1528,9 @@ struct OmpSsDirective {
   Value *computeTaskArgsVLAsExtraSizeOf(IRBuilder<> &IRB) {
     Value *Sum = ConstantInt::get(Int64Ty, 0);
     for (const auto &VLAWithDimsMap : VLADimsInfo) {
+      // Skip shareds because they don't need space in task_args
+      if (DSAInfo.Shared.count(VLAWithDimsMap.first))
+        continue;
       Type *Ty = DirEnv.getDSAType(VLAWithDimsMap.first);
       unsigned SizeB = DL.getTypeAllocSize(Ty);
       Value *ArraySize = ConstantInt::get(Int64Ty, SizeB);
@@ -1631,22 +1681,25 @@ struct OmpSsDirective {
 
   struct VLAAlign {
     Value *V;
-    unsigned Align;
+    Align TyAlign;
   };
 
   // Greater alignemt go first
   void computeVLAsAlignOrder(SmallVectorImpl<VLAAlign> &VLAAlignsInfo) {
     for (const auto &VLAWithDimsMap : VLADimsInfo) {
+      // Skip shareds because they don't need space in task_args
+      if (DSAInfo.Shared.count(VLAWithDimsMap.first))
+        continue;
       auto *V = VLAWithDimsMap.first;
       Type *Ty = DirEnv.getDSAType(V);
 
-      unsigned Align = DL.getPrefTypeAlignment(Ty);
+      Align TyAlign = DL.getPrefTypeAlign(Ty);
 
       auto It = VLAAlignsInfo.begin();
-      while (It != VLAAlignsInfo.end() && It->Align >= Align)
+      while (It != VLAAlignsInfo.end() && It->TyAlign >= TyAlign)
         ++It;
 
-      VLAAlignsInfo.insert(It, {V, Align});
+      VLAAlignsInfo.insert(It, {V, TyAlign});
     }
   }
 
@@ -2499,7 +2552,7 @@ struct OmpSsDirective {
     for (const auto& VAlign : VLAAlignsInfo) {
       auto *V = VAlign.V;
       Type *Ty = DirEnv.getDSAType(V);
-      unsigned TyAlign = VAlign.Align;
+      Align TyAlign = VAlign.TyAlign;
 
       Value *Idx[2];
       Idx[0] = Constant::getNullValue(Int32Ty);
@@ -2509,7 +2562,7 @@ struct OmpSsDirective {
                         TaskArgsVarL, Idx, "gep_" + V->getName());
 
       // Point VLA in task args to an aligned position of the extra space allocated
-      IRB.CreateAlignedStore(TaskArgsVarLi8IdxGEP, GEP, Align(TyAlign));
+      IRB.CreateAlignedStore(TaskArgsVarLi8IdxGEP, GEP, TyAlign);
       // Skip current VLA size
       unsigned SizeB = DL.getTypeAllocSize(Ty);
       Value *VLASize = ConstantInt::get(Int64Ty, SizeB);
@@ -2565,7 +2618,7 @@ struct OmpSsDirective {
     for (size_t i = 0; i < DSAInfo.Firstprivate.size(); ++i) {
       Value *V = DSAInfo.Firstprivate[i];
       Type *Ty = DSAInfo.FirstprivateTy[i];
-      unsigned TyAlign = DL.getPrefTypeAlignment(Ty);
+      Align TyAlign = DL.getPrefTypeAlign(Ty);
 
       // Compute num elements
       Value *NSize = ConstantInt::get(Int64Ty, 1);
@@ -2602,7 +2655,7 @@ struct OmpSsDirective {
       } else {
         unsigned SizeB = DL.getTypeAllocSize(Ty);
         Value *NSizeB = IRB.CreateNUWMul(NSize, ConstantInt::get(Int64Ty, SizeB));
-        IRB.CreateMemCpy(GEP, Align(TyAlign), V, Align(TyAlign), NSizeB);
+        IRB.CreateMemCpy(GEP, TyAlign, V, TyAlign, NSizeB);
       }
     }
     for (Value *V : CapturedInfo) {
@@ -2737,7 +2790,7 @@ struct OmpSsDirective {
         Nanos6TaskDeclSourceStr ? Nanos6TaskDeclSourceStr : Nanos6TaskLocStr,
         // Set device_function_name only in case of task pure device
         // in order to let nanos6 identify them
-        (Nanos6TaskDevFuncStr && !DirEnv.DeviceInfo.Ndrange.empty())
+        Nanos6TaskDevFuncStr
           ? Nanos6TaskDevFuncStr
           : ConstantPointerNull::get(PtrTy))),
         ("implementations_var_" + F.getName()).str());
@@ -3115,6 +3168,11 @@ struct OmpSsFunction {
 
     DirectiveFunctionInfo &DirectiveFuncInfo = LookupDirectiveFunctionInfo(F).getFuncInfo();
 
+    // Emit check version call if translation unit has at least one ompss-2
+    // directive
+    if (DirectiveFuncInfo.PostOrder.empty())
+      registerCheckVersion(M);
+
     buildFinalCloneBBs(DirectiveFuncInfo);
     for (size_t i = 0; i < DirectiveFuncInfo.PostOrder.size(); ++i) {
       DirectiveInfo &DirInfo = *DirectiveFuncInfo.PostOrder[i];
@@ -3135,6 +3193,9 @@ struct OmpSsModule {
   function_ref<OmpSsRegionAnalysis &(Function &)> LookupDirectiveFunctionInfo;
 
   void registerAssert(StringRef Str) {
+    // Emit check version call if translation unit has at least one ompss-2
+    // directive
+    registerCheckVersion(M);
     Function *Func = cast<Function>(nanos6Api::registerCtorAssertFuncCallee(M).getCallee());
     if (Func->empty()) {
       Func->setLinkage(GlobalValue::InternalLinkage);

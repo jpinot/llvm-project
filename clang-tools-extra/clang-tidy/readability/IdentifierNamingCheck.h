@@ -11,8 +11,7 @@
 
 #include "../utils/RenamerClangTidyCheck.h"
 #include <optional>
-namespace clang {
-namespace tidy {
+namespace clang::tidy {
 namespace readability {
 
 enum StyleKind : int;
@@ -69,8 +68,8 @@ public:
   struct NamingStyle {
     NamingStyle() = default;
 
-    NamingStyle(std::optional<CaseType> Case, const std::string &Prefix,
-                const std::string &Suffix, const std::string &IgnoredRegexpStr,
+    NamingStyle(std::optional<CaseType> Case, StringRef Prefix,
+                StringRef Suffix, StringRef IgnoredRegexpStr,
                 HungarianPrefixType HPType);
     NamingStyle(const NamingStyle &O) = delete;
     NamingStyle &operator=(NamingStyle &&O) = default;
@@ -92,6 +91,11 @@ public:
     bool checkOptionValid(int StyleKindIndex) const;
     bool isOptionEnabled(StringRef OptionKey,
                          const llvm::StringMap<std::string> &StrMap) const;
+
+    size_t getAsteriskCount(const std::string &TypeName) const;
+    size_t getAsteriskCount(const std::string &TypeName,
+                            const NamedDecl *ND) const;
+
     void loadDefaultConfig(
         IdentifierNamingCheck::HungarianNotationOption &HNOption) const;
     void loadFileConfig(
@@ -211,7 +215,6 @@ struct OptionEnumMapping<readability::IdentifierNamingCheck::CaseType> {
       std::pair<readability::IdentifierNamingCheck::CaseType, StringRef>>
   getEnumMapping();
 };
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy
 
 #endif // LLVM_CLANG_TOOLS_EXTRA_CLANG_TIDY_READABILITY_IDENTIFIERNAMINGCHECK_H

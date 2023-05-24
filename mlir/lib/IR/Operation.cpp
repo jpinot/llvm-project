@@ -44,11 +44,24 @@ Operation *Operation::create(Location location, OperationName name,
   return op;
 }
 
+/// Create a new Operation with the specific fields.
+Operation *Operation::create(Location location, OperationName name,
+                             TypeRange resultTypes, ValueRange operands,
+                             NamedAttrList &&attributes, BlockRange successors,
+                             unsigned numRegions) {
+  // Populate default attributes.
+  name.populateDefaultAttrs(attributes);
+
+  return create(location, name, resultTypes, operands,
+                attributes.getDictionary(location.getContext()), successors,
+                numRegions);
+}
+
 /// Overload of create that takes an existing DictionaryAttr to avoid
 /// unnecessarily uniquing a list of attributes.
 Operation *Operation::create(Location location, OperationName name,
                              TypeRange resultTypes, ValueRange operands,
-                             NamedAttrList &&attributes, BlockRange successors,
+                             DictionaryAttr attributes, BlockRange successors,
                              unsigned numRegions) {
   assert(llvm::all_of(resultTypes, [](Type t) { return t; }) &&
          "unexpected null result type");
@@ -77,14 +90,10 @@ Operation *Operation::create(Location location, OperationName name,
   char *mallocMem = reinterpret_cast<char *>(malloc(byteSize + prefixByteSize));
   void *rawMem = mallocMem + prefixByteSize;
 
-  // Populate default attributes.
-  if (Optional<RegisteredOperationName> info = name.getRegisteredInfo())
-    info->populateDefaultAttrs(attributes);
-
   // Create the new Operation.
-  Operation *op = ::new (rawMem) Operation(
-      location, name, numResults, numSuccessors, numRegions,
-      attributes.getDictionary(location.getContext()), needsOperandStorage);
+  Operation *op =
+      ::new (rawMem) Operation(location, name, numResults, numSuccessors,
+                               numRegions, attributes, needsOperandStorage);
 
   assert((numSuccessors == 0 || op->mightHaveTrait<OpTrait::IsTerminator>()) &&
          "unexpected successors in a non-terminator operation");
@@ -491,8 +500,7 @@ LogicalResult Operation::fold(ArrayRef<Attribute> operands,
                               SmallVectorImpl<OpFoldResult> &results) {
   // If we have a registered operation definition matching this one, use it to
   // try to constant fold the operation.
-  Optional<RegisteredOperationName> info = getRegisteredInfo();
-  if (info && succeeded(info->foldHook(this, operands, results)))
+  if (succeeded(name.foldHook(this, operands, results)))
     return success();
 
   // Otherwise, fall back on the dialect hook to handle it.

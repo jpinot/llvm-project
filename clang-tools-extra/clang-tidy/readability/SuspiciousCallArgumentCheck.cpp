@@ -17,9 +17,7 @@
 using namespace clang::ast_matchers;
 namespace optutils = clang::tidy::utils::options;
 
-namespace clang {
-namespace tidy {
-namespace readability {
+namespace clang::tidy::readability {
 
 namespace {
 struct DefaultHeuristicConfiguration {
@@ -139,11 +137,11 @@ static bool applyEqualityHeuristic(StringRef Arg, StringRef Param) {
 static bool applyAbbreviationHeuristic(
     const llvm::StringMap<std::string> &AbbreviationDictionary, StringRef Arg,
     StringRef Param) {
-  if (AbbreviationDictionary.find(Arg) != AbbreviationDictionary.end() &&
+  if (AbbreviationDictionary.contains(Arg) &&
       Param.equals(AbbreviationDictionary.lookup(Arg)))
     return true;
 
-  if (AbbreviationDictionary.find(Param) != AbbreviationDictionary.end() &&
+  if (AbbreviationDictionary.contains(Param) &&
       Arg.equals(AbbreviationDictionary.lookup(Param)))
     return true;
 
@@ -807,6 +805,4 @@ bool SuspiciousCallArgumentCheck::areNamesSimilar(StringRef Arg,
   llvm_unreachable("Unhandled heuristic kind");
 }
 
-} // namespace readability
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy::readability

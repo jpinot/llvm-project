@@ -72,10 +72,8 @@ void PlatformDarwinKernel::Terminate() {
   PlatformDarwin::Terminate();
 }
 
-PlatformSP
-PlatformDarwinKernel::CreateInstance(bool force, const ArchSpec *arch,
-                                     const Debugger *debugger,
-                                     const ScriptedMetadata *metadata) {
+PlatformSP PlatformDarwinKernel::CreateInstance(bool force,
+                                                const ArchSpec *arch) {
   Log *log = GetLog(LLDBLog::Platform);
   if (log) {
     const char *arch_name;
@@ -223,8 +221,7 @@ void PlatformDarwinKernel::DebuggerInitialize(
     const bool is_global_setting = true;
     PluginManager::CreateSettingForPlatformPlugin(
         debugger, GetGlobalProperties().GetValueProperties(),
-        ConstString("Properties for the PlatformDarwinKernel plug-in."),
-        is_global_setting);
+        "Properties for the PlatformDarwinKernel plug-in.", is_global_setting);
   }
 }
 
@@ -421,8 +418,8 @@ void PlatformDarwinKernel::AddSDKSubdirsToSearchPaths(const std::string &dir) {
 FileSystem::EnumerateDirectoryResult
 PlatformDarwinKernel::FindKDKandSDKDirectoriesInDirectory(
     void *baton, llvm::sys::fs::file_type ft, llvm::StringRef path) {
-  static ConstString g_sdk_suffix = ConstString(".sdk");
-  static ConstString g_kdk_suffix = ConstString(".kdk");
+  static constexpr llvm::StringLiteral g_sdk_suffix = ".sdk";
+  static constexpr llvm::StringLiteral g_kdk_suffix = ".kdk";
 
   PlatformDarwinKernel *thisp = (PlatformDarwinKernel *)baton;
   FileSpec file_spec(path);
@@ -483,12 +480,11 @@ FileSystem::EnumerateDirectoryResult
 PlatformDarwinKernel::GetKernelsAndKextsInDirectoryHelper(
     void *baton, llvm::sys::fs::file_type ft, llvm::StringRef path,
     bool recurse) {
-  static ConstString g_kext_suffix = ConstString(".kext");
-  static ConstString g_dsym_suffix = ConstString(".dSYM");
-  static ConstString g_bundle_suffix = ConstString("Bundle");
+  static constexpr llvm::StringLiteral g_kext_suffix = ".kext";
+  static constexpr llvm::StringLiteral g_dsym_suffix = ".dSYM";
 
   FileSpec file_spec(path);
-  ConstString file_spec_extension = file_spec.GetFileNameExtension();
+  llvm::StringRef file_spec_extension = file_spec.GetFileNameExtension();
 
   Log *log = GetLog(LLDBLog::Platform);
 
@@ -570,8 +566,7 @@ PlatformDarwinKernel::GetKernelsAndKextsInDirectoryHelper(
 
   // Don't recurse into dSYM/kext/bundle directories
   if (recurse && file_spec_extension != g_dsym_suffix &&
-      file_spec_extension != g_kext_suffix &&
-      file_spec_extension != g_bundle_suffix) {
+      file_spec_extension != g_kext_suffix) {
     LLDB_LOGV(log, "PlatformDarwinKernel descending into directory '{0}'",
               file_spec);
     return FileSystem::eEnumerateDirectoryResultEnter;
@@ -669,7 +664,7 @@ bool PlatformDarwinKernel::KernelHasdSYMSibling(const FileSpec &kernel_binary) {
 //    /dir/dir/mach.development.t7004
 bool PlatformDarwinKernel::KerneldSYMHasNoSiblingBinary(
     const FileSpec &kernel_dsym) {
-  static ConstString g_dsym_suffix = ConstString(".dSYM");
+  static constexpr llvm::StringLiteral g_dsym_suffix = ".dSYM";
   std::string possible_path = kernel_dsym.GetPath();
   if (kernel_dsym.GetFileNameExtension() != g_dsym_suffix)
     return false;
@@ -699,7 +694,7 @@ bool PlatformDarwinKernel::KerneldSYMHasNoSiblingBinary(
 std::vector<FileSpec>
 PlatformDarwinKernel::GetDWARFBinaryInDSYMBundle(FileSpec dsym_bundle) {
   std::vector<FileSpec> results;
-  static ConstString g_dsym_suffix = ConstString(".dSYM");
+  static constexpr llvm::StringLiteral g_dsym_suffix = ".dSYM";
   if (dsym_bundle.GetFileNameExtension() != g_dsym_suffix) {
     return results;
   }
@@ -970,7 +965,7 @@ bool PlatformDarwinKernel::LoadPlatformBinaryAndSetup(Process *process,
 
   PlatformSP platform_sp =
       process->GetTarget().GetDebugger().GetPlatformList().Create(
-          PlatformDarwinKernel::GetPluginNameStatic(), /*metadata = */ nullptr);
+          PlatformDarwinKernel::GetPluginNameStatic());
   if (platform_sp)
     process->GetTarget().SetPlatform(platform_sp);
 
