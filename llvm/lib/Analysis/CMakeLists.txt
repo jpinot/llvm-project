@@ -128,7 +128,6 @@ add_llvm_component_library(LLVMAnalysis
   StackLifetime.cpp
   StackSafetyAnalysis.cpp
   StaticTDG.cpp
-  SyncDependenceAnalysis.cpp
   SyntheticCountsUtils.cpp
   TFLiteUtils.cpp
   TargetLibraryInfo.cpp

@@ -67,7 +67,7 @@ struct ValueAccess {
   bool IsAliveAfterExit;
   VarUse FirstTaskUse;
   bool ConcurrentUseInTask;
-  Optional<bool> HasToEscape; // For autorelease
+  bool HasToEscape; // For autorelease
 };
 
 struct MemoryAccessDescription {

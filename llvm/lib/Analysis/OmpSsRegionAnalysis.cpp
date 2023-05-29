@@ -2041,7 +2041,7 @@ OmpSsRegionAnalysis::OmpSsRegionAnalysis(Function &F, DominatorTree &DT, AAResul
 
 
     //Requires so global variables used in the task are added as variables to analyze, even they are not detected by Clang
-    for (auto &Global : F.getParent()->getGlobalList()){
+    for (auto &Global : F.getParent()->globals()){
         Value *Variable = dyn_cast<Value>(&Global);
 
         for (User *U : Variable->users()){

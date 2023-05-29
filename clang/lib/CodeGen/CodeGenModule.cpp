@@ -5473,7 +5473,7 @@ void CodeGenModule::EmitGlobalFunctionDefinition(GlobalDecl GD,
         Fn->getName() + "_variants", getPointerAlign(),
         /*constant*/ false, llvm::GlobalValue::PrivateLinkage);
 
-    VariantStructGlobal->setAlignment(llvm::None);
+    VariantStructGlobal->setAlignment(std::nullopt);
 
     // Construct the trait array
     auto TraitStruct = builder.beginArray();
@@ -5485,7 +5485,7 @@ void CodeGenModule::EmitGlobalFunctionDefinition(GlobalDecl GD,
         Fn->getName() + "_traits", getPointerAlign(),
         /*constant*/ false, llvm::GlobalValue::PrivateLinkage);
 
-    TraitStructGlobal->setAlignment(llvm::None);
+    TraitStructGlobal->setAlignment(std::nullopt);
   }
 
   setFunctionLinkage(GD, Fn);
