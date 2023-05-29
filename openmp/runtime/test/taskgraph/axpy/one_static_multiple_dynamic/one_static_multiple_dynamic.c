@@ -1,4 +1,4 @@
-// RUN: %libomp-compile-and-run
+// RUN: %libomp-tdg-compile-and-run
 #include "../axpy.h"
 
 #include <stdio.h>

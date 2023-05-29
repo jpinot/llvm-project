@@ -69,6 +69,8 @@ set(OPENMP_TEST_FLAGS "" CACHE STRING
   "Extra compiler flags to send to the test compiler.")
 set(OPENMP_TEST_OPENMP_FLAGS ${OPENMP_TEST_COMPILER_OPENMP_FLAGS} CACHE STRING
   "OpenMP compiler flag to use for testing OpenMP runtime libraries.")
+set(OPENMP_TEST_TDG_FLAGS "-fopenmp-taskgraph -static-tdg" CACHE STRING
+  "TDG compiler flag to use for testing OpenMP Taskgraph features.")
 
 set(ENABLE_LIBOMPTARGET ON)
 # Currently libomptarget cannot be compiled on Windows or MacOS X.

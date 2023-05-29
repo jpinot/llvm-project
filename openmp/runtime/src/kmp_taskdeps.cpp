@@ -1588,7 +1588,8 @@ void copyPreallocData(int gtid, kmp_int32 ThisMapSize, void *args,
 }
 
 void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid, kmp_uint32 tdg_id,
-                      void (*entry)(void *), void *args, kmp_int32 tdg_type, kmp_int32 if_cond, bool nowait) {
+                      void (*entry)(void *), void *args, kmp_int32 tdg_type,
+                      kmp_int32 if_cond, bool nowait, bool isSingleBasicBlock) {
   int tdg_index = -1;
   for (int i = 0; i < __kmp_ntdgs; i++) {
     if (__kmp_global_tdgs[i].tdgId == tdg_id) {
@@ -1607,8 +1608,10 @@ void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid, kmp_uint32 tdg_id,
           __kmpc_omp_taskwait(loc_ref, gtid);
         }
 
-        // printf("Executing! \n");
-        if(!if_cond || tdg_type == KMP_STATIC_TDG) {
+        // the TDG is ready to execute if:
+        //   1. no re-record is needed
+        //   2. the tdg is static and "entry" is a single basic block
+        if(!if_cond || (tdg_type == KMP_STATIC_TDG && isSingleBasicBlock)) {
           if (!nowait)
             __kmpc_taskgroup(loc_ref, gtid);
             
@@ -1629,8 +1632,10 @@ void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid, kmp_uint32 tdg_id,
       }
     }
   }
-
-  if (tdg_type == KMP_DYNAMIC_TDG) {
+  // we need to record the tdg if:
+  //  1. the tdg is dynamic
+  //  2. entry is not a single basic block
+  if (tdg_type == KMP_DYNAMIC_TDG || !isSingleBasicBlock) {
     // printf("Recording! \n");
     if(tdg_index!=-1 && if_cond)
       freeTDG(tdg_index, gtid);

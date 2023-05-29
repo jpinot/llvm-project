@@ -782,7 +782,7 @@ void TaskDependencyGraphData::generate_runtime_header() {
 
   Headerfile << "extern \"C\" void __kmpc_taskgraph(void *loc_ref, int gtid, "
                 "uint32_t tdg_id, void (*entry)(void *), void *args, int tdg_type, "
-                "int if_cond, bool nowait);\n";
+                "int if_cond, bool nowait, bool isSingleBasicBlock);\n";
 
   if (Prealloc) {
     Headerfile << "struct GlobalVarInfo\n{\n";
@@ -821,7 +821,7 @@ inline uint32_t hash_str_uint32(const std::string &str) {
 
 void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName,
                                                         Function &F,
-                                                        int ntdgs) {
+                                                        int ntdgs, bool isSingleBasicBlock) {
 
   std::string fileName = ModuleName.str();
   size_t lastindex = fileName.find_last_of(".");
@@ -921,47 +921,52 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName,
   } else {
     Tdgfile << "};\n";
   }
-  Tdgfile << "struct kmp_node_info " << rawFileName << "_kmp_tdg_" << ntdgs
-          << "[" << FunctionTasks.size() << "] = {";
-  for (int i = 0; i < (int)FunctionTasks.size(); i++) {
-    Tdgfile << "{ .static_id = " << FunctionTasks[i].id
-            << ", .task = NULL, .succesors = &" << rawFileName
-            << "_kmp_tdg_outs_" << ntdgs << "[" << offout << "]"
-            << ", .nsuccessors = " << FunctionTasks[i].successors.size()
-            << ", .npredecessors_counter = {"
-            << FunctionTasks[i].predecessors.size()
-            << "}, .npredecessors = " << FunctionTasks[i].predecessors.size()
-            << ", .successors_size = 0"
-            << ", .static_thread = -1"
-            << ", .pragma_id = " << FunctionTasks[i].pragmaId;
-    if (Prealloc)
-      Tdgfile << ", .private_data = &" << rawFileName << "_task_"
-              << FunctionTasks[i].id << "_" << ntdgs << "_private_data"
-              << ", .shared_data = &" << rawFileName << "_task_"
-              << FunctionTasks[i].id << "_" << ntdgs << "_shared_data";
-    else
-      Tdgfile << ", .private_data = NULL"
-              << ", .shared_data = NULL";
 
-    Tdgfile << ", .parent_task = NULL"
-            << ", .next_waiting_tdg = NULL"
-            << "}";
+  if (isSingleBasicBlock) {
+    Tdgfile << "struct kmp_node_info " << rawFileName << "_kmp_tdg_" << ntdgs
+            << "[" << FunctionTasks.size() << "] = {";
+    for (int i = 0; i < (int)FunctionTasks.size(); i++) {
+      Tdgfile << "{ .static_id = " << FunctionTasks[i].id
+              << ", .task = NULL, .succesors = &" << rawFileName
+              << "_kmp_tdg_outs_" << ntdgs << "[" << offout << "]"
+              << ", .nsuccessors = " << FunctionTasks[i].successors.size()
+              << ", .npredecessors_counter = {"
+              << FunctionTasks[i].predecessors.size()
+              << "}, .npredecessors = " << FunctionTasks[i].predecessors.size()
+              << ", .successors_size = 0"
+              << ", .static_thread = -1"
+              << ", .pragma_id = " << FunctionTasks[i].pragmaId;
+      if (Prealloc)
+        Tdgfile << ", .private_data = &" << rawFileName << "_task_"
+                << FunctionTasks[i].id << "_" << ntdgs << "_private_data"
+                << ", .shared_data = &" << rawFileName << "_task_"
+                << FunctionTasks[i].id << "_" << ntdgs << "_shared_data";
+      else
+        Tdgfile << ", .private_data = NULL"
+                << ", .shared_data = NULL";
 
-    offout += FunctionTasks[i].successors.size();
-    if (i != (int)FunctionTasks.size() - 1)
-      Tdgfile << ",\n";
-    else
-      Tdgfile << "};\n";
-  }
-  Tdgfile << "int " << rawFileName << "_kmp_tdg_roots_" << ntdgs << "["
-          << TdgRoots.size() << "] = {";
-  for (int i = 0; i < (int)TdgRoots.size(); i++) {
-    Tdgfile << TdgRoots[i];
-    if (i != (int)TdgRoots.size() - 1)
-      Tdgfile << ", ";
-    else
-      Tdgfile << "};\n";
-  }
+      Tdgfile << ", .parent_task = NULL"
+              << ", .next_waiting_tdg = NULL"
+              << "}";
+
+      offout += FunctionTasks[i].successors.size();
+      if (i != (int)FunctionTasks.size() - 1)
+        Tdgfile << ",\n";
+      else
+        Tdgfile << "};\n";
+    }
+
+    Tdgfile << "int " << rawFileName << "_kmp_tdg_roots_" << ntdgs << "["
+            << TdgRoots.size() << "] = {";
+    for (int i = 0; i < (int)TdgRoots.size(); i++) {
+      Tdgfile << TdgRoots[i];
+      if (i != (int)TdgRoots.size() - 1)
+        Tdgfile << ", ";
+      else
+        Tdgfile << "};\n";
+    }
+  } // isSingleBasicBlock
+
   if (Prealloc) {
     for (int i = 0; i < (int)TasksAllocInfo.size(); i++) {
 
@@ -1091,12 +1096,14 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName,
   Tdgfile << "extern \"C\" void " << rawFileName << "_kmp_set_tdg_"
           << FNames.first << "_" << FNames.second
           << "(void *loc_ref, int gtid, void (*entry)(void *), void *args, int "
-             "tdg_type, int if_cond, bool nowait, int num_preallocs)\n{\n";
+             "tdg_type, int if_cond, bool nowait, bool isSingleBasicBlock, int num_preallocs)\n{\n";
 
-  Tdgfile << "  __kmpc_set_tdg(" << rawFileName << "_kmp_tdg_" << ntdgs
-          << ", gtid, " << TdgID << ", " << FunctionTasks.size() << ", "
-          << rawFileName << "_kmp_tdg_roots_" << ntdgs << ", "
-          << TdgRoots.size() << ");\n";
+  if (isSingleBasicBlock) {
+    Tdgfile << "  __kmpc_set_tdg(" << rawFileName << "_kmp_tdg_" << ntdgs
+            << ", gtid, " << TdgID << ", " << FunctionTasks.size() << ", "
+            << rawFileName << "_kmp_tdg_roots_" << ntdgs << ", "
+            << TdgRoots.size() << ");\n";
+  }
 
   if (Prealloc) {
     // Tdgfile << "printf(\" es: %d \", sizeof(struct kmp_task));\n";
@@ -1110,9 +1117,10 @@ void TaskDependencyGraphData::generate_runtime_tdg_file(StringRef ModuleName,
             << ")+sizeof(" << rawFileName << "_shared_data_" << longest_pragma
             << "_" << ntdgs << ")," << TdgID << ");\n";
   }
-
+  // instead of using isSingleBasicBlock from clang, we update its value here since
+  // loop unrolling happens after clang
   Tdgfile << "  __kmpc_taskgraph(loc_ref, gtid, " << TdgID
-          << ", entry, args, tdg_type, if_cond, nowait);\n}";
+          << ", entry, args, tdg_type, if_cond, nowait, " << isSingleBasicBlock << ");\n}";
 
   Tdgfile.close();
 }
@@ -1536,7 +1544,7 @@ int TaskDependencyGraphData::findPragmaId(CallInst &TaskCallInst,
 }
 
 void TaskDependencyGraphData::findOpenMPTasks(Function &F, DominatorTree &DT,
-                                              int ntdgs) {
+                                              int ntdgs, bool isSingleBasicBlock) {
   // Iterate over the BB
   SmallVector<BasicBlock *, 8> Worklist;
   SmallPtrSet<BasicBlock *, 8> Visited;
@@ -1555,50 +1563,51 @@ void TaskDependencyGraphData::findOpenMPTasks(Function &F, DominatorTree &DT,
         }
     }
   }
+  if (isSingleBasicBlock) {
+    while (!Worklist.empty()) {
+      auto WIt = Worklist.begin();
+      BasicBlock *BB = *WIt;
+      Worklist.erase(WIt);
 
-  while (!Worklist.empty()) {
-    auto WIt = Worklist.begin();
-    BasicBlock *BB = *WIt;
-    Worklist.erase(WIt);
+      for (Instruction &I : *BB) {
+          // Look for task without deps
+          if (CallInst *II = dyn_cast<CallInst>(&I)) {
+            if (II->getCalledFunction()) {
+            bool hasDeps = false;
+            bool isTask = false;
+            if (II->getCalledFunction()->getName() ==
+                "__kmpc_omp_task_with_deps") {
+              hasDeps = true;
+              isTask = true;
+            } else if (II->getCalledFunction()->getName() == "__kmpc_omp_task") {
+              hasDeps = false;
+              isTask = true;
+            }
+            if (isTask) {
+              TaskInfo TaskFound;
+              TaskFound.id = NumTasks;
+              if (Prealloc)
+                TaskFound.pragmaId = findPragmaId(*II, TaskFound, F, DT);
+              else
+                TaskFound.pragmaId = -1;
+              ++NumTasks;
+              // Fill Task Deps and Ident info
+              if (hasDeps)
+                obtainTaskInfo(TaskFound, *II, DT);
 
-    for (Instruction &I : *BB) {
-        // Look for task without deps
-        if (CallInst *II = dyn_cast<CallInst>(&I)) {
-          if (II->getCalledFunction()) {
-          bool hasDeps = false;
-          bool isTask = false;
-          if (II->getCalledFunction()->getName() ==
-              "__kmpc_omp_task_with_deps") {
-            hasDeps = true;
-            isTask = true;
-          } else if (II->getCalledFunction()->getName() == "__kmpc_omp_task") {
-            hasDeps = false;
-            isTask = true;
+              obtainTaskIdent(TaskFound, *II);
+              // Store Task info
+              FunctionTasks.push_back(TaskFound);
+            }
+            }
           }
-          if (isTask) {
-            TaskInfo TaskFound;
-            TaskFound.id = NumTasks;
-            if (Prealloc)
-              TaskFound.pragmaId = findPragmaId(*II, TaskFound, F, DT);
-            else
-              TaskFound.pragmaId = -1;
-            ++NumTasks;
-            // Fill Task Deps and Ident info
-            if (hasDeps)
-              obtainTaskInfo(TaskFound, *II, DT);
-
-            obtainTaskIdent(TaskFound, *II);
-            // Store Task info
-            FunctionTasks.push_back(TaskFound);
-          }
-          }
+      }
+      // Do not revisite BB
+      for (auto It = succ_begin(BB); It != succ_end(BB); ++It) {
+        if (!Visited.count(*It)) {
+          Worklist.push_back(*It);
+          Visited.insert(*It);
         }
-    }
-    // Do not revisite BB
-    for (auto It = succ_begin(BB); It != succ_end(BB); ++It) {
-      if (!Visited.count(*It)) {
-        Worklist.push_back(*It);
-        Visited.insert(*It);
       }
     }
   }
@@ -1629,15 +1638,17 @@ void TaskDependencyGraphData::findOpenMPTasks(Function &F, DominatorTree &DT,
   erase_transitive_edges();
 
   // print_tdg();
-  if (FunctionTasks.size()) {
-    // generate_analysis_tdg_file(F.getParent()->getSourceFileName());
-    generate_runtime_header();
-    generate_runtime_tdg_file(F.getParent()->getSourceFileName(), F, ntdgs);
-    print_tdg_to_dot(F.getParent()->getSourceFileName(), ntdgs, F);
 
-    TasksAllocInfo.clear();
-    FunctionTasks.clear();
-  }
+  // we generate the TDG files in all cases because in cases isSingleBasicBlock
+  // is false, we need to define kmp_set_tdg___captured_stmt_ function call
+  // in the tdg files
+  // generate_analysis_tdg_file(F.getParent()->getSourceFileName());
+  generate_runtime_header();
+  generate_runtime_tdg_file(F.getParent()->getSourceFileName(), F, ntdgs, isSingleBasicBlock);
+  print_tdg_to_dot(F.getParent()->getSourceFileName(), ntdgs, F);
+
+  TasksAllocInfo.clear();
+  FunctionTasks.clear();
 }
 
 void TaskDependencyGraphData::clear() {
@@ -1649,16 +1660,23 @@ bool TaskDependencyGraphPass::runOnModule(Module &M) {
   TaskDependencyGraphData TDG;
 
   int ntdgs = 0;
+  bool isSinglebasicBlock = true;
   for (Function &F : M) {
     if (F.isDeclaration() || F.empty())
       continue;
     // Only check functions with tasks
     auto &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
     if (F.hasFnAttribute("llvm.omp.taskgraph.static")) {
+      if (F.size() == 1)
+        std::cout << "we have a single block function, continuing static TDG analysis" << std::endl;
+      else {
+        std::cout << "we have a multiple blocks function, giving up static TDG analysis" << std::endl;
+        isSinglebasicBlock = false;
+      }
       ntdgs++;
       if (F.hasFnAttribute("llvm.omp.taskgraph.prealloc"))
         TDG.setPrealloc();
-      TDG.findOpenMPTasks(F, DT, ntdgs);
+      TDG.findOpenMPTasks(F, DT, ntdgs, isSinglebasicBlock);
     }
   }
   return false;
@@ -1697,17 +1715,23 @@ TaskDependencyGraphAnalysis::run(Module &M, ModuleAnalysisManager &AM) {
   FunctionAnalysisManager &FAM =
       AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
   int ntdgs = 0;
-
+  bool isSingleBasicBlock = true;
   for (Function &F : M) {
     if (F.isDeclaration() || F.empty())
       continue;
     auto &DT = FAM.getResult<DominatorTreeAnalysis>(F);
     // Only check functions with tasks
     if (F.hasFnAttribute("llvm.omp.taskgraph.static")) {
+      if (F.size() == 1)
+        std::cout << "we have a single block function, continuing static TDG analysis" << std::endl;
+      else {
+        std::cout << "we have a multiple blocks function, giving up static TDG analysis of this function" << std::endl;
+        isSingleBasicBlock = false;
+      }
       ntdgs++;
       if (F.hasFnAttribute("llvm.omp.taskgraph.prealloc"))
         TDG.setPrealloc();
-      TDG.findOpenMPTasks(F, DT, ntdgs);
+      TDG.findOpenMPTasks(F, DT, ntdgs, isSingleBasicBlock);
     }
   }
 

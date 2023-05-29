@@ -90,7 +90,7 @@ public:
   void print_tdg_to_dot(StringRef ModuleName, int ntdgs, Function &F);
   void generate_runtime_header();
   void generate_analysis_tdg_file(StringRef ModuleName);
-  void generate_runtime_tdg_file(StringRef ModuleName, Function &F, int ntdgs);
+  void generate_runtime_tdg_file(StringRef ModuleName, Function &F, int ntdgs, bool isSingleBasicBlock);
   void clear();
   void obtainTaskIdent(TaskInfo &TaskFound, CallInst &TaskCall);
   // static so that it can be used in cuda generation
@@ -98,7 +98,7 @@ public:
                                       int struct_id, std::string name, int ntdgs);
   void erase_transitive_edges();
   bool checkDependency(TaskDependInfo &Source, TaskDependInfo &Dest);
-  void findOpenMPTasks(Function &F, DominatorTree &DT, int ntdgs);
+  void findOpenMPTasks(Function &F, DominatorTree &DT, int ntdgs, bool isSingleBasicBlock);
   void obtainTaskInfo(TaskInfo &TaskFound, CallInst &TaskCall,
                       DominatorTree &DT);
   int findPragmaId(CallInst &TaskCallInst, TaskInfo &TaskFound, Function &F, DominatorTree &DT);

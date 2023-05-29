@@ -4223,7 +4223,7 @@ KMP_EXPORT void __kmpc_set_tdg(struct kmp_node_info *tdg,  kmp_int32 gtid, kmp_u
 //                                  kmp_int32 tdg_type);
 KMP_EXPORT void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid,
                                  kmp_uint32 tdg_id, void (*entry)(void *),
-                                 void *args, kmp_int32 tdg_type, kmp_int32 if_cond, bool nowait);
+                                 void *args, kmp_int32 tdg_type, kmp_int32 if_cond, bool nowait, bool isSingleBasicBlock);
 KMP_EXPORT void __kmpc_prealloc_tasks(
     kmp_task_alloc_info *task_static_data, char *preallocated_tasks,
     kmp_space_indexer_node *preallocated_nodes, kmp_uint32 n_task_constructs,
