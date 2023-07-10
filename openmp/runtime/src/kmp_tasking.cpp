@@ -28,7 +28,7 @@
 //Values for dynamic variants support
 #define LOW_MEMORY 45
 #define LOW_CPU_USAGE 46
-#define USER_CONDITION 49
+#define USER_CONDITION 50
 
 //For taskloop
 kmp_int32 taskloop_task_id = 0;
