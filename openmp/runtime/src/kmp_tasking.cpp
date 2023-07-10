@@ -1829,7 +1829,9 @@ kmp_int32 __kmpc_set_task_static_id(kmp_int32 gtid, kmp_task_t *task) {
 
 kmp_uint32 __kmpc_get_taskgraph_id(kmp_task_t *task) {
   kmp_taskdata_t *taskdata = KMP_TASK_TO_TASKDATA(task);
-  return taskdata->tdg->tdgId;
+  if(taskdata->tdg)
+    return taskdata->tdg->tdgId;
+  return -1;
 }
 
 kmp_int32 __kmpc_getNewGroupID(ident_t *loc_ref) {
