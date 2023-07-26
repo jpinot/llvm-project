@@ -160,7 +160,7 @@ extern void __kmp_destroy_nested_tas_lock(kmp_tas_lock_t *lck);
 #ifndef KMP_USE_FUTEX
 #define KMP_USE_FUTEX                                                          \
   (KMP_OS_LINUX &&                                                             \
-   (KMP_ARCH_X86 || KMP_ARCH_X86_64 || KMP_ARCH_ARM || KMP_ARCH_AARCH64))
+   (KMP_ARCH_X86 || KMP_ARCH_X86_64 || KMP_ARCH_ARM || KMP_ARCH_AARCH64 || KMP_ARCH_PPC64))
 #endif
 #if KMP_USE_FUTEX
 
