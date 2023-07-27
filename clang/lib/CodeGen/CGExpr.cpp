@@ -5065,9 +5065,21 @@ RValue CodeGenFunction::EmitCallExpr(const CallExpr *E,
                   Selector.ScoreOrCondition) {
                 llvm::Value *ExprResult =
                     EvaluateExprAsBool(Selector.ScoreOrCondition);
-                //Annotate condition result
-                dyn_cast<llvm::Instruction>(ExprResult)
-                    ->addAnnotationMetadata("user condition");
+                llvm::Instruction *ExprResultInst =
+                    dyn_cast<llvm::Instruction>(ExprResult);
+
+                if (!ExprResultInst) {
+                  //If EvaluateExprAsBool do not create a icmp instruction then store the result in a new alloca
+                  auto RType = ExprResult->getType();
+                  CharUnits Align = CharUnits::fromQuantity(
+                      CGM.getDataLayout().getPrefTypeAlign(RType));
+                  auto AllocaResult = CreateTempAlloca(RType);
+                  Builder.CreateStore(ExprResult, Address(AllocaResult, RType,
+                                                          Align, KnownNonNull));
+                  ExprResultInst = AllocaResult;
+                }
+                // Annotate condition result
+                ExprResultInst->addAnnotationMetadata("user condition");
               }
             }
         }
