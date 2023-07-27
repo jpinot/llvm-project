@@ -125,13 +125,15 @@ struct DynamicVariant {
                 UserConditionsArray = IRB.CreateAlloca(UserConditionsArrayType);
                 int Index = 0;
                 for (Value *Condition : UserConditions) {
-                  Value *GEP = IRB.CreateInBoundsGEP(
-                      UserConditionsArrayType, UserConditionsArray,
-                      {IRB.getInt32(0), IRB.getInt32(Index)});
-                  Value *ConditionBitcast =
-                      IRB.CreateIntCast(Condition, IRB.getInt32Ty(), false);
-                  IRB.CreateStore(ConditionBitcast, GEP);
-                  Index++;
+                   Value *GEP = IRB.CreateInBoundsGEP(
+                       UserConditionsArrayType, UserConditionsArray,
+                       {IRB.getInt32(0), IRB.getInt32(Index)});
+                   if (dyn_cast<AllocaInst>(Condition))
+                     Condition = IRB.CreateLoad(IRB.getInt1Ty(), Condition);
+                   Value *ConditionBitcast =
+                       IRB.CreateIntCast(Condition, IRB.getInt32Ty(), false);
+                   IRB.CreateStore(ConditionBitcast, GEP);
+                   Index++;
                 }
               }
 
