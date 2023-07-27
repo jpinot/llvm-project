@@ -5073,7 +5073,7 @@ RValue CodeGenFunction::EmitCallExpr(const CallExpr *E,
                   auto RType = ExprResult->getType();
                   CharUnits Align = CharUnits::fromQuantity(
                       CGM.getDataLayout().getPrefTypeAlign(RType));
-                  auto AllocaResult = CreateTempAlloca(RType);
+                  auto AllocaResult = Builder.CreateAlloca(RType);
                   Builder.CreateStore(ExprResult, Address(AllocaResult, RType,
                                                           Align, KnownNonNull));
                   ExprResultInst = AllocaResult;
