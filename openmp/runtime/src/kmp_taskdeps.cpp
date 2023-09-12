@@ -33,6 +33,7 @@ bool KMP_TDG_TRACING =
     0; // set to 1 to turn on the printf throughout the library
 bool KMP_TDG_TIMING =
     0; // set to 1 to turn on time measurements, needed to sort tasks
+extern bool enable_tdg_scheduling;
 void debug_print(const char *format, ...);
 void __kmp_enable_tasking(kmp_task_team_t *task_team, kmp_info_t *this_thr);
 void sync_tdg_tasks_for_task_team(kmp_int32, kmp_task_team_t *,
@@ -1269,7 +1270,8 @@ void __kmpc_execute_tdg(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 tdg_index, b
         __kmp_omp_task(gtid, task, true);
       }
     }
-  } else if (thread->th.th_task_team == NULL || nowait || __kmp_tdg_static_schedule) {
+  } else if (thread->th.th_task_team == NULL || nowait ||
+             __kmp_tdg_static_schedule || !enable_tdg_scheduling) {
     // tdgStatus != KMP_TDG_PREALLOC && (th_task_team == NULL || nowait)
     for (kmp_int32 j = 0; j < thisNumRoots; j++)
       __kmp_omp_task(gtid, thisRecordMap[thisRootTasks[j]].task, true);
@@ -1486,7 +1488,7 @@ kmp_int32 __kmpc_record(ident_t *loc_ref, kmp_int32 gtid, void (*entry)(void *),
 
   //Static Mapping: distribute root tasks among threads.
   //Only activate when taskgraph is synchronous
-  if (!nowait && !__kmp_tdg_static_schedule)
+  if (!nowait && !__kmp_tdg_static_schedule && enable_tdg_scheduling)
     distribute_tasks(gtid, current_tdg_number);
   //Clean tdg creation info slot
   cleanTdgCreationInfo(gtid);
@@ -1660,7 +1662,7 @@ void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid, kmp_uint32 tdg_id,
       // From KMP_TDG_FILL_DATA to KMP_TDG_NONE
       __kmp_global_tdgs[tdg_index].tdgStatus = KMP_TDG_NONE;
     }
-    if (!nowait && !__kmp_tdg_static_schedule)
+    if (!nowait && !__kmp_tdg_static_schedule && enable_tdg_scheduling)
       distribute_tasks(gtid, tdg_index);
 
     __kmpc_execute_tdg(loc_ref, gtid, tdg_index, nowait);

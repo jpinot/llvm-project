@@ -41,6 +41,7 @@ extern void kmp_insert_task_in_indexer(kmp_task_t *task);
 
 //Variables to enable static mapping/scheduling
 bool disable_stealing = false;
+bool enable_tdg_scheduling = true;
 
 //To manage task replication with groupID and callbacks
 extern int __replication_architecture_minimum __attribute__((weak));
