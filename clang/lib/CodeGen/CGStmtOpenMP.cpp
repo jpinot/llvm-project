@@ -5291,8 +5291,10 @@ void CodeGenFunction::EmitOMPTaskDirective(const OMPTaskDirective &S) {
     FuncToCall = C->getFunc();
     DummyVars = C->getDummyVars();
     Constraint = C->getRedundancyConstraint();
-    OriginalVarValue = EmitScalarExpr(VarToReplicate);
-    OriginalVarPointer = EmitLValue(VarToReplicate).getPointer(*this);
+    LValue OriginalLValue = EmitLValue(VarToReplicate);
+    OriginalVarPointer = OriginalLValue.getPointer(*this);
+    OriginalVarValue = Builder.CreateLoad(OriginalLValue.getAddress(*this));
+
     for (Expr *E : DummyVars)
       EmitAutoVarDecl(*cast<VarDecl>(cast<DeclRefExpr>(E)->getDecl()));
   }

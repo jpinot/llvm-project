@@ -2974,17 +2974,14 @@ Address CodeGenFunction::GeneratePrivateCopyCapturedStmtArgument(
       const auto *DRE2 = dyn_cast<DeclRefExpr>(VarToReplicate);
       if (DRE1 && DRE2 && DRE1->getDecl() == DRE2->getDecl()) {
 
-        llvm::Value *OriginalVarEmitted = EmitScalarExpr((*I));
-        llvm::Type *OriginalVarType = OriginalVarEmitted->getType();
-
-        CGM.getModule().getOrInsertGlobal(ReplicaName, OriginalVarType);
+        CGM.getModule().getOrInsertGlobal(ReplicaName, OriginalVarValue->getType());
 
         llvm::GlobalVariable *VariableReplicated =
             CGM.getModule().getNamedGlobal(ReplicaName);
         VariableReplicated->setLinkage(llvm::GlobalValue::CommonLinkage);
         VariableReplicated->setAlignment(llvm::MaybeAlign(4));
         VariableReplicated->setInitializer(
-            llvm::Constant::getNullValue(VariableReplicated->getType()));
+            llvm::Constant::getNullValue(OriginalVarValue->getType()));
 
         CharUnits Align = getContext().getTypeAlignInChars((*I)->getType());
         Builder.CreateStore(
