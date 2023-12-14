@@ -175,7 +175,7 @@ struct DynamicVariant {
         // First, we create a switch just after the dynamic variant call
         auto *VariantCall = I->getNextNode();
         IRBuilder<> IRB(VariantCall);
-        auto *VariantSwitch = IRB.CreateSwitch(I, nullptr, Functions.size());
+        auto *VariantSwitch = IRB.CreateSwitch(I, I->getParent(), Functions.size());
 
         // Second, we split the BB after the switch. This is the variant_end
         BasicBlock *VariantEnd =
