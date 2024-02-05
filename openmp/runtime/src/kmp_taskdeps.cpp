@@ -1594,9 +1594,15 @@ void copyPreallocData(int gtid, kmp_int32 ThisMapSize, void *args,
 }
 
 void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid, kmp_uint32 tdg_id,
-                      void (*entry)(void *), void *args, kmp_int32 tdg_type,
-                      kmp_int32 if_cond, bool nowait, bool isSingleBasicBlock) {
+                      void (*entry)(void *), void *args, kmp_int32 if_cond,
+                      kmp_int32 tdg_flags) {
   int tdg_index = -1;
+  kmp_tdg_flags_t *input_flags = (kmp_tdg_flags_t *)&tdg_flags;
+  int tdg_type = input_flags->static_tdg;
+  int nowait = input_flags->nowait;
+  int isSingleBasicBlock = input_flags->single_bb;
+  // use input_flags->target_graph to build taskgraph with target tasks
+
   for (int i = 0; i < __kmp_ntdgs; i++) {
     if (__kmp_global_tdgs[i].tdgId == tdg_id) {
       tdg_index = i;

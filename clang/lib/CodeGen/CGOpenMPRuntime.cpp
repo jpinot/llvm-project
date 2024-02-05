@@ -6101,12 +6101,23 @@ void CGOpenMPRuntime::emitTaskgraphCall(CodeGenFunction &CGF,
   if (!CGF.HaveInsertPoint())
     return;
 
-  uint32_t tdgType = 0;
+  // If clause cannot have its value determined at this point
+  // So we do not include it in TdgFlags
+  enum {
+    STATIC_TDG = 0x01,
+    NOWAIT = 0X02,
+    SINGLE_BB = 0X04,
+    TARGET_GRAPH = 0X08 // for future use, taskgraph with target tasks
+  };
+
+  unsigned TdgFlags = 0;
   llvm::Value *NumPreallocs = CGF.Builder.getInt32(0);
+  bool isStaticTDG = false;
 
   const OMPTdgTypeClause *TdgTypeClause = D.getSingleClause<OMPTdgTypeClause>();
   if (TdgTypeClause && TdgTypeClause->getTdgTypeKind() == OMPC_TDG_TYPE_static) {
-      tdgType = 1;
+      TdgFlags |= STATIC_TDG;
+      isStaticTDG = true;
   }
 
   const OMPNumPreallocsClause *NumPreallocsClause = D.getSingleClause<OMPNumPreallocsClause>();
@@ -6130,7 +6141,7 @@ void CGOpenMPRuntime::emitTaskgraphCall(CodeGenFunction &CGF,
 
   llvm::Value *Nowait = CGF.Builder.getInt1(0);
   if (D.getSingleClause<OMPNowaitClause>())
-    Nowait = CGF.Builder.getInt1(1);
+    TdgFlags |= NOWAIT;
 
   CodeGenFunction OutlinedCGF(CGM, true);
 
@@ -6162,7 +6173,11 @@ void CGOpenMPRuntime::emitTaskgraphCall(CodeGenFunction &CGF,
                         "_" + FNames.second.str();
 
   uint32_t dynamicTDGId = hash_str_uint32(setName);
-  llvm::Value *isSingleBasicBlock = CGF.Builder.getInt1(1);
+  // llvm::Value *isSingleBasicBlock = CGF.Builder.getInt1(1);
+  TdgFlags |= SINGLE_BB;
+
+  llvm::Value *TdgFuncFlags = CGF.Builder.getInt32(TdgFlags);
+
   std::vector<llvm::Value *> Args{
       emitUpdateLocation(CGF, Loc),
       getThreadID(CGF, Loc),
@@ -6170,9 +6185,9 @@ void CGOpenMPRuntime::emitTaskgraphCall(CodeGenFunction &CGF,
       CGF.Builder.CreatePointerBitCastOrAddrSpaceCast(FnT,  CGM.VoidPtrTy),
       CGF.Builder.CreatePointerBitCastOrAddrSpaceCast(
           CapStruct.getPointer(OutlinedCGF), CGM.VoidPtrTy),
-      CGF.Builder.getInt32(tdgType), Condition, Nowait, isSingleBasicBlock};
+      Condition, TdgFuncFlags};
   // Static TDG
-  if (tdgType) {
+  if (isStaticTDG) {
     if (!FnT->hasFnAttribute("llvm.omp.taskgraph.static"))
       FnT->addFnAttr("llvm.omp.taskgraph.static");
 

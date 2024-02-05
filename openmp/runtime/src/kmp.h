@@ -2532,6 +2532,15 @@ typedef struct kmp_tasking_flags { /* Total struct must be exactly 32 bits */
 } kmp_tasking_flags_t;
 
 #if LIBOMP_TASKGRAPH
+
+typedef struct kmp_tdg_flags {
+  unsigned static_tdg : 1; // whether the tdg is static
+  unsigned nowait : 1;
+  unsigned single_bb : 1;
+  unsigned target_graph : 1; // whether target_graph clause is present
+  unsigned reserved : 28;
+}kmp_tdg_flags_t;
+
 //Represents the two types of TDGs
 enum kmp_tdg_type { KMP_DYNAMIC_TDG, KMP_STATIC_TDG };
 //Represents the possible status of the TDG
@@ -4223,7 +4232,7 @@ KMP_EXPORT void __kmpc_set_tdg(struct kmp_node_info *tdg,  kmp_int32 gtid, kmp_u
 //                                  kmp_int32 tdg_type);
 KMP_EXPORT void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid,
                                  kmp_uint32 tdg_id, void (*entry)(void *),
-                                 void *args, kmp_int32 tdg_type, kmp_int32 if_cond, bool nowait, bool isSingleBasicBlock);
+                                 void *args, kmp_int32 if_cond, kmp_int32 flags);
 KMP_EXPORT void __kmpc_prealloc_tasks(
     kmp_task_alloc_info *task_static_data, char *preallocated_tasks,
     kmp_space_indexer_node *preallocated_nodes, kmp_uint32 n_task_constructs,
