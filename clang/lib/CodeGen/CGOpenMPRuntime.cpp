@@ -3679,6 +3679,90 @@ static void emitPrivatesInit(CodeGenFunction &CGF,
   }
 }
 
+/// Emit initialization for variables to recapture in taskgraph directives.
+static void emitRecaptureInit(CodeGenFunction &CGF,
+                             const OMPExecutableDirective &D,
+                             LValue TDBase,
+                             const RecordDecl *KmpTaskgraphTWithPrivatesQTyRD,
+                             const OMPTaskgraphDataTy &Data,
+                             ArrayRef<PrivateDataTy> Recapture) {
+  ASTContext &C = CGF.getContext();
+  auto FI = std::next(KmpTaskgraphTWithPrivatesQTyRD->field_begin());
+  LValue PrivatesBase = CGF.EmitLValueForField(TDBase, *FI);
+  OpenMPDirectiveKind Kind = D.getDirectiveKind();
+  const CapturedStmt &CS = *D.getCapturedStmt(Kind);
+  CodeGenFunction::CGCapturedStmtInfo CapturesInfo(CS);
+
+  FI = cast<RecordDecl>(FI->getType()->getAsTagDecl())->field_begin();
+  for (const RecaptureDataTy &Pair : Recapture) {
+    // Do not initialize private locals.
+    if (Pair.second.isLocalPrivate()) {
+      ++FI;
+      continue;
+    }
+    const VarDecl *VD = Pair.second.PrivateCopy;
+    const Expr *Init = VD->getAnyInitializer();
+    if (Init) {
+      LValue PrivateLValue = CGF.EmitLValueForField(PrivatesBase, *FI);
+      if (const VarDecl *Elem = Pair.second.PrivateElemInit) {
+        const VarDecl *OriginalVD = Pair.second.Original;
+        // Check if the variable is the target-based BasePointersArray,
+        // PointersArray, SizesArray, or MappersArray.
+        LValue SharedRefLValue;
+        QualType Type = PrivateLValue.getType();
+        const FieldDecl *SharedField = CapturesInfo.lookup(OriginalVD);
+        if (CGF.LambdaCaptureFields.count(
+                       Pair.second.Original->getCanonicalDecl()) > 0 ||
+                   isa_and_nonnull<BlockDecl>(CGF.CurCodeDecl)) {
+          SharedRefLValue = CGF.EmitLValue(Pair.second.OriginalRef);
+        } else {
+          // Processing for implicitly captured variables.
+          InlinedOpenMPRegionRAII Region(
+              CGF, [](CodeGenFunction &, PrePostActionTy &) {}, OMPD_unknown,
+              /*HasCancel=*/false, /*NoInheritance=*/true);
+          SharedRefLValue = CGF.EmitLValue(Pair.second.OriginalRef);
+        }
+        if (Type->isArrayType()) {
+          // Initialize firstprivate array.
+          if (!isa<CXXConstructExpr>(Init) || CGF.isTrivialInitializer(Init)) {
+            // Perform simple memcpy.
+            CGF.EmitAggregateAssign(PrivateLValue, SharedRefLValue, Type);
+          } else {
+            // Initialize firstprivate array using element-by-element
+            // initialization.
+            CGF.EmitOMPAggregateAssign(
+                PrivateLValue.getAddress(CGF), SharedRefLValue.getAddress(CGF),
+                Type,
+                [&CGF, Elem, Init, &CapturesInfo](Address DestElement,
+                                                  Address SrcElement) {
+                  // Clean up any temporaries needed by the initialization.
+                  CodeGenFunction::OMPPrivateScope InitScope(CGF);
+                  InitScope.addPrivate(Elem, SrcElement);
+                  (void)InitScope.Privatize();
+                  // Emit initialization for single element.
+                  CodeGenFunction::CGCapturedStmtRAII CapInfoRAII(
+                      CGF, &CapturesInfo);
+                  CGF.EmitAnyExprToMem(Init, DestElement,
+                                       Init->getType().getQualifiers(),
+                                       /*IsInitializer=*/false);
+                });
+          }
+        } else {
+          CodeGenFunction::OMPPrivateScope InitScope(CGF);
+          InitScope.addPrivate(Elem, SharedRefLValue.getAddress(CGF));
+          (void)InitScope.Privatize();
+          CodeGenFunction::CGCapturedStmtRAII CapInfoRAII(CGF, &CapturesInfo);
+          CGF.EmitExprAsInit(Init, VD, PrivateLValue,
+                             /*capturedByInit=*/false);
+        }
+      } else {
+        CGF.EmitExprAsInit(Init, VD, PrivateLValue, /*capturedByInit=*/false);
+      }
+    }
+    ++FI;
+  }
+}
+
 /// Check if duplication function is required for taskloops.
 static bool checkInitIsRequired(CodeGenFunction &CGF,
                                 ArrayRef<PrivateDataTy> Privates) {
@@ -6211,6 +6295,18 @@ CGOpenMPRuntime::emitTaskgraphInit(CodeGenFunction &CGF,
                           CGM.getModule(), OMPRTL___kmpc_omp_taskgraph_alloc),
                       AllocArgs);
 
+  llvm::Value *NewTaskgraphNewTaskgraphTTy = CGF.Builder.CreatePointerBitCastOrAddrSpaceCast(
+      NewTaskgraph, KmpTaskgraphTWithPrivatesPtrTy);
+
+  LValue Base = CGF.MakeNaturalAlignAddrLValue(NewTaskgraphNewTaskgraphTTy,
+                                               KmpTaskgraphTWithPrivatesQTy);
+  LValue TDBase =
+      CGF.EmitLValueForField(Base, *KmpTaskgraphTWithPrivatesQTyRD->field_begin());
+
+  if (!Recapture.empty()) {
+    emitRecaptureInit(CGF, D, Base, KmpTaskgraphTWithPrivatesQTyRD,
+                     Data, Recapture);
+  }
   TaskgraphResultTy Result;
   Result.NewTaskgraph = NewTaskgraph;
   return Result;
