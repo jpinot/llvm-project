@@ -1566,6 +1566,13 @@ void __kmp_enable_tasking_in_serial_mode(ident_t *loc_ref, kmp_int32 gtid,
     TCW_4(task_team->tt.tt_hidden_helper_task_encountered, TRUE);
 }
 
+// dummy function to test taskgraph firstprivate
+kmp_taskgraph_t *__kmpc_omp_taskgraph_alloc(ident_t *loc_ref, kmp_int32 gtid,
+                                       size_t size_of_taskgraph_t) {
+  kmp_taskgraph_t *ret = (kmp_taskgraph_t *)malloc(sizeof(size_of_taskgraph_t));
+  return ret;
+}
+
 // __kmp_task_alloc: Allocate the taskdata and task data structures for a task
 //
 // loc_ref: source location information

@@ -90,6 +90,12 @@ public:
   void operator()(CodeGenFunction &CGF) const;
 };
 
+struct OMPTaskgraphDataTy final {
+  SmallVector<const Expr *, 4> RecaptureCopies;
+  SmallVector<const Expr *, 4> RecaptureVars;
+  SmallVector<const Expr *, 4> RecaptureInits;
+};
+
 struct OMPTaskDataTy final {
   SmallVector<const Expr *, 4> PrivateVars;
   SmallVector<const Expr *, 4> PrivateCopies;
@@ -519,6 +525,13 @@ protected:
   ///  kmp_int64 st; // stride
   /// };
   QualType KmpDimTy;
+  /// typedef struct kmp_taskgraph {
+  ///   int id;
+  /// }kmp_taskgraph_t
+  /// Dummy structure for testing proposes
+  QualType KmpTaskgraphTQTy;
+  /// Saved kmp_taskgraph_t for taskgraph directive.
+  QualType SavedKmpTaskgraphTQTy;
 
   bool ShouldMarkAsGlobal = true;
   /// List of the emitted declarations.
@@ -638,6 +651,11 @@ protected:
     const RecordDecl *KmpTaskTQTyRD = nullptr;
     llvm::Value *TaskDupFn = nullptr;
   };
+
+  struct TaskgraphResultTy {
+    llvm::Value *NewTaskgraph = nullptr;
+  };
+
   /// Emit task region for the task directive. The task region is emitted in
   /// several steps:
   /// 1. Emit a call to kmp_task_t *__kmpc_omp_task_alloc(ident_t *, kmp_int32
@@ -664,6 +682,17 @@ protected:
                             const OMPExecutableDirective &D,
                             llvm::Function *TaskFunction, QualType SharedsTy,
                             Address Shareds, const OMPTaskDataTy &Data);
+
+  /// Emit taskgraph region for the taskgraph directive.
+  /// The task region is emitted in several steps:
+  /// 1. Emit a call to kmp_taskgraph_t *__kmpc_omp_taskgraph_alloc(ident_t *, kmp_int32
+  /// gtid, size_t sizeof_kmp_taskgraph_t).
+  /// \param D Current taskgraph directive.
+  /// \param Data Additional data for taskgraph generation. So far only
+  ///             for tracking firstprivate variables
+  TaskgraphResultTy emitTaskgraphInit(CodeGenFunction &CGF, SourceLocation Loc,
+                                      const OMPExecutableDirective &D,
+                                      const OMPTaskgraphDataTy &Data);
 
   /// Return the trip count of loops associated with constructs / 'target teams
   /// distribute' and 'teams distribute parallel for'. \param SizeEmitter Emits
@@ -1353,7 +1382,8 @@ public:
 
   /// Emit code for 'taskgraph' directive.
   virtual void emitTaskgraphCall(CodeGenFunction &CGF, SourceLocation Loc,
-                                 const OMPExecutableDirective &D);
+                                 const OMPExecutableDirective &D,
+                                 const OMPTaskgraphDataTy &Data);
 
   /// Emit code for 'cancellation point' construct.
   /// \param CancelRegion Region kind for which the cancellation point must be
@@ -2158,7 +2188,8 @@ public:
 
   /// Emit code for 'taskgraph' directive.
   void emitTaskgraphCall(CodeGenFunction &CGF, SourceLocation Loc,
-                         const OMPExecutableDirective &D) override;
+                         const OMPExecutableDirective &D,
+                         const OMPTaskgraphDataTy &Data) override;
 
   /// Emit code for 'cancellation point' construct.
   /// \param CancelRegion Region kind for which the cancellation point must be

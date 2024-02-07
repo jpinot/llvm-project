@@ -5499,7 +5499,22 @@ void CodeGenFunction::EmitOMPTaskwaitDirective(const OMPTaskwaitDirective &S) {
 
 void CodeGenFunction::EmitOMPTaskgraphDirective(
     const OMPTaskgraphDirective &S) {
-  CGM.getOpenMPRuntime().emitTaskgraphCall(*this, S.getBeginLoc(), S);
+  OMPTaskgraphDataTy Data;
+
+  // Get list of firstprivate variables.
+  for (const auto *C : S.getClausesOfKind<OMPRecaptureClause>()) {
+    auto IRef = C->varlist_begin();
+    auto IElemInitRef = C->inits().begin();
+    for (auto *IInit : C->private_copies()) {
+      Data.RecaptureVars.push_back(*IRef);
+      Data.RecaptureCopies.push_back(IInit);
+      Data.RecaptureInits.push_back(*IElemInitRef);
+      ++IRef;
+      ++IElemInitRef;
+    }
+  }
+
+  CGM.getOpenMPRuntime().emitTaskgraphCall(*this, S.getBeginLoc(), S, Data);
 }
 
 bool isSupportedByOpenMPIRBuilder(const OMPTaskgroupDirective &T) {

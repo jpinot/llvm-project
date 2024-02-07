@@ -3084,6 +3084,7 @@ struct PrivateHelpersTy {
   }
 };
 typedef std::pair<CharUnits /*Align*/, PrivateHelpersTy> PrivateDataTy;
+typedef std::pair<CharUnits /*Align*/, PrivateHelpersTy> RecaptureDataTy;
 } // anonymous namespace
 
 static bool isAllocatableDecl(const VarDecl *VD) {
@@ -3109,6 +3110,40 @@ static RecordDecl *createPrivatesRecordDecl(CodeGenModule &CGM,
       const VarDecl *VD = Pair.second.Original;
       QualType Type = VD->getType().getNonReferenceType();
       // If the private variable is a local variable with lvalue ref type,
+      // allocate the pointer instead of the pointee type.
+      if (Pair.second.isLocalPrivate()) {
+        if (VD->getType()->isLValueReferenceType())
+          Type = C.getPointerType(Type);
+        if (isAllocatableDecl(VD))
+          Type = C.getPointerType(Type);
+      }
+      FieldDecl *FD = addFieldToRecordDecl(C, RD, Type);
+      if (VD->hasAttrs()) {
+        for (specific_attr_iterator<AlignedAttr> I(VD->getAttrs().begin()),
+             E(VD->getAttrs().end());
+             I != E; ++I)
+          FD->addAttr(*I);
+      }
+    }
+    RD->completeDefinition();
+    return RD;
+  }
+  return nullptr;
+}
+
+static RecordDecl *createRecaptureRecordDecl(CodeGenModule &CGM,
+                                            ArrayRef<RecaptureDataTy> Recapture) {
+  if (!Recapture.empty()) {
+    ASTContext &C = CGM.getContext();
+    // Build struct .kmp_privates_t. {
+    //         /*  private vars  */
+    //       };
+    RecordDecl *RD = C.buildImplicitRecord(".kmp_recapture.t");
+    RD->startDefinition();
+    for (const auto &Pair : Recapture) {
+      const VarDecl *VD = Pair.second.Original;
+      QualType Type = VD->getType().getNonReferenceType();
+      // If the variable to recapture is a local variable with lvalue ref type,
       // allocate the pointer instead of the pointee type.
       if (Pair.second.isLocalPrivate()) {
         if (VD->getType()->isLValueReferenceType())
@@ -3177,6 +3212,19 @@ createKmpTaskTRecordDecl(CodeGenModule &CGM, OpenMPDirectiveKind Kind,
 }
 
 static RecordDecl *
+createKmpTaskgraphTRecordDecl(CodeGenModule &CGM, OpenMPDirectiveKind Kind,
+                         QualType KmpInt32Ty) {
+  ASTContext &C = CGM.getContext();
+  // Build dummy struct kmp_taskgraph_t {
+  //         int id;
+  //       };
+  RecordDecl *RD = C.buildImplicitRecord("kmp_taskgraph_t");
+  addFieldToRecordDecl(C, RD, KmpInt32Ty);
+  RD->completeDefinition();
+  return RD;
+}
+
+static RecordDecl *
 createKmpTaskTWithPrivatesRecordDecl(CodeGenModule &CGM, QualType KmpTaskTQTy,
                                      ArrayRef<PrivateDataTy> Privates) {
   ASTContext &C = CGM.getContext();
@@ -3192,6 +3240,24 @@ createKmpTaskTWithPrivatesRecordDecl(CodeGenModule &CGM, QualType KmpTaskTQTy,
   RD->completeDefinition();
   return RD;
 }
+
+static RecordDecl *
+createKmpTaskgraphTWithPrivatesRecordDecl(CodeGenModule &CGM, QualType KmpTaskgraphTQTy,
+                                          ArrayRef<RecaptureDataTy> Recapture) {
+  ASTContext &C = CGM.getContext();
+  // Build struct kmp_taskgraph_t_with_recapture {
+  //         kmp_taskgraph_t task_data;
+  //         .kmp_recapture_t. recapture;
+  //       };
+  RecordDecl *RD = C.buildImplicitRecord("kmp_taskgraph_t_with_recapture");
+  RD->startDefinition();
+  addFieldToRecordDecl(C, RD, KmpTaskgraphTQTy);
+  if (const RecordDecl *RecaptureRD = createRecaptureRecordDecl(CGM, Recapture))
+    addFieldToRecordDecl(C, RD, C.getRecordType(RecaptureRD));
+  RD->completeDefinition();
+  return RD;
+}
+
 
 /// Emit a proxy function which accepts kmp_task_t as the second
 /// argument.
@@ -6095,12 +6161,70 @@ inline uint32_t hash_str_uint32(const std::string &str) {
   return hash;
 }
 
+CGOpenMPRuntime::TaskgraphResultTy
+CGOpenMPRuntime::emitTaskgraphInit(CodeGenFunction &CGF,
+                                   SourceLocation Loc,
+                                   const OMPExecutableDirective &D,
+                                   const OMPTaskgraphDataTy &Data) {
+  ASTContext &C = CGM.getContext();
+  llvm::SmallVector<RecaptureDataTy, 4> Recapture;
+
+  const auto *I = Data.RecaptureCopies.begin();
+  const auto *IElemInitRef = Data.RecaptureInits.begin();
+  int numElem = 0;
+  for (const Expr *E : Data.RecaptureVars) {
+    const auto *VD = cast<VarDecl>(cast<DeclRefExpr>(E)->getDecl());
+    Recapture.emplace_back(
+      C.getDeclAlign(VD),
+      PrivateHelpersTy(
+        E, VD, cast<VarDecl>(cast<DeclRefExpr>(*I)->getDecl()),
+        cast<VarDecl>(cast<DeclRefExpr>(*IElemInitRef)->getDecl())));
+    ++I;
+    ++IElemInitRef;
+  }
+  QualType KmpInt32Ty = C.getIntTypeForBitwidth(/*DestWidth=*/32, /*Signed=*/1);
+  if (SavedKmpTaskgraphTQTy.isNull()) {
+    SavedKmpTaskgraphTQTy = C.getRecordType(
+        createKmpTaskgraphTRecordDecl(CGM, D.getDirectiveKind(), KmpInt32Ty));
+  }
+  KmpTaskgraphTQTy = SavedKmpTaskgraphTQTy;
+  const auto *KmpTaskGraphTQTyRD = cast<RecordDecl>(KmpTaskgraphTQTy->getAsTagDecl());
+  const RecordDecl *KmpTaskgraphTWithPrivatesQTyRD =
+      createKmpTaskgraphTWithPrivatesRecordDecl(CGM, KmpTaskgraphTQTy, Recapture);
+  QualType KmpTaskgraphTWithPrivatesQTy = C.getRecordType(KmpTaskgraphTWithPrivatesQTyRD);
+  QualType KmpTaskgraphTWithPrivatesPtrQTy =
+      C.getPointerType(KmpTaskgraphTWithPrivatesQTy);
+  llvm::Type *KmpTaskgraphTWithPrivatesTy = CGF.ConvertType(KmpTaskgraphTWithPrivatesQTy);
+  llvm::Type *KmpTaskgraphTWithPrivatesPtrTy =
+      KmpTaskgraphTWithPrivatesTy->getPointerTo();
+  llvm::Value *KmpTaskgraphTWithPrivatesTySize =
+      CGF.getTypeSize(KmpTaskgraphTWithPrivatesQTy);
+
+  std::vector<llvm::Value *> AllocArgs{
+    emitUpdateLocation(CGF, Loc),
+    getThreadID(CGF, Loc),
+    KmpTaskgraphTWithPrivatesTySize
+  };
+
+  llvm::Value *NewTaskgraph;
+  NewTaskgraph = CGF.EmitRuntimeCall(OMPBuilder.getOrCreateRuntimeFunction(
+                          CGM.getModule(), OMPRTL___kmpc_omp_taskgraph_alloc),
+                      AllocArgs);
+
+  TaskgraphResultTy Result;
+  Result.NewTaskgraph = NewTaskgraph;
+  return Result;
+}
+
 void CGOpenMPRuntime::emitTaskgraphCall(CodeGenFunction &CGF,
                                         SourceLocation Loc,
-                                        const OMPExecutableDirective &D) {
+                                        const OMPExecutableDirective &D,
+                                        const OMPTaskgraphDataTy &Data) {
   if (!CGF.HaveInsertPoint())
     return;
 
+  TaskgraphResultTy Result =
+      emitTaskgraphInit(CGF, Loc, D, Data);
   // If clause cannot have its value determined at this point
   // So we do not include it in TdgFlags
   enum {
@@ -12972,7 +13096,8 @@ void CGOpenMPSIMDRuntime::emitTaskwaitCall(CodeGenFunction &CGF,
 
 void CGOpenMPSIMDRuntime::emitTaskgraphCall(CodeGenFunction &CGF,
                                             SourceLocation Loc,
-                                            const OMPExecutableDirective &D) {
+                                            const OMPExecutableDirective &D,
+                                            const OMPTaskgraphDataTy &Data) {
   llvm_unreachable("Not supported in SIMD-only mode");
 }
 

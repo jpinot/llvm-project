@@ -2368,6 +2368,12 @@ typedef struct kmp_task { /* GEH: Shouldn't this be aligned somehow? */
 
 } kmp_task_t;
 
+// dummy structure to test taskgraph firstprivate
+typedef struct kmp_taskgraph {
+  int id;
+  /* private vars */
+} kmp_taskgraph_t;
+
 /*!
 @}
 */
@@ -4214,6 +4220,8 @@ KMP_EXPORT kmp_task_t *__kmpc_omp_task_alloc(ident_t *loc_ref, kmp_int32 gtid,
                                              size_t sizeof_kmp_task_t,
                                              size_t sizeof_shareds,
                                              kmp_routine_entry_t task_entry);
+KMP_EXPORT kmp_taskgraph_t *__kmpc_omp_taskgraph_alloc(ident_t *loc_ref, kmp_int32 gtid,
+                                                     size_t taskgraph_size);
 KMP_EXPORT kmp_task_t *__kmpc_omp_target_task_alloc(
     ident_t *loc_ref, kmp_int32 gtid, kmp_int32 flags, size_t sizeof_kmp_task_t,
     size_t sizeof_shareds, kmp_routine_entry_t task_entry, kmp_int64 device_id);
