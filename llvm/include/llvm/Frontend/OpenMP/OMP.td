@@ -84,6 +84,10 @@ def OMPC_FirstPrivate : Clause<"firstprivate"> {
   let clangClass = "OMPFirstprivateClause";
   let flangClass = "OmpObjectList";
 }
+def OMPC_Recapture : Clause<"recapture"> {
+  let clangClass = "OMPRecaptureClause";
+  let flangClass = "OmpObjectList";
+}
 def OMPC_LastPrivate : Clause<"lastprivate"> {
   let clangClass = "OMPLastprivateClause";
   let flangClass = "OmpObjectList";
@@ -611,7 +615,8 @@ def OMP_TaskGraph : Directive<"taskgraph"> {
     VersionedClause<OMPC_TdgType>,
     VersionedClause<OMPC_NumPreallocs>,
     VersionedClause<OMPC_If>,
-    VersionedClause<OMPC_NoWait>
+    VersionedClause<OMPC_NoWait>,
+    VersionedClause<OMPC_Recapture>
   ];
 }
 def OMP_TaskGroup : Directive<"taskgroup"> {

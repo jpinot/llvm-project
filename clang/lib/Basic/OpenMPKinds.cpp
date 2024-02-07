@@ -194,6 +194,7 @@ unsigned clang::getOpenMPSimpleClauseType(OpenMPClauseKind Kind, StringRef Str,
   case OMPC_collapse:
   case OMPC_private:
   case OMPC_firstprivate:
+  case OMPC_recapture:
   case OMPC_shared:
   case OMPC_task_reduction:
   case OMPC_in_reduction:
@@ -524,6 +525,7 @@ const char *clang::getOpenMPSimpleClauseTypeName(OpenMPClauseKind Kind,
   case OMPC_collapse:
   case OMPC_private:
   case OMPC_firstprivate:
+  case OMPC_recapture:
   case OMPC_shared:
   case OMPC_task_reduction:
   case OMPC_in_reduction:
@@ -725,6 +727,7 @@ bool clang::isOpenMPGenericLoopDirective(OpenMPDirectiveKind Kind) {
          Kind == OMPD_target_parallel_loop;
 }
 
+// don't know if we need to include recapture in this list
 bool clang::isOpenMPPrivate(OpenMPClauseKind Kind) {
   return Kind == OMPC_private || Kind == OMPC_firstprivate ||
          Kind == OMPC_lastprivate || Kind == OMPC_linear ||

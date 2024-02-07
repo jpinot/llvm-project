@@ -660,6 +660,19 @@ OMPClauseProfiler::VisitOMPFirstprivateClause(const OMPFirstprivateClause *C) {
   }
 }
 void
+OMPClauseProfiler::VisitOMPRecaptureClause(const OMPRecaptureClause *C) {
+  VisitOMPClauseList(C);
+  VistOMPClauseWithPreInit(C);
+  for (auto *E : C->private_copies()) {
+    if (E)
+      Profiler->VisitStmt(E);
+  }
+  for (auto *E : C->inits()) {
+    if (E)
+      Profiler->VisitStmt(E);
+  }
+}
+void
 OMPClauseProfiler::VisitOMPLastprivateClause(const OMPLastprivateClause *C) {
   VisitOMPClauseList(C);
   VistOMPClauseWithPostUpdate(C);

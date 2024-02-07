@@ -6696,6 +6696,7 @@ static void emitOMPAtomicExpr(CodeGenFunction &CGF, OpenMPClauseKind Kind,
   case OMPC_num_threads:
   case OMPC_private:
   case OMPC_firstprivate:
+  case OMPC_recapture:
   case OMPC_lastprivate:
   case OMPC_reduction:
   case OMPC_task_reduction:

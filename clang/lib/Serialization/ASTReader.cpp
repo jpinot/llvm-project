@@ -10173,6 +10173,9 @@ OMPClause *OMPClauseReader::readClause() {
   case llvm::omp::OMPC_firstprivate:
     C = OMPFirstprivateClause::CreateEmpty(Context, Record.readInt());
     break;
+  case llvm::omp::OMPC_recapture:
+    C = OMPRecaptureClause::CreateEmpty(Context, Record.readInt());
+    break;
   case llvm::omp::OMPC_lastprivate:
     C = OMPLastprivateClause::CreateEmpty(Context, Record.readInt());
     break;
@@ -10626,6 +10629,25 @@ void OMPClauseReader::VisitOMPPrivateClause(OMPPrivateClause *C) {
 }
 
 void OMPClauseReader::VisitOMPFirstprivateClause(OMPFirstprivateClause *C) {
+  VisitOMPClauseWithPreInit(C);
+  C->setLParenLoc(Record.readSourceLocation());
+  unsigned NumVars = C->varlist_size();
+  SmallVector<Expr *, 16> Vars;
+  Vars.reserve(NumVars);
+  for (unsigned i = 0; i != NumVars; ++i)
+    Vars.push_back(Record.readSubExpr());
+  C->setVarRefs(Vars);
+  Vars.clear();
+  for (unsigned i = 0; i != NumVars; ++i)
+    Vars.push_back(Record.readSubExpr());
+  C->setPrivateCopies(Vars);
+  Vars.clear();
+  for (unsigned i = 0; i != NumVars; ++i)
+    Vars.push_back(Record.readSubExpr());
+  C->setInits(Vars);
+}
+
+void OMPClauseReader::VisitOMPRecaptureClause(OMPRecaptureClause *C) {
   VisitOMPClauseWithPreInit(C);
   C->setLParenLoc(Record.readSourceLocation());
   unsigned NumVars = C->varlist_size();

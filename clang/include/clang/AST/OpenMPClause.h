@@ -3015,6 +3015,144 @@ public:
   }
 };
 
+/// This represents clause 'recapture' in the '#pragma omp taskgraph"
+/// directives.
+///
+/// \code
+/// #pragma omp taskgraph recapture(a,b)
+class OMPRecaptureClause final
+    : public OMPVarListClause<OMPRecaptureClause>,
+      public OMPClauseWithPreInit,
+      private llvm::TrailingObjects<OMPRecaptureClause, Expr *> {
+  friend class OMPClauseReader;
+  friend OMPVarListClause;
+  friend TrailingObjects;
+
+  /// Build clause with number of variables \a N.
+  ///
+  /// \param StartLoc Starting location of the clause.
+  /// \param LParenLoc Location of '('.
+  /// \param EndLoc Ending location of the clause.
+  /// \param N Number of the variables in the clause.
+  OMPRecaptureClause(SourceLocation StartLoc, SourceLocation LParenLoc,
+                        SourceLocation EndLoc, unsigned N)
+      : OMPVarListClause<OMPRecaptureClause>(llvm::omp::OMPC_recapture,
+                                                StartLoc, LParenLoc, EndLoc, N),
+        OMPClauseWithPreInit(this) {}
+
+  /// Build an empty clause.
+  ///
+  /// \param N Number of variables.
+  explicit OMPRecaptureClause(unsigned N)
+      : OMPVarListClause<OMPRecaptureClause>(
+            llvm::omp::OMPC_recapture, SourceLocation(), SourceLocation(),
+            SourceLocation(), N),
+        OMPClauseWithPreInit(this) {}
+
+  /// Sets the list of references to private copies with initializers for
+  /// new private variables.
+  /// \param VL List of references.
+  void setPrivateCopies(ArrayRef<Expr *> VL);
+
+  /// Gets the list of references to private copies with initializers for
+  /// new private variables.
+  MutableArrayRef<Expr *> getPrivateCopies() {
+    return MutableArrayRef<Expr *>(varlist_end(), varlist_size());
+  }
+  ArrayRef<const Expr *> getPrivateCopies() const {
+    return llvm::ArrayRef(varlist_end(), varlist_size());
+  }
+
+  /// Sets the list of references to initializer variables for new
+  /// private variables.
+  /// \param VL List of references.
+  void setInits(ArrayRef<Expr *> VL);
+
+  /// Gets the list of references to initializer variables for new
+  /// private variables.
+  MutableArrayRef<Expr *> getInits() {
+    return MutableArrayRef<Expr *>(getPrivateCopies().end(), varlist_size());
+  }
+  ArrayRef<const Expr *> getInits() const {
+    return llvm::ArrayRef(getPrivateCopies().end(), varlist_size());
+  }
+
+public:
+  /// Creates clause with a list of variables \a VL.
+  ///
+  /// \param C AST context.
+  /// \param StartLoc Starting location of the clause.
+  /// \param LParenLoc Location of '('.
+  /// \param EndLoc Ending location of the clause.
+  /// \param VL List of references to the original variables.
+  /// \param PrivateVL List of references to private copies with initializers.
+  /// \param InitVL List of references to auto generated variables used for
+  /// initialization of a single array element. Used if taskgraph variable is
+  /// of array type.
+  /// \param PreInit Statement that must be executed before entering the OpenMP
+  /// region with this clause.
+  static OMPRecaptureClause *
+  Create(const ASTContext &C, SourceLocation StartLoc, SourceLocation LParenLoc,
+         SourceLocation EndLoc, ArrayRef<Expr *> VL, ArrayRef<Expr *> PrivateVL,
+         ArrayRef<Expr *> InitVL, Stmt *PreInit);
+
+  /// Creates an empty clause with the place for \a N variables.
+  ///
+  /// \param C AST context.
+  /// \param N The number of variables.
+  static OMPRecaptureClause *CreateEmpty(const ASTContext &C, unsigned N);
+
+  using private_copies_iterator = MutableArrayRef<Expr *>::iterator;
+  using private_copies_const_iterator = ArrayRef<const Expr *>::iterator;
+  using private_copies_range = llvm::iterator_range<private_copies_iterator>;
+  using private_copies_const_range =
+      llvm::iterator_range<private_copies_const_iterator>;
+
+  private_copies_range private_copies() {
+    return private_copies_range(getPrivateCopies().begin(),
+                                getPrivateCopies().end());
+  }
+  private_copies_const_range private_copies() const {
+    return private_copies_const_range(getPrivateCopies().begin(),
+                                      getPrivateCopies().end());
+  }
+
+  using inits_iterator = MutableArrayRef<Expr *>::iterator;
+  using inits_const_iterator = ArrayRef<const Expr *>::iterator;
+  using inits_range = llvm::iterator_range<inits_iterator>;
+  using inits_const_range = llvm::iterator_range<inits_const_iterator>;
+
+  inits_range inits() {
+    return inits_range(getInits().begin(), getInits().end());
+  }
+  inits_const_range inits() const {
+    return inits_const_range(getInits().begin(), getInits().end());
+  }
+
+  child_range children() {
+    return child_range(reinterpret_cast<Stmt **>(varlist_begin()),
+                       reinterpret_cast<Stmt **>(varlist_end()));
+  }
+
+  const_child_range children() const {
+    auto Children = const_cast<OMPRecaptureClause *>(this)->children();
+    return const_child_range(Children.begin(), Children.end());
+  }
+
+  child_range used_children() {
+    return child_range(reinterpret_cast<Stmt **>(varlist_begin()),
+                       reinterpret_cast<Stmt **>(varlist_end()));
+  }
+  const_child_range used_children() const {
+    auto Children = const_cast<OMPRecaptureClause *>(this)->used_children();
+    return const_child_range(Children.begin(), Children.end());
+  }
+
+  static bool classof(const OMPClause *T) {
+    return T->getClauseKind() == llvm::omp::OMPC_recapture;
+  }
+};
+
 /// This represents clause 'lastprivate' in the '#pragma omp ...'
 /// directives.
 ///

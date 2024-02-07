@@ -12121,6 +12121,11 @@ public:
                                            SourceLocation StartLoc,
                                            SourceLocation LParenLoc,
                                            SourceLocation EndLoc);
+  /// Called on well-formed 'recapture' clause.
+  OMPClause *ActOnOpenMPRecaptureClause(ArrayRef<Expr *> VarList,
+                                           SourceLocation StartLoc,
+                                           SourceLocation LParenLoc,
+                                           SourceLocation EndLoc);
   /// Called on well-formed 'lastprivate' clause.
   OMPClause *ActOnOpenMPLastprivateClause(
       ArrayRef<Expr *> VarList, OpenMPLastprivateModifier LPKind,

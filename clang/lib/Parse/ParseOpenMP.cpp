@@ -3347,6 +3347,7 @@ OMPClause *Parser::ParseOpenMPClause(OpenMPDirectiveKind DKind,
     break;
   case OMPC_private:
   case OMPC_firstprivate:
+  case OMPC_recapture:
   case OMPC_lastprivate:
   case OMPC_shared:
   case OMPC_reduction:
@@ -4753,6 +4754,8 @@ bool Parser::ParseOpenMPVarList(OpenMPDirectiveKind DKind,
 ///       'private' '(' list ')'
 ///    firstprivate-clause:
 ///       'firstprivate' '(' list ')'
+///    recapture-clause:
+///       'recapture' '(' list ')'
 ///    lastprivate-clause:
 ///       'lastprivate' '(' list ')'
 ///    shared-clause:

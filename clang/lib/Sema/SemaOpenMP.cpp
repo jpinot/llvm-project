@@ -6732,6 +6732,7 @@ StmtResult Sema::ActOnOpenMPExecutableDirective(
       case OMPC_proc_bind:
       case OMPC_private:
       case OMPC_firstprivate:
+      case OMPC_recapture:
       case OMPC_lastprivate:
       case OMPC_shared:
       case OMPC_reduction:
@@ -15288,6 +15289,7 @@ OMPClause *Sema::ActOnOpenMPSingleExprClause(OpenMPClauseKind Kind, Expr *Expr,
   case OMPC_schedule:
   case OMPC_private:
   case OMPC_firstprivate:
+  case OMPC_recapture:
   case OMPC_lastprivate:
   case OMPC_shared:
   case OMPC_reduction:
@@ -16232,6 +16234,7 @@ static OpenMPDirectiveKind getOpenMPCaptureRegionForClause(
     }
     break;
   case OMPC_firstprivate:
+  case OMPC_recapture:
   case OMPC_lastprivate:
   case OMPC_reduction:
   case OMPC_task_reduction:
@@ -16728,6 +16731,7 @@ OMPClause *Sema::ActOnOpenMPSimpleClause(
   case OMPC_schedule:
   case OMPC_private:
   case OMPC_firstprivate:
+  case OMPC_recapture:
   case OMPC_lastprivate:
   case OMPC_shared:
   case OMPC_reduction:
@@ -17212,6 +17216,7 @@ OMPClause *Sema::ActOnOpenMPSingleExprWithArgClause(
   case OMPC_proc_bind:
   case OMPC_private:
   case OMPC_firstprivate:
+  case OMPC_recapture:
   case OMPC_lastprivate:
   case OMPC_shared:
   case OMPC_reduction:
@@ -17484,6 +17489,7 @@ OMPClause *Sema::ActOnOpenMPClause(OpenMPClauseKind Kind,
   case OMPC_schedule:
   case OMPC_private:
   case OMPC_firstprivate:
+  case OMPC_recapture:
   case OMPC_lastprivate:
   case OMPC_shared:
   case OMPC_reduction:
@@ -17931,6 +17937,9 @@ OMPClause *Sema::ActOnOpenMPVarListClause(OpenMPClauseKind Kind,
     break;
   case OMPC_firstprivate:
     Res = ActOnOpenMPFirstprivateClause(VarList, StartLoc, LParenLoc, EndLoc);
+    break;
+  case OMPC_recapture:
+    Res = ActOnOpenMPRecaptureClause(VarList, StartLoc, LParenLoc, EndLoc);
     break;
   case OMPC_lastprivate:
     assert(0 <= ExtraModifier && ExtraModifier <= OMPC_LASTPRIVATE_unknown &&
@@ -18554,6 +18563,13 @@ OMPClause *Sema::ActOnOpenMPFirstprivateClause(ArrayRef<Expr *> VarList,
   return OMPFirstprivateClause::Create(Context, StartLoc, LParenLoc, EndLoc,
                                        Vars, PrivateCopies, Inits,
                                        buildPreInits(Context, ExprCaptures));
+}
+
+OMPClause *Sema::ActOnOpenMPRecaptureClause(ArrayRef<Expr *> VarList,
+                                            SourceLocation StartLoc,
+                                            SourceLocation LParenLoc,
+                                            SourceLocation EndLoc) {
+  return nullptr;
 }
 
 OMPClause *Sema::ActOnOpenMPLastprivateClause(

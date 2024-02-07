@@ -69,6 +69,8 @@ const OMPClauseWithPreInit *OMPClauseWithPreInit::get(const OMPClause *C) {
     return static_cast<const OMPDistScheduleClause *>(C);
   case OMPC_firstprivate:
     return static_cast<const OMPFirstprivateClause *>(C);
+  case OMPC_recapture:
+    return static_cast<const OMPRecaptureClause *>(C);
   case OMPC_lastprivate:
     return static_cast<const OMPLastprivateClause *>(C);
   case OMPC_reduction:
@@ -198,6 +200,7 @@ const OMPClauseWithPostUpdate *OMPClauseWithPostUpdate::get(const OMPClause *C) 
   case OMPC_schedule:
   case OMPC_dist_schedule:
   case OMPC_firstprivate:
+  case OMPC_recapture:
   case OMPC_default:
   case OMPC_proc_bind:
   case OMPC_if:
@@ -477,6 +480,39 @@ OMPFirstprivateClause *OMPFirstprivateClause::CreateEmpty(const ASTContext &C,
                                                           unsigned N) {
   void *Mem = C.Allocate(totalSizeToAlloc<Expr *>(3 * N));
   return new (Mem) OMPFirstprivateClause(N);
+}
+
+void OMPRecaptureClause::setPrivateCopies(ArrayRef<Expr *> VL) {
+  assert(VL.size() == varlist_size() &&
+         "Number of private copies is not the same as the preallocated buffer");
+  std::copy(VL.begin(), VL.end(), varlist_end());
+}
+
+void OMPRecaptureClause::setInits(ArrayRef<Expr *> VL) {
+  assert(VL.size() == varlist_size() &&
+         "Number of inits is not the same as the preallocated buffer");
+  std::copy(VL.begin(), VL.end(), getPrivateCopies().end());
+}
+
+OMPRecaptureClause *
+OMPRecaptureClause::Create(const ASTContext &C, SourceLocation StartLoc,
+                              SourceLocation LParenLoc, SourceLocation EndLoc,
+                              ArrayRef<Expr *> VL, ArrayRef<Expr *> PrivateVL,
+                              ArrayRef<Expr *> InitVL, Stmt *PreInit) {
+  void *Mem = C.Allocate(totalSizeToAlloc<Expr *>(3 * VL.size()));
+  OMPRecaptureClause *Clause =
+      new (Mem) OMPRecaptureClause(StartLoc, LParenLoc, EndLoc, VL.size());
+  Clause->setVarRefs(VL);
+  Clause->setPrivateCopies(PrivateVL);
+  Clause->setInits(InitVL);
+  Clause->setPreInitStmt(PreInit);
+  return Clause;
+}
+
+OMPRecaptureClause *OMPRecaptureClause::CreateEmpty(const ASTContext &C,
+                                                          unsigned N) {
+  void *Mem = C.Allocate(totalSizeToAlloc<Expr *>(3 * N));
+  return new (Mem) OMPRecaptureClause(N);
 }
 
 void OMPLastprivateClause::setPrivateCopies(ArrayRef<Expr *> PrivateCopies) {
@@ -2082,6 +2118,14 @@ void OMPClausePrinter::VisitOMPPrivateClause(OMPPrivateClause *Node) {
 void OMPClausePrinter::VisitOMPFirstprivateClause(OMPFirstprivateClause *Node) {
   if (!Node->varlist_empty()) {
     OS << "firstprivate";
+    VisitOMPClauseList(Node, '(');
+    OS << ")";
+  }
+}
+
+void OMPClausePrinter::VisitOMPRecaptureClause(OMPRecaptureClause *Node) {
+  if (!Node->varlist_empty()) {
+    OS << "recapture";
     VisitOMPClauseList(Node, '(');
     OS << ")";
   }
