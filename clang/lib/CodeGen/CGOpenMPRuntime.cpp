@@ -57,6 +57,8 @@ public:
     /// Region with outlined function for standalone 'parallel'
     /// directive.
     ParallelOutlinedRegion,
+    /// Region with outlined function for 'taskgraph' directive
+    TaskgraphOutlinedRegion,
     /// Region with outlined function for standalone 'task' directive.
     TaskOutlinedRegion,
     /// Region for constructs that do not require function outlining,
@@ -149,14 +151,14 @@ class CGOpenMPTaskgraphRegionInfo final : public CGOpenMPRegionInfo {
 public:
   CGOpenMPTaskgraphRegionInfo(const CapturedStmt &CS,
                              const RegionCodeGenTy &CodeGen)
-      : CGOpenMPRegionInfo(CS, ParallelOutlinedRegion, CodeGen, llvm::omp::OMPD_taskgraph, false){}
+      : CGOpenMPRegionInfo(CS, TaskgraphOutlinedRegion, CodeGen, llvm::omp::OMPD_taskgraph, false){}
 
   const VarDecl *getThreadIDVariable() const override { return 0; }
 
   static bool classof(const CGCapturedStmtInfo *Info) {
     return CGOpenMPRegionInfo::classof(Info) &&
            cast<CGOpenMPRegionInfo>(Info)->getRegionKind() ==
-               ParallelOutlinedRegion;
+               TaskgraphOutlinedRegion;
   }
 };
 
@@ -3559,6 +3561,9 @@ emitTaskPrivateMappingFunction(CodeGenModule &CGM, SourceLocation Loc,
   return TaskPrivatesMap;
 }
 
+static std::pair<llvm::Value *, llvm::Value *>
+getPointerAndSize(CodeGenFunction &CGF, const Expr *E);
+
 /// Emit initialization for private variables in task-based directives.
 static void emitPrivatesInit(CodeGenFunction &CGF,
                              const OMPExecutableDirective &D,
@@ -3575,6 +3580,15 @@ static void emitPrivatesInit(CodeGenFunction &CGF,
                                  : OMPD_task;
   const CapturedStmt &CS = *D.getCapturedStmt(Kind);
   CodeGenFunction::CGCapturedStmtInfo CapturesInfo(CS);
+
+  llvm::OpenMPIRBuilder &OMPBuilder = CGF.CGM.getOpenMPRuntime().getOMPBuilder();
+  auto *CSInfo =  dyn_cast_or_null<CGOpenMPRegionInfo>(CGF.CapturedStmtInfo);
+  bool InTaskgraph = false;
+  if (CGOpenMPTaskgraphRegionInfo::classof(CSInfo)) {
+    // emit recapture_bind(..) only if task in a taskgraph region
+    InTaskgraph = true;
+  }
+
   LValue SrcBase;
   bool IsTargetTask =
       isOpenMPTargetDataManagementDirective(D.getDirectiveKind()) ||
@@ -3604,6 +3618,19 @@ static void emitPrivatesInit(CodeGenFunction &CGF,
       LValue PrivateLValue = CGF.EmitLValueForField(PrivatesBase, *FI);
       if (const VarDecl *Elem = Pair.second.PrivateElemInit) {
         const VarDecl *OriginalVD = Pair.second.Original;
+        if (InTaskgraph) {
+          uint64_t OriginalVar = (uint64_t)((void *)OriginalVD);
+          auto Result = getPointerAndSize(CGF, Init);
+          llvm::Value *SizeVal = Result.second;
+          llvm::SmallVector<llvm::Value *> Args{
+            CGF.Builder.getInt64(OriginalVar),
+            PrivateLValue.getAddress(CGF).getPointer(),
+            SizeVal
+          };
+          CGF.EmitRuntimeCall(OMPBuilder.getOrCreateRuntimeFunction(
+                              CGF.CGM.getModule(), OMPRTL___kmpc_bind_recapture_var),
+                              Args);
+        }
         // Check if the variable is the target-based BasePointersArray,
         // PointersArray, SizesArray, or MappersArray.
         LValue SharedRefLValue;
@@ -3692,7 +3719,7 @@ static void emitRecaptureInit(CodeGenFunction &CGF,
   OpenMPDirectiveKind Kind = D.getDirectiveKind();
   const CapturedStmt &CS = *D.getCapturedStmt(Kind);
   CodeGenFunction::CGCapturedStmtInfo CapturesInfo(CS);
-
+  llvm::OpenMPIRBuilder &OMPBuilder = CGF.CGM.getOpenMPRuntime().getOMPBuilder();
   FI = cast<RecordDecl>(FI->getType()->getAsTagDecl())->field_begin();
   for (const RecaptureDataTy &Pair : Recapture) {
     // Do not initialize private locals.
@@ -3706,8 +3733,6 @@ static void emitRecaptureInit(CodeGenFunction &CGF,
       LValue PrivateLValue = CGF.EmitLValueForField(PrivatesBase, *FI);
       if (const VarDecl *Elem = Pair.second.PrivateElemInit) {
         const VarDecl *OriginalVD = Pair.second.Original;
-        // Check if the variable is the target-based BasePointersArray,
-        // PointersArray, SizesArray, or MappersArray.
         LValue SharedRefLValue;
         QualType Type = PrivateLValue.getType();
         const FieldDecl *SharedField = CapturesInfo.lookup(OriginalVD);
@@ -3755,6 +3780,18 @@ static void emitRecaptureInit(CodeGenFunction &CGF,
           CGF.EmitExprAsInit(Init, VD, PrivateLValue,
                              /*capturedByInit=*/false);
         }
+        // emit runtime function that register a recapture variable
+        auto Result = getPointerAndSize(CGF, Init);
+        uint64_t OriginalVar = (uint64_t)((void *)OriginalVD);
+        llvm::Value *SizeVal = Result.second;
+        llvm::SmallVector<llvm::Value *> Args{
+          CGF.Builder.getInt64(OriginalVar),
+          PrivateLValue.getAddress(CGF).getPointer(),
+          SizeVal
+        };
+        CGF.EmitRuntimeCall(OMPBuilder.getOrCreateRuntimeFunction(
+                            CGF.CGM.getModule(), OMPRTL___kmpc_register_recapture_var),
+                            Args);
       } else {
         CGF.EmitExprAsInit(Init, VD, PrivateLValue, /*capturedByInit=*/false);
       }
@@ -6284,7 +6321,7 @@ CGOpenMPRuntime::emitTaskgraphInit(CodeGenFunction &CGF,
   llvm::Value *KmpTaskgraphTWithPrivatesTySize =
       CGF.getTypeSize(KmpTaskgraphTWithPrivatesQTy);
 
-  std::vector<llvm::Value *> AllocArgs{
+  SmallVector<llvm::Value *> AllocArgs{
     emitUpdateLocation(CGF, Loc),
     getThreadID(CGF, Loc),
     KmpTaskgraphTWithPrivatesTySize
@@ -6398,7 +6435,7 @@ void CGOpenMPRuntime::emitTaskgraphCall(CodeGenFunction &CGF,
 
   llvm::Value *TdgFuncFlags = CGF.Builder.getInt32(TdgFlags);
 
-  std::vector<llvm::Value *> Args{
+  SmallVector<llvm::Value *> Args{
       emitUpdateLocation(CGF, Loc),
       getThreadID(CGF, Loc),
       CGF.Builder.getInt32(dynamicTDGId),

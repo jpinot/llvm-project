@@ -2374,6 +2374,19 @@ typedef struct kmp_taskgraph {
   /* private vars */
 } kmp_taskgraph_t;
 
+/* TODO: we want to use a hash table to accelerate recapture
+ * variable access. For now, we want to have a prototype
+ * that works. The hash function needs to be like
+ * hash(original_var + taskgraph_recapture_addr) because each
+ * taskgraph needs to hold a series of tasks */
+typedef struct recapture_var_entry {
+  uint64_t original_var;
+  size_t var_size;
+  kmp_int32 num_tasks;
+  void *taskgraph_recapture_addr;
+  void **task_private_addr;
+} kmp_recapture_var_entry_t;
+
 /*!
 @}
 */
@@ -4222,6 +4235,8 @@ KMP_EXPORT kmp_task_t *__kmpc_omp_task_alloc(ident_t *loc_ref, kmp_int32 gtid,
                                              kmp_routine_entry_t task_entry);
 KMP_EXPORT kmp_taskgraph_t *__kmpc_omp_taskgraph_alloc(ident_t *loc_ref, kmp_int32 gtid,
                                                      size_t taskgraph_size);
+KMP_EXPORT void __kmpc_register_recapture_var(uint64_t original_var, void *taskgraph_recapture_addr, size_t varSize);
+KMP_EXPORT void __kmpc_bind_recapture_var(uint64_t original_var, void *task_private_addr, size_t varSize);
 KMP_EXPORT kmp_task_t *__kmpc_omp_target_task_alloc(
     ident_t *loc_ref, kmp_int32 gtid, kmp_int32 flags, size_t sizeof_kmp_task_t,
     size_t sizeof_shareds, kmp_routine_entry_t task_entry, kmp_int64 device_id);
