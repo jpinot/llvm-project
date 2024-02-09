@@ -576,10 +576,10 @@ bool __kmp_tdg_static_schedule = false;
 // encountering a taskgraph directive withOUT nowait clause
 kmp_int32 __kmp_curr_tdg_idx = -1;
 int __kmp_tdg_replaying[MAX_NUM_PROC] = {0};
-kmp_int32 __kmp_recapture_capacity = 10;
+kmp_int32 __kmp_recapture_capacity = 97;
 kmp_int32 __kmp_recapture_inner_capacity = 10;
 kmp_int32 __kmp_recapture_current_size = 0;
-kmp_recapture_var_entry_t *__kmp_recapture_var_list = NULL;
+kmp_recapture_hash_t *__kmp_recapture_hash_table = NULL;
 
 #endif
 // end of file //

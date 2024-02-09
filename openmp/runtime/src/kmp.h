@@ -2374,19 +2374,6 @@ typedef struct kmp_taskgraph {
   /* private vars */
 } kmp_taskgraph_t;
 
-/* TODO: we want to use a hash table to accelerate recapture
- * variable access. For now, we want to have a prototype
- * that works. The hash function needs to be like
- * hash(original_var + taskgraph_recapture_addr) because each
- * taskgraph needs to hold a series of tasks */
-typedef struct recapture_var_entry {
-  uint64_t original_var;
-  size_t var_size;
-  kmp_int32 num_tasks;
-  void *taskgraph_recapture_addr;
-  void **task_private_addr;
-} kmp_recapture_var_entry_t;
-
 /*!
 @}
 */
@@ -2477,6 +2464,22 @@ typedef struct kmp_dephash {
   kmp_uint32 nelements;
   kmp_uint32 nconflicts;
 } kmp_dephash_t;
+
+typedef struct recapture_var_entry {
+  uint64_t original_var_addr;
+  size_t var_size;
+  kmp_int32 num_tasks;
+  void *taskgraph_recapture_addr;
+  void **task_private_addr;
+  struct recapture_var_entry *next_entry;
+} kmp_recapture_hash_entry_t;
+
+typedef struct recapture_var_hash {
+  kmp_recapture_hash_entry_t **buckets;
+  size_t size;
+  kmp_uint32 nelements;
+  kmp_uint32 nconflicts;
+} kmp_recapture_hash_t;
 
 typedef struct kmp_task_affinity_info {
   kmp_intptr_t base_addr;
