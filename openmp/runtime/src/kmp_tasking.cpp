@@ -1593,17 +1593,47 @@ static kmp_recapture_hash_t *__kmp_create_recapture_hash() {
                           ret->size);
   ret->nelements = 0;
   ret->nconflicts = 0; // not sure worth tracking
-
+  ret->generation = 0; // for recap_hash_size
   for (size_t i = 0; i < ret->size; ++i)
     ret->buckets[i] = 0;
 
   return ret;
 }
 
-static inline size_t __kmp_recapture_hash(uint64_t original_var_addr,
+static /*inline*/ size_t __kmp_recapture_hash(uint64_t original_var_addr,
                                           size_t hsize) {
   return ((original_var_addr >> 6) ^ (original_var_addr >> 2))
                                               % hsize;
+}
+
+static kmp_recapture_hash_t *__kmp_extend_recapture_hash() {
+  // todo: update generation
+
+  size_t new_size = recap_hash_sizes[__kmp_recapture_hash_table->generation];
+  kmp_uint32 new_conflicts = 0;
+  kmp_recapture_hash_entry_t **new_buckets = (kmp_recapture_hash_entry_t **)malloc(
+                                             sizeof(kmp_recapture_hash_entry_t *) *
+                                             new_size);
+  for (int i = 0; i < new_size; ++i)
+    new_buckets[i] = 0;
+
+  for (int i = 0; i < __kmp_recapture_hash_table->size; ++i) {
+    kmp_recapture_hash_entry_t *entry, *next;
+    for (entry = __kmp_recapture_hash_table->buckets[i]; entry; entry = next) {
+      next = entry->next_entry;
+      size_t new_hash = __kmp_recapture_hash(entry->original_var_addr, new_size);
+      entry->next_entry = new_buckets[new_hash];
+      if (entry->next_entry)
+        new_conflicts++;
+      new_buckets[new_hash] = entry;
+    }
+  }
+
+  free(__kmp_recapture_hash_table->buckets);
+  __kmp_recapture_hash_table->buckets = new_buckets;
+  __kmp_recapture_hash_table->generation++;
+  __kmp_recapture_hash_table->size = new_size;
+  __kmp_recapture_hash_table->nconflicts = new_conflicts;
 }
 
 static int __kmp_recapture_find(kmp_recapture_hash_entry_t **ret,
@@ -1619,6 +1649,7 @@ static int __kmp_recapture_find(kmp_recapture_hash_entry_t **ret,
   if ((__kmp_recapture_hash_table->nelements != 0) &&
       (__kmp_recapture_hash_table->nconflicts / __kmp_recapture_hash_table->size >= 1)) {
     // TODO: extend the recapture_hash_table
+    __kmp_recapture_hash_table = __kmp_extend_recapture_hash();
   }
 
   size_t hash = __kmp_recapture_hash(original_var_addr, __kmp_recapture_hash_table->size);
@@ -1640,6 +1671,7 @@ static int __kmp_recapture_find(kmp_recapture_hash_entry_t **ret,
     entry->taskgraph_recapture_addr = taskgraph_recapture_addr;
     entry->var_size = var_size;
     entry->task_private_addr = (void **)malloc(sizeof(void *) * __kmp_recapture_inner_capacity);
+    entry->bucket_capacity = __kmp_recapture_inner_capacity;
     __kmp_recapture_hash_table->nelements++;
 
     if (entry->next_entry)
@@ -1686,13 +1718,20 @@ void __kmpc_bind_recapture_var(uint64_t original_var, void *task_private_addr,
     printf("Libomp Warning: a firstprivate of %zu bytes is used by task but not included in taskgraph recapture\n", var_size);
     return ;
   }
-  // No entry should be created by __kmpc_bind_recapture_var
-  KMP_ASSERT(found == 1);
+
   KMP_ASSERT(var_size == entry->var_size);
   entry->task_private_addr[entry->num_tasks] = task_private_addr;
   entry->num_tasks++;
-  if(entry->num_tasks == __kmp_recapture_inner_capacity) {
-    // todo: extend the list of tasks
+  if(entry->num_tasks == entry->bucket_capacity) {
+    // Extend the list for tasks
+    void **new_list = (void **)malloc(sizeof(void *) * entry->bucket_capacity * 2);
+    memcpy(new_list, entry->task_private_addr, sizeof(void *) * entry->num_tasks);
+    for (int i = 0; i < entry->num_tasks; ++i)
+      new_list[i] = entry->task_private_addr[i];
+
+    free(entry->task_private_addr);
+    entry->bucket_capacity *= 2;
+    entry->task_private_addr = new_list;
   }
 }
 

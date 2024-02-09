@@ -2469,6 +2469,7 @@ typedef struct recapture_var_entry {
   uint64_t original_var_addr;
   size_t var_size;
   kmp_int32 num_tasks;
+  kmp_int32 bucket_capacity;
   void *taskgraph_recapture_addr;
   void **task_private_addr;
   struct recapture_var_entry *next_entry;
@@ -2479,6 +2480,7 @@ typedef struct recapture_var_hash {
   size_t size;
   kmp_uint32 nelements;
   kmp_uint32 nconflicts;
+  kmp_int32 generation;
 } kmp_recapture_hash_t;
 
 typedef struct kmp_task_affinity_info {
