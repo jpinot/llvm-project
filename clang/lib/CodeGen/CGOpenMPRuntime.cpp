@@ -3221,6 +3221,7 @@ createKmpTaskgraphTRecordDecl(CodeGenModule &CGM, OpenMPDirectiveKind Kind,
   //         int id;
   //       };
   RecordDecl *RD = C.buildImplicitRecord("kmp_taskgraph_t");
+  RD->startDefinition();
   addFieldToRecordDecl(C, RD, KmpInt32Ty);
   RD->completeDefinition();
   return RD;
@@ -3584,7 +3585,7 @@ static void emitPrivatesInit(CodeGenFunction &CGF,
   llvm::OpenMPIRBuilder &OMPBuilder = CGF.CGM.getOpenMPRuntime().getOMPBuilder();
   auto *CSInfo =  dyn_cast_or_null<CGOpenMPRegionInfo>(CGF.CapturedStmtInfo);
   bool InTaskgraph = false;
-  if (CGOpenMPTaskgraphRegionInfo::classof(CSInfo)) {
+  if (CSInfo && CGOpenMPTaskgraphRegionInfo::classof(CSInfo)) {
     // emit recapture_bind(..) only if task in a taskgraph region
     InTaskgraph = true;
   }
