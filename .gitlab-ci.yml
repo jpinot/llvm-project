@@ -1,0 +1,76 @@
+image: ubuntu:24.04
+
+stages:
+  - setup
+  - test
+  - deploy
+
+variables:
+  # Set up environment variables
+  CC: "clang-18"
+  CXX: "clang++-18"
+  COMPILERS_PATH: "/usr/bin"
+  INSTALL_PREFIX: "/builds/ppc/software/llvm-project"
+  BUILD_TYPE: "Release"
+  LLVM_PROJECTS: "clang;openmp"
+  LLVM_RUNTIMES: ""
+  BUILD_FLAGS: "-DLIBOMP_TASKGRAPH=TRUE  -DLIBOMP_OMPX_TASKGRAPH=TRUE"
+  SPECIFIC_TEST: "" # Specify a test target
+  FF_USE_FASTZIP: "1"
+  ARTIFACT_COMPRESSION_LEVEL: "slowest"
+
+before_script:
+  - echo "Starting LLVM-project CI Pipeline"
+  - DEBIAN_FRONTEND=noninteractive apt-get update --yes
+  - DEBIAN_FRONTEND=noninteractive apt-get install --yes build-essential wget git ocaml cmake make ninja-build clang-18 clang++-18 clang-format-18 lld-18
+
+setup:
+  stage: setup
+  script:
+    - mkdir -p build
+    - cd build
+    - cmake -DLLVM_ENABLE_PROJECTS=${LLVM_PROJECTS} -DLLVM_ENABLE_RUNTIMES=${LLVM_RUNTIMES} -DCMAKE_CXX_COMPILER=${COMPILERS_PATH}/${CXX} -DCMAKE_C_COMPILER=${COMPILERS_PATH}/${CC} ${BUILD_FLAGS} -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DLLVM_ENABLE_ASSERTIONS=ON  -DLLVM_USE_LINKER=lld-18 -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_INSTALL_PREFIX=${INSTALL_PREFIX}/install -DLLVM_TARGETS_TO_BUILD="Native" -G Ninja ../llvm
+  artifacts:
+    paths:
+      - build/
+
+style:
+  stage: test
+  allow_failure: true
+  script:
+    - echo "Checking coding style for modified files"
+    - MODIFIED_FILES=$(git diff --name-only $CI_COMMIT_BEFORE_SHA $CI_COMMIT_SHA | grep -E '\.(cpp|h)$') || true
+    - if [ -z "$MODIFIED_FILES" ]; then echo "No C++ source/header files modified, skipping style check"; exit 0; fi
+    - echo "Downloading run-clang-format.py"
+    - wget https://github.com/Sarcasm/run-clang-format/blob/master/run-clang-format.py
+    - chmod +x run-clang-format.py
+    - echo ""
+    - echo "Note that clang-format output is advisory and cannot always match the coding style"
+    - echo "Warnings from this tool can be ignored in favour of the documented coding style,"
+    - echo "or in favour of matching the style of existing surrounding code."
+    - OUT=$(echo "$MODIFIED_FILES" | xargs -I{} python3 run-clang-format.py --style LLVM --clang-format-executable clang-format-18 -r {})
+
+test:
+  stage: test
+  script:
+    - cd build
+    - echo "Building LLVM-project for testing"
+    - ninja
+    - |
+      if [ -n "${SPECIFIC_TEST}" ]; then
+        echo "Running specific test: ${SPECIFIC_TEST}"
+        ninja ${SPECIFIC_TEST}
+      else
+        echo "Running all tests"
+        ninja check-all
+      fi
+      
+deploy:
+  stage: deploy
+  when: manual
+  script:
+    - echo "Cleaning up build artifacts and caches"
+    - ninja install
+  artifacts:
+    paths:
+      - install
