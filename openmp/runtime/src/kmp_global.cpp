@@ -556,6 +556,8 @@ kmp_int32 __kmp_max_tdgs = 100;
 kmp_tdg_info_t **__kmp_global_tdgs = NULL;
 kmp_int32 __kmp_curr_tdg_idx =
     0; // Id of the current TDG being recorded or executed
+kmp_tdg_info_t* __kmp_curr_tdg =
+    NULL; // Current TDG being recorded or executed
 kmp_int32 __kmp_num_tdg = 0;
 kmp_int32 __kmp_successors_size = 10; // Initial succesor size list for
                                       // recording
