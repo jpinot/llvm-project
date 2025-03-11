@@ -5499,6 +5499,34 @@ static kmp_tdg_info_t *__kmp_alloc_tdg(kmp_int32 tdg_id) {
   return res;
 }
 
+// __kmp_free_tdg: Frees a TDG if it exists.
+// tdg_id:  ID of the TDG to be freed.
+// returns: true if a TDG with the given ID was found and successfully freed,
+// false if no such TDG exists.
+static bool __kmp_free_tdg(kmp_int32 tdg_id) {
+  kmp_tdg_info_t *tdg = nullptr;
+  kmp_int32 i = 0;
+  if (__kmp_global_tdgs == NULL)
+    return false;
+
+  for (i = 0; i < __kmp_max_tdgs; i++) {
+    if (__kmp_global_tdgs[i] && __kmp_global_tdgs[i]->tdg_id == tdg_id) {
+      tdg = __kmp_global_tdgs[i];
+      for (kmp_int i = 0; i < tdg->map_size; i++) {
+        __kmp_free(tdg->record_map[i].successors);
+      }
+      __kmp_free(tdg->record_map);
+      if (tdg->root_tasks)
+        __kmp_free(tdg->root_tasks);
+
+      __kmp_free(tdg);
+      __kmp_global_tdgs[i] = NULL;
+      return true;
+    }
+  }
+  return false;
+}
+
 // __kmp_print_tdg_dot: prints the TDG to a dot file
 // tdg:    ID of the TDG
 // gtid:   Global Thread ID
@@ -5626,27 +5654,28 @@ static inline void __kmp_start_record(kmp_int32 gtid,
 // loc_ref:     Location of TDG, not used yet
 // gtid:        Global Thread ID of the encountering thread
 // input_flags: Flags associated with the TDG
-// tdg_id:      ID of the TDG to record, for now, incremental integer
-// returns:     1 if we record, otherwise, 0
+// tdg_id:      ID of the TDG to record
+// before recording returns:     1 if we record, otherwise, 0
 kmp_int32 __kmpc_start_record_task(ident_t *loc_ref, kmp_int32 gtid,
                                    kmp_int32 input_flags, kmp_int32 tdg_id) {
-
   kmp_int32 res;
   kmp_taskgraph_flags_t *flags = (kmp_taskgraph_flags_t *)&input_flags;
-  KA_TRACE(10,
-           ("__kmpc_start_record_task(enter): T#%d loc=%p flags=%d tdg_id=%d\n",
-            gtid, loc_ref, input_flags, tdg_id));
+  KA_TRACE(10, ("__kmpc_start_record_task(enter): T#%d loc=%p flags=%d "
+                "tdg_id=%d\n",
+                gtid, loc_ref, input_flags, tdg_id));
 
   if (__kmp_max_tdgs == 0) {
-    KA_TRACE(
-        10,
-        ("__kmpc_start_record_task(abandon): T#%d loc=%p flags=%d tdg_id = %d, "
-         "__kmp_max_tdgs = 0\n",
-         gtid, loc_ref, input_flags, tdg_id));
+    KA_TRACE(10, ("__kmpc_start_record_task(abandon): T#%d loc=%p flags=%d "
+                  "tdg_id = %d, __kmp_max_tdgs = 0\n",
+                  gtid, loc_ref, input_flags, tdg_id));
     return 1;
   }
 
   __kmpc_taskgroup(loc_ref, gtid);
+  if (flags->graph_reset) {
+    __kmp_free_tdg(tdg_id);
+    __kmp_num_tdg--;
+  }
   if (kmp_tdg_info_t *tdg = __kmp_find_tdg(tdg_id)) {
     // TODO: use re_record flag
     __kmp_exec_tdg(gtid, tdg);
