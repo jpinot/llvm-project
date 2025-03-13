@@ -5452,7 +5452,6 @@ bool __kmpc_omp_has_task_team(kmp_int32 gtid) {
 // its initial state, return the pointer to it, otherwise nullptr
 static kmp_tdg_info_t *__kmp_find_tdg(kmp_int32 tdg_id) {
   kmp_tdg_info_t *res = nullptr;
-  kmp_int32 i = 0;
   if (__kmp_max_tdgs == 0)
     return res;
 
@@ -5460,11 +5459,10 @@ static kmp_tdg_info_t *__kmp_find_tdg(kmp_int32 tdg_id) {
     __kmp_global_tdgs = (kmp_tdg_info_t **)__kmp_allocate(
         sizeof(kmp_tdg_info_t *) * __kmp_max_tdgs);
 
-  for (i = 0; i < __kmp_max_tdgs; i++) {
-    if (__kmp_global_tdgs[i] && __kmp_global_tdgs[i]->tdg_id == tdg_id) {
-      if (__kmp_global_tdgs[i]->tdg_status != KMP_TDG_NONE) {
-        res = __kmp_global_tdgs[i];
-      }
+  for (kmp_int32 tdg_idx = 0; tdg_idx < __kmp_max_tdgs; tdg_idx++) {
+    if (__kmp_global_tdgs[tdg_idx] && __kmp_global_tdgs[tdg_idx]->tdg_id == tdg_id) {
+      if (__kmp_global_tdgs[tdg_idx]->tdg_status != KMP_TDG_NONE)
+        res = __kmp_global_tdgs[tdg_idx];
       break;
     }
   }
@@ -5478,21 +5476,19 @@ static kmp_tdg_info_t *__kmp_find_tdg(kmp_int32 tdg_id) {
 // Returns nullptr if no TDG can be allocated.
 static kmp_tdg_info_t *__kmp_alloc_tdg(kmp_int32 tdg_id) {
   kmp_tdg_info_t *res = nullptr;
-  kmp_int32 i = 0;
-  if ((res = __kmp_find_tdg(tdg_id))) {
+  if ((res = __kmp_find_tdg(tdg_id)))
     return res;
-  }
-  if (__kmp_num_tdg > __kmp_max_tdgs) {
-    return res;
-  }
 
-  for (i = 0; i < __kmp_max_tdgs; i++) {
-    if (!__kmp_global_tdgs[i]) {
+  if (__kmp_num_tdg > __kmp_max_tdgs)
+    return res;
+
+  for (kmp_int32 tdg_idx = 0; tdg_idx < __kmp_max_tdgs; tdg_idx++) {
+    if (!__kmp_global_tdgs[tdg_idx]) {
       kmp_tdg_info_t *tdg =
           (kmp_tdg_info_t *)__kmp_allocate(sizeof(kmp_tdg_info_t));
-      __kmp_global_tdgs[i] = tdg;
+      __kmp_global_tdgs[tdg_idx] = tdg;
       __kmp_curr_tdg = tdg;
-      res = __kmp_global_tdgs[i];
+      res = __kmp_global_tdgs[tdg_idx];
       break;
     }
   }
