@@ -3027,6 +3027,9 @@ typedef struct KMP_ALIGN_CACHE kmp_base_info {
   kmp_uint8 th_task_state; // alternating 0/1 for task team identification
   kmp_uint32 th_reap_state; // Non-zero indicates thread is not
   // tasking, thus safe to reap
+#if OMPX_TASKGRAPH
+  kmp_tdg_info_t *th_current_tdg = NULL; // Current TDG being recorded or executed
+#endif
 
   /* More stuff for keeping track of active/sleeping threads (this part is
      written by the worker thread) */

@@ -1651,7 +1651,7 @@ kmp_task_t *__kmp_task_alloc(ident_t *loc_ref, kmp_int32 gtid,
   }
 
 #if OMPX_TASKGRAPH
-  kmp_tdg_info_t *tdg = __kmp_curr_tdg;
+  kmp_tdg_info_t *tdg = __kmp_threads[gtid]->th.th_current_tdg;
   if (tdg && __kmp_tdg_is_recording(tdg->tdg_status) &&
       (task_entry != (kmp_routine_entry_t)__kmp_taskloop_task)) {
     taskdata->is_taskgraph = 1;
@@ -2576,7 +2576,7 @@ without help of the runtime library.
 */
 void *__kmpc_task_reduction_init(int gtid, int num, void *data) {
 #if OMPX_TASKGRAPH
-  kmp_tdg_info_t *tdg = __kmp_curr_tdg;
+  kmp_tdg_info_t *tdg = __kmp_threads[gtid]->th.th_current_tdg;
   if (tdg && __kmp_tdg_is_recording(tdg->tdg_status)) {
     tdg->rec_taskred_data = __kmp_allocate(sizeof(kmp_task_red_input_t) * num);
     tdg->rec_num_taskred = num;
@@ -2600,7 +2600,7 @@ has two parameters, pointer to object to be initialized and pointer to omp_orig
 */
 void *__kmpc_taskred_init(int gtid, int num, void *data) {
 #if OMPX_TASKGRAPH
-  kmp_tdg_info_t *tdg = __kmp_curr_tdg;
+  kmp_tdg_info_t *tdg = __kmp_threads[gtid]->th.th_current_tdg;
   if (tdg && __kmp_tdg_is_recording(tdg->tdg_status)) {
     tdg->rec_taskred_data = __kmp_allocate(sizeof(kmp_task_red_input_t) * num);
     tdg->rec_num_taskred = num;
@@ -2654,8 +2654,9 @@ void *__kmpc_task_reduction_get_th_data(int gtid, void *tskgrp, void *data) {
   kmp_int32 tid = thread->th.th_info.ds.ds_tid;
 
 #if OMPX_TASKGRAPH
+  kmp_tdg_info_t *tdg = thread->th.th_current_tdg;
   if ((thread->th.th_current_task->is_taskgraph) &&
-      (!__kmp_tdg_is_recording(__kmp_curr_tdg->tdg_status))) {
+      (!tdg || (!__kmp_tdg_is_recording(tdg->tdg_status)))) {
     tg = thread->th.th_current_task->td_taskgroup;
     KMP_ASSERT(tg != NULL);
     KMP_ASSERT(tg->reduce_data != NULL);
@@ -5487,7 +5488,7 @@ static kmp_tdg_info_t *__kmp_alloc_tdg(kmp_int32 tdg_id) {
       kmp_tdg_info_t *tdg =
           (kmp_tdg_info_t *)__kmp_allocate(sizeof(kmp_tdg_info_t));
       __kmp_global_tdgs[tdg_idx] = tdg;
-      __kmp_curr_tdg = tdg;
+      __kmp_threads[__kmp_get_gtid()]->th.th_current_tdg = tdg;
       res = __kmp_global_tdgs[tdg_idx];
       break;
     }
