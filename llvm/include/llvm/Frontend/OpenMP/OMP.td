@@ -1173,6 +1173,14 @@ def OMP_TaskGroup : Directive<"taskgroup"> {
   let association = AS_Block;
   let category = CA_Executable;
 }
+def OMP_TaskGraph : Directive<"taskgraph"> {
+  let allowedClauses = [
+    VersionedClause<OMPC_If>,
+    VersionedClause<OMPC_NoGroup>,
+  ];
+  let association = AS_Block;
+  let category = CA_Executable;
+}
 def OMP_TaskLoop : Directive<"taskloop"> {
   let allowedClauses = [
     VersionedClause<OMPC_Allocate>,

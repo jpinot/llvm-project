@@ -844,6 +844,7 @@ void clang::getOpenMPCaptureRegions(
     case OMPD_single:
     case OMPD_target_data:
     case OMPD_taskgroup:
+    case OMPD_taskgraph:
     case OMPD_stripe:
       // These directives (when standalone) use OMPD_unknown as the region,
       // but when they're constituents of a compound directive, and other
