@@ -230,6 +230,10 @@ def OMPC_GraphId : Clause<[Spelling<"graph_id">]> {
   let clangClass = "OMPGraphIdClause";
   let flangClass = "ScalarIntExpr";
 }
+def OMPC_GraphReset : Clause<[Spellig<"graph_reset">]> {
+  let clangClass = "OMPGraphResetClause";
+  let flangClass = "ScalarLogicExpr";
+}
 def OMPC_HasDeviceAddr : Clause<[Spelling<"has_device_addr">]> {
   let clangClass = "OMPHasDeviceAddrClause";
   let flangClass = "OmpObjectList";
