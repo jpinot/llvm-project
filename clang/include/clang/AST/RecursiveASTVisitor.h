@@ -3976,6 +3976,13 @@ bool RecursiveASTVisitor<Derived>::VisitOMPIsDevicePtrClause(
 }
 
 template <typename Derived>
+bool RecursiveASTVisitor<Derived>::VisitOMPGraphIdClause(OMPGraphIdClause *C) {
+  TRY_TO(VisitOMPClauseWithPreInit(C));
+  TRY_TO(TraverseStmt(C->getCondition()));
+  return true;
+}
+
+template <typename Derived>
 bool RecursiveASTVisitor<Derived>::VisitOMPHasDeviceAddrClause(
     OMPHasDeviceAddrClause *C) {
   TRY_TO(VisitOMPClauseList(C));
