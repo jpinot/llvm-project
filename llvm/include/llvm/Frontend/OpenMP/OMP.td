@@ -219,6 +219,10 @@ def OMPC_GrainSize : Clause<"grainsize"> {
     OMP_GRAINSIZE_Unknown
   ];
 }
+def OMPC_GraphId : Clause<"graph_id"> {
+  let clangClass = "OMPGraphIdClause";
+  let flangClass = "ScalarIntExpr";
+}
 def OMPC_HasDeviceAddr : Clause<"has_device_addr"> {
   let clangClass = "OMPHasDeviceAddrClause";
   let flangClass = "OmpObjectList";
