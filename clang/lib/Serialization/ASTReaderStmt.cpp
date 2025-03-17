@@ -2572,6 +2572,11 @@ void ASTStmtReader::VisitOMPErrorDirective(OMPErrorDirective *D) {
   VisitOMPExecutableDirective(D);
 }
 
+void ASTStmtReader::VisitOMPTaskgraphDirective(OMPTaskgraphDirective *D) {
+  VisitStmt(D);
+  VisitOMPExecutableDirective(D);
+}
+
 void ASTStmtReader::VisitOMPTaskgroupDirective(OMPTaskgroupDirective *D) {
   VisitStmt(D);
   VisitOMPExecutableDirective(D);
@@ -3710,6 +3715,11 @@ Stmt *ASTReader::ReadStmtFromStream(ModuleFile &F) {
 
     case STMT_OMP_ERROR_DIRECTIVE:
       S = OMPErrorDirective::CreateEmpty(
+          Context, Record[ASTStmtReader::NumStmtFields], Empty);
+      break;
+
+    case STMT_OMP_TASKGRAPH_DIRECTIVE:
+      S = OMPTaskgraphDirective::CreateEmpty(
           Context, Record[ASTStmtReader::NumStmtFields], Empty);
       break;
 

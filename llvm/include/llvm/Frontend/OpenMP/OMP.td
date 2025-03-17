@@ -1204,6 +1204,14 @@ def OMP_TaskGroup : Directive<[Spelling<"taskgroup">]> {
   let association = AS_Block;
   let category = CA_Executable;
 }
+def OMP_TaskGraph : Directive<[Spelling<"taskgraph">]> {
+  let allowedClauses = [
+    VersionedClause<OMPC_If>,
+    VersionedClause<OMPC_NoGroup>,
+  ];
+  let association = AS_Block;
+  let category = CA_Executable;
+}
 def OMP_TaskLoop : Directive<[Spelling<"taskloop">]> {
   let allowedClauses = [
     VersionedClause<OMPC_Allocate>,
