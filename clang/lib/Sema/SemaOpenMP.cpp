@@ -6301,6 +6301,10 @@ StmtResult SemaOpenMP::ActOnOpenMPExecutableDirective(
            "No associated statement allowed for 'omp taskwait' directive");
     Res = ActOnOpenMPTaskwaitDirective(ClausesWithImplicit, StartLoc, EndLoc);
     break;
+  case OMPD_taskgraph:
+    Res = ActOnOpenMPTaskgraphDirective(ClausesWithImplicit, AStmt, StartLoc,
+                                        EndLoc);
+    break;
   case OMPD_taskgroup:
     Res = ActOnOpenMPTaskgroupDirective(ClausesWithImplicit, AStmt, StartLoc,
                                         EndLoc);
@@ -11089,6 +11093,19 @@ SemaOpenMP::ActOnOpenMPTaskwaitDirective(ArrayRef<OMPClause *> Clauses,
 
   return OMPTaskwaitDirective::Create(getASTContext(), StartLoc, EndLoc,
                                       Clauses);
+}
+
+StmtResult
+SemaOpenMP::ActOnOpenMPTaskgraphDirective(ArrayRef<OMPClause *> Clauses,
+                                          Stmt *AStmt, SourceLocation StartLoc,
+                                          SourceLocation EndLoc) {
+  if (!AStmt)
+    return StmtError();
+
+  assert(isa<CapturedStmt>(AStmt) && "Captured statement expected");
+
+  return OMPTaskgraphDirective::Create(getASTContext(), StartLoc, EndLoc,
+                                       Clauses, AStmt);
 }
 
 StmtResult
