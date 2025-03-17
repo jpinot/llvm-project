@@ -226,6 +226,10 @@ def OMPC_GrainSize : Clause<[Spelling<"grainsize">]> {
     OMP_GRAINSIZE_Unknown
   ];
 }
+def OMPC_GraphId : Clause<[Spelling<"graph_id">]> {
+  let clangClass = "OMPGraphIdClause";
+  let flangClass = "ScalarIntExpr";
+}
 def OMPC_HasDeviceAddr : Clause<[Spelling<"has_device_addr">]> {
   let clangClass = "OMPHasDeviceAddrClause";
   let flangClass = "OmpObjectList";
@@ -1222,6 +1226,7 @@ def OMP_TaskGraph : Directive<[Spelling<"taskgraph">]> {
   let allowedClauses = [
     VersionedClause<OMPC_If>,
     VersionedClause<OMPC_NoGroup>,
+    VersionedClause<OMPC_GraphId>,
   ];
   let association = AS_Block;
   let category = CA_Executable;
