@@ -230,6 +230,10 @@ def OMPC_GraphId : Clause<[Spelling<"graph_id">]> {
   let clangClass = "OMPGraphIdClause";
   let flangClass = "ScalarIntExpr";
 }
+def OMPC_GraphReset : Clause<[Spelling<"graph_reset">]> {
+  let clangClass = "OMPGraphResetClause";
+  let flangClass = "ScalarLogicExpr";
+}
 def OMPC_HasDeviceAddr : Clause<[Spelling<"has_device_addr">]> {
   let clangClass = "OMPHasDeviceAddrClause";
   let flangClass = "OmpObjectList";
@@ -1227,6 +1231,7 @@ def OMP_TaskGraph : Directive<[Spelling<"taskgraph">]> {
     VersionedClause<OMPC_If>,
     VersionedClause<OMPC_NoGroup>,
     VersionedClause<OMPC_GraphId>,
+    VersionedClause<OMPC_GraphReset>,
   ];
   let association = AS_Block;
   let category = CA_Executable;
