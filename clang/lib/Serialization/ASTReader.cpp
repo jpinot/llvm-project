@@ -12132,6 +12132,12 @@ void OMPClauseReader::VisitOMPGraphIdClause(OMPGraphIdClause *C) {
   C->setLParenLoc(Record.readSourceLocation());
 }
 
+void OMPClauseReader::VisitOMPGraphResetClause(OMPGraphResetClause *C) {
+  VisitOMPClauseWithPreInit(C);
+  C->setCondition(Record.readSubExpr());
+  C->setLParenLoc(Record.readSourceLocation());
+}
+
 void OMPClauseReader::VisitOMPGrainsizeClause(OMPGrainsizeClause *C) {
   VisitOMPClauseWithPreInit(C);
   C->setModifier(Record.readEnum<OpenMPGrainsizeClauseModifier>());
