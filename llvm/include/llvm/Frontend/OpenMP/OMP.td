@@ -226,6 +226,10 @@ def OMPC_GrainSize : Clause<[Spelling<"grainsize">]> {
     OMP_GRAINSIZE_Unknown
   ];
 }
+def OMPC_GraphId : Clause<[Spelling<"graph_id">]> {
+  let clangClass = "OMPGraphIdClause";
+  let flangClass = "ScalarIntExpr";
+}
 def OMPC_HasDeviceAddr : Clause<[Spelling<"has_device_addr">]> {
   let clangClass = "OMPHasDeviceAddrClause";
   let flangClass = "OmpObjectList";
