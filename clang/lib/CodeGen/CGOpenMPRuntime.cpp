@@ -63,6 +63,8 @@ public:
     InlinedRegion,
     /// Region with outlined function for standalone 'target' directive.
     TargetRegion,
+    /// Region with outlined function for standalone 'taskgraph' directive.
+    TaskgraphRegion,
   };
 
   CGOpenMPRegionInfo(const CapturedStmt &CS,
@@ -342,6 +344,26 @@ public:
 
 private:
   StringRef HelperName;
+};
+
+/// API for captured statement code generation in OpenMP taskgraph
+/// constructs.
+class CGOpenMPTaskgraphRegionInfo final : public CGOpenMPRegionInfo {
+public:
+  CGOpenMPTaskgraphRegionInfo(const CapturedStmt &CS,
+                              const RegionCodeGenTy &CodeGen)
+      : CGOpenMPRegionInfo(CS, TaskgraphRegion, CodeGen,
+                           llvm::omp::OMPD_taskgraph, false) {}
+
+  const VarDecl *getThreadIDVariable() const override { return 0; }
+
+  /// Get the name of the capture helper.
+  StringRef getHelperName() const override { return "taskgraph.omp_outlined."; }
+
+  static bool classof(const CGCapturedStmtInfo *Info) {
+    return CGOpenMPRegionInfo::classof(Info) &&
+           cast<CGOpenMPRegionInfo>(Info)->getRegionKind() == TaskgraphRegion;
+  }
 };
 
 static void EmptyCodeGen(CodeGenFunction &, PrePostActionTy &) {
@@ -2075,6 +2097,48 @@ void CGOpenMPRuntime::emitTaskyieldCall(CodeGenFunction &CGF,
 
   if (auto *Region = dyn_cast_or_null<CGOpenMPRegionInfo>(CGF.CapturedStmtInfo))
     Region->emitUntiedSwitch(CGF);
+}
+
+void CGOpenMPRuntime::emitTaskgraphCall(CodeGenFunction &CGF,
+                                        SourceLocation Loc,
+                                        const OMPExecutableDirective &D) {
+  if (!CGF.HaveInsertPoint())
+    return;
+
+  // Building kmp_taskgraph_flags_t flags for kmpc_taskgraph. C.f., kmp.h
+  enum {
+    NowaitFlag = 0x1, // Not used yet.
+    ReRecordFlag = 0x2,
+  };
+
+  unsigned Flags = 0;
+
+  CodeGenFunction OutlinedCGF(CGM, true);
+
+  const CapturedStmt *CS = cast<CapturedStmt>(D.getAssociatedStmt());
+
+  auto &&BodyGen = [CS](CodeGenFunction &CGF, PrePostActionTy &) {
+    CGF.EmitStmt(CS->getCapturedStmt());
+  };
+
+  LValue CapStruct = CGF.InitCapturedStruct(*CS);
+  CGOpenMPTaskgraphRegionInfo TaskgraphRegion(*CS, BodyGen);
+  CodeGenFunction::CGCapturedStmtRAII CapInfoRAII(OutlinedCGF,
+                                                  &TaskgraphRegion);
+  llvm::Function *FnT = OutlinedCGF.GenerateCapturedStmtFunction(*CS);
+
+  std::vector<llvm::Value *> Args{
+      emitUpdateLocation(CGF, Loc),
+      getThreadID(CGF, Loc),
+      CGF.Builder.getInt32(Flags),
+      CGF.Builder.getInt32(D.getBeginLoc().getHashValue()),
+      CGF.Builder.CreatePointerBitCastOrAddrSpaceCast(FnT, CGM.VoidPtrTy),
+      CGF.Builder.CreatePointerBitCastOrAddrSpaceCast(
+          CapStruct.getPointer(OutlinedCGF), CGM.VoidPtrTy)};
+
+  CGF.EmitRuntimeCall(OMPBuilder.getOrCreateRuntimeFunction(
+                          CGM.getModule(), OMPRTL___kmpc_taskgraph),
+                      Args);
 }
 
 void CGOpenMPRuntime::emitTaskgroupRegion(CodeGenFunction &CGF,
@@ -11737,6 +11801,12 @@ void CGOpenMPSIMDRuntime::emitMaskedRegion(CodeGenFunction &CGF,
 
 void CGOpenMPSIMDRuntime::emitTaskyieldCall(CodeGenFunction &CGF,
                                             SourceLocation Loc) {
+  llvm_unreachable("Not supported in SIMD-only mode");
+}
+
+void CGOpenMPSIMDRuntime::emitTaskgraphCall(CodeGenFunction &CGF,
+                                            SourceLocation Loc,
+                                            const OMPExecutableDirective &D) {
   llvm_unreachable("Not supported in SIMD-only mode");
 }
 

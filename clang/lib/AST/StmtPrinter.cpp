@@ -894,6 +894,10 @@ void StmtPrinter::VisitOMPErrorDirective(OMPErrorDirective *Node) {
   Indent() << "#pragma omp error";
   PrintOMPExecutableDirective(Node);
 }
+void StmtPrinter::VisitOMPTaskgraphDirective(OMPTaskgraphDirective *Node) {
+  Indent() << "#pragma omp taskgraph";
+  PrintOMPExecutableDirective(Node);
+}
 
 void StmtPrinter::VisitOMPTaskgroupDirective(OMPTaskgroupDirective *Node) {
   Indent() << "#pragma omp taskgroup";
