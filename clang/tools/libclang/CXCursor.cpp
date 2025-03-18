@@ -741,6 +741,9 @@ CXCursor cxcursor::MakeCXCursor(const Stmt *S, const Decl *Parent,
   case Stmt::OMPErrorDirectiveClass:
     K = CXCursor_OMPErrorDirective;
     break;
+  case Stmt::OMPTaskgraphDirectiveClass:
+    K = CXCursor_OMPTaskgraphDirective;
+    break;
   case Stmt::OMPTaskgroupDirectiveClass:
     K = CXCursor_OMPTaskgroupDirective;
     break;
