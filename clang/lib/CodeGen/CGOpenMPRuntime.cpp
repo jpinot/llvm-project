@@ -2109,9 +2109,26 @@ void CGOpenMPRuntime::emitTaskgraphCall(CodeGenFunction &CGF,
   enum {
     NowaitFlag = 0x1, // Not used yet.
     ReRecordFlag = 0x2,
+    Reset = 0x4
   };
 
   unsigned Flags = 0;
+
+  const OMPGraphResetClause *GraphResetClause =
+      D.getSingleClause<OMPGraphResetClause>();
+  if (GraphResetClause) {
+    const Expr *Cond = GraphResetClause->getCondition();
+    llvm::Value *CondVal = CGF.EvaluateExprAsBool(Cond);
+    if (CondVal) {
+      llvm::Value *CondBool = CGF.Builder.CreateICmpNE(
+          CondVal, llvm::ConstantInt::get(CondVal->getType(), 0));
+      if (llvm::ConstantInt *CI = llvm::dyn_cast<llvm::ConstantInt>(CondBool)) {
+        if (CI->isOne()) {
+          Flags |= Reset;
+        }
+      }
+    }
+  }
 
   CodeGenFunction OutlinedCGF(CGM, true);
 
