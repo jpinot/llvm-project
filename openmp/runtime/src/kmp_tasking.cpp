@@ -5755,4 +5755,22 @@ void __kmpc_end_record_task(ident_t *loc_ref, kmp_int32 gtid,
                 " tdg=%d, its status is now READY\n",
                 gtid, loc_ref, tdg_id));
 }
+
+// __kmpc_taskgraph: record or replay taskgraph
+// loc_ref:     Location of TDG, not used yet
+// gtid:        Global Thread ID of the encountering thread
+// input_flags: Flags associated with the TDG
+// tdg_id:      ID of the TDG to record, for now, incremental integer
+// entry:       Pointer to the entry function
+// args:        Pointer to the function arguments
+void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 input_flags,
+                      kmp_uint32 tdg_id, void (*entry)(void *), void *args) {
+  kmp_int32 res = __kmpc_start_record_task(loc_ref, gtid, input_flags, tdg_id);
+  // When res = 1, we either start recording or only execute tasks
+  // without recording. Need to execute entry function in both cases.
+  if (res)
+    entry(args);
+
+  __kmpc_end_record_task(loc_ref, gtid, input_flags, tdg_id);
+}
 #endif
