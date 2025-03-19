@@ -38,7 +38,7 @@ static int __kmp_realloc_task_threads_data(kmp_info_t *thread,
                                            kmp_task_team_t *task_team);
 static void __kmp_bottom_half_finish_proxy(kmp_int32 gtid, kmp_task_t *ptask);
 #if OMPX_TASKGRAPH
-static kmp_tdg_info_t *__kmp_find_tdg(kmp_int32 tdg_id);
+static kmp_tdg_info_t *__kmp_find_tdg(kmp_int32 tdg_id, kmp_int32 graph_id);
 int __kmp_taskloop_task(int gtid, void *ptask);
 #endif
 
@@ -5450,7 +5450,7 @@ bool __kmpc_omp_has_task_team(kmp_int32 gtid) {
 // tdg_id: ID of the TDG
 // returns: If a TDG corresponding to this ID is found and not
 // its initial state, return the pointer to it, otherwise nullptr
-static kmp_tdg_info_t *__kmp_find_tdg(kmp_int32 tdg_id) {
+static kmp_tdg_info_t *__kmp_find_tdg(kmp_int32 tdg_id, kmp_int32 graph_id) {
   kmp_tdg_info_t *res = nullptr;
   if (__kmp_max_tdgs == 0)
     return res;
@@ -5461,7 +5461,8 @@ static kmp_tdg_info_t *__kmp_find_tdg(kmp_int32 tdg_id) {
 
   for (kmp_int32 tdg_idx = 0; tdg_idx < __kmp_max_tdgs; tdg_idx++) {
     if (__kmp_global_tdgs[tdg_idx] &&
-        __kmp_global_tdgs[tdg_idx]->tdg_id == tdg_id) {
+        __kmp_global_tdgs[tdg_idx]->tdg_id == tdg_id &&
+        __kmp_global_tdgs[tdg_idx]->graph_id == graph_id) {
       if (__kmp_global_tdgs[tdg_idx]->tdg_status != KMP_TDG_NONE)
         res = __kmp_global_tdgs[tdg_idx];
       break;
@@ -5475,9 +5476,9 @@ static kmp_tdg_info_t *__kmp_find_tdg(kmp_int32 tdg_id) {
 // returns: A pointer to the TDG if it already exists. Otherwise,
 // allocates a new TDG if the maximum limit has not been reached.
 // Returns nullptr if no TDG can be allocated.
-static kmp_tdg_info_t *__kmp_alloc_tdg(kmp_int32 tdg_id) {
+static kmp_tdg_info_t *__kmp_alloc_tdg(kmp_int32 tdg_id, kmp_int32 graph_id) {
   kmp_tdg_info_t *res = nullptr;
-  if ((res = __kmp_find_tdg(tdg_id)))
+  if ((res = __kmp_find_tdg(tdg_id, graph_id)))
     return res;
 
   if (__kmp_num_tdg > __kmp_max_tdgs)
@@ -5617,10 +5618,11 @@ void __kmp_exec_tdg(kmp_int32 gtid, kmp_tdg_info_t *tdg) {
 // tdg_id:      ID of the TDG to record
 static inline void __kmp_start_record(kmp_int32 gtid,
                                       kmp_taskgraph_flags_t *flags,
-                                      kmp_int32 tdg_id) {
-  kmp_tdg_info_t *tdg = __kmp_alloc_tdg(tdg_id);
+                                      kmp_int32 tdg_id, kmp_int32 graph_id) {
+  kmp_tdg_info_t *tdg = __kmp_alloc_tdg(tdg_id, graph_id);
   // Initializing the TDG structure
   tdg->tdg_id = tdg_id;
+  tdg->graph_id = graph_id;
   tdg->map_size = INIT_MAPSIZE;
   tdg->num_roots = -1;
   tdg->root_tasks = nullptr;
@@ -5652,9 +5654,11 @@ static inline void __kmp_start_record(kmp_int32 gtid,
 // gtid:        Global Thread ID of the encountering thread
 // input_flags: Flags associated with the TDG
 // tdg_id:      ID of the TDG to record
+// graph_id:    ID of graph_id clause
 // returns:     1 if we record, otherwise, 0
 kmp_int32 __kmpc_start_record_task(ident_t *loc_ref, kmp_int32 gtid,
-                                   kmp_int32 input_flags, kmp_int32 tdg_id) {
+                                   kmp_int32 input_flags, kmp_int32 tdg_id,
+                                   kmp_int32 graph_id) {
   kmp_int32 res;
   kmp_taskgraph_flags_t *flags = (kmp_taskgraph_flags_t *)&input_flags;
   KA_TRACE(10, ("__kmpc_start_record_task(enter): T#%d loc=%p flags=%d "
@@ -5673,13 +5677,13 @@ kmp_int32 __kmpc_start_record_task(ident_t *loc_ref, kmp_int32 gtid,
     __kmp_free_tdg(tdg_id);
     __kmp_num_tdg--;
   }
-  if (kmp_tdg_info_t *tdg = __kmp_find_tdg(tdg_id)) {
+  if (kmp_tdg_info_t *tdg = __kmp_find_tdg(tdg_id, graph_id)) {
     // TODO: use re_record flag
     __kmp_exec_tdg(gtid, tdg);
     res = 0;
   } else {
     KMP_DEBUG_ASSERT(__kmp_num_tdg < __kmp_max_tdgs);
-    __kmp_start_record(gtid, flags, tdg_id);
+    __kmp_start_record(gtid, flags, tdg_id, graph_id);
     __kmp_num_tdg++;
     res = 1;
   }
@@ -5738,8 +5742,9 @@ void __kmp_end_record(kmp_int32 gtid, kmp_tdg_info_t *tdg) {
 // input_flags:  Flags attached to the graph
 // tdg_id:       ID of the TDG just finished recording
 void __kmpc_end_record_task(ident_t *loc_ref, kmp_int32 gtid,
-                            kmp_int32 input_flags, kmp_int32 tdg_id) {
-  kmp_tdg_info_t *tdg = __kmp_find_tdg(tdg_id);
+                            kmp_int32 input_flags, kmp_int32 tdg_id,
+                            kmp_int32 graph_id) {
+  kmp_tdg_info_t *tdg = __kmp_find_tdg(tdg_id, graph_id);
 
   KMP_DEBUG_ASSERT(tdg != NULL);
   KA_TRACE(10, ("__kmpc_end_record_task(enter): T#%d loc=%p finishes recording"
@@ -5764,13 +5769,16 @@ void __kmpc_end_record_task(ident_t *loc_ref, kmp_int32 gtid,
 // entry:       Pointer to the entry function
 // args:        Pointer to the function arguments
 void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 input_flags,
-                      kmp_uint32 tdg_id, void (*entry)(void *), void *args) {
-  kmp_int32 res = __kmpc_start_record_task(loc_ref, gtid, input_flags, tdg_id);
+                      kmp_uint32 tdg_id, void (*entry)(void *), void *args,
+                      kmp_uint32 graph_id) {
+  kmp_int32 res =
+      __kmpc_start_record_task(loc_ref, gtid, input_flags, tdg_id, graph_id);
   // When res = 1, we either start recording or only execute tasks
   // without recording. Need to execute entry function in both cases.
+  printf("-->task id is %d, graph id is %d\n", tdg_id, graph_id);
   if (res)
     entry(args);
 
-  __kmpc_end_record_task(loc_ref, gtid, input_flags, tdg_id);
+  __kmpc_end_record_task(loc_ref, gtid, input_flags, tdg_id, graph_id);
 }
 #endif

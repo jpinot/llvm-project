@@ -28,6 +28,7 @@
 #include "clang/Basic/SourceManager.h"
 #include "clang/CodeGen/ConstantInitBuilder.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Bitcode/BitcodeReader.h"
@@ -2130,6 +2131,14 @@ void CGOpenMPRuntime::emitTaskgraphCall(CodeGenFunction &CGF,
     }
   }
 
+  llvm::Value *GraphId = CGF.Builder.getInt32(0);
+  const OMPGraphIdClause *GraphIdClause = D.getSingleClause<OMPGraphIdClause>();
+  if (GraphIdClause) {
+    const auto *E = GraphIdClause->getCondition();
+    auto *GraphIdVal = CGF.EmitScalarExpr(E);
+    GraphId = CGF.Builder.CreateIntCast(GraphIdVal, CGM.Int32Ty, true);
+  }
+
   CodeGenFunction OutlinedCGF(CGM, true);
 
   const CapturedStmt *CS = cast<CapturedStmt>(D.getAssociatedStmt());
@@ -2151,7 +2160,8 @@ void CGOpenMPRuntime::emitTaskgraphCall(CodeGenFunction &CGF,
       CGF.Builder.getInt32(D.getBeginLoc().getHashValue()),
       CGF.Builder.CreatePointerBitCastOrAddrSpaceCast(FnT, CGM.VoidPtrTy),
       CGF.Builder.CreatePointerBitCastOrAddrSpaceCast(
-          CapStruct.getPointer(OutlinedCGF), CGM.VoidPtrTy)};
+          CapStruct.getPointer(OutlinedCGF), CGM.VoidPtrTy),
+      GraphId};
 
   CGF.EmitRuntimeCall(OMPBuilder.getOrCreateRuntimeFunction(
                           CGM.getModule(), OMPRTL___kmpc_taskgraph),

@@ -2681,6 +2681,7 @@ typedef enum kmp_tdg_status {
 /// Structure that contains a TDG
 typedef struct kmp_tdg_info {
   kmp_int32 tdg_id; // Unique idenfifier of the TDG
+  kmp_int32 graph_id; // Identifier from graph_id clause
   kmp_taskgraph_flags_t tdg_flags; // Flags related to a TDG
   kmp_int32 map_size; // Number of allocated TDG nodes
   kmp_int32 num_roots; // Number of roots tasks int the TDG
@@ -4435,12 +4436,15 @@ static inline bool __kmp_tdg_is_recording(kmp_tdg_status_t status) {
 
 KMP_EXPORT kmp_int32 __kmpc_start_record_task(ident_t *loc, kmp_int32 gtid,
                                               kmp_int32 input_flags,
-                                              kmp_int32 tdg_id);
+                                              kmp_int32 tdg_id,
+                                              kmp_int32 graph_id);
 KMP_EXPORT void __kmpc_end_record_task(ident_t *loc, kmp_int32 gtid,
-                                       kmp_int32 input_flags, kmp_int32 tdg_id);
+                                       kmp_int32 input_flags, kmp_int32 tdg_id,
+                                       kmp_int32 graph_id);
 KMP_EXPORT void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid,
                                  kmp_int32 input_flags, kmp_uint32 tdg_id,
-                                 void (*entry)(void *), void *args);
+                                 void (*entry)(void *), void *args,
+                                 kmp_uint32 graph_id);
 #endif
 /* Interface to fast scalable reduce methods routines */
 
