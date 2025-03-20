@@ -5673,7 +5673,7 @@ kmp_int32 __kmpc_start_record_task(ident_t *loc_ref, kmp_int32 gtid,
   }
 
   __kmpc_taskgroup(loc_ref, gtid);
-  if (flags->graph_reset) {
+  if (flags->re_record) {
     __kmp_free_tdg(tdg_id);
     __kmp_num_tdg--;
   }
