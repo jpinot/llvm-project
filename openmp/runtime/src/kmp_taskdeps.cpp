@@ -250,6 +250,7 @@ static inline void __kmp_track_dependence(kmp_int32 gtid, kmp_depnode_t *source,
         kmp_int32 *new_succ_ids = (kmp_int32 *)__kmp_allocate(
             source_info->successors_size * sizeof(kmp_int32));
         source_info->successors = new_succ_ids;
+        // XXX: double free
         __kmp_free(old_succ_ids);
       }
 
@@ -713,6 +714,7 @@ kmp_int32 __kmpc_omp_task_with_deps(ident_t *loc_ref, kmp_int32 gtid,
                    old_size * sizeof(kmp_node_info_t));
         tdg->record_map = new_record;
 
+        // XXX: double free
         __kmp_free(old_record);
 
         for (kmp_int i = old_size; i < new_size; i++) {
