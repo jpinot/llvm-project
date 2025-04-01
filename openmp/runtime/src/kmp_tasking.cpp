@@ -5780,7 +5780,7 @@ void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 input_flags,
       __kmpc_start_record_task(loc_ref, gtid, input_flags, tdg_id, graph_id);
   // When res = 1, we either start recording or only execute tasks
   // without recording. Need to execute entry function in both cases.
-  printf("-->task id is %d, graph id is %d\n", tdg_id, graph_id);
+  /* printf("-->task id is %d, graph id is %d\n", tdg_id, graph_id); */
   if (res)
     entry(args);
 
