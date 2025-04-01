@@ -2034,8 +2034,11 @@ kmp_int32 __kmp_omp_task(kmp_int32 gtid, kmp_task_t *new_task,
         KMP_MEMCPY(new_record, old_record, old_size * sizeof(kmp_node_info_t));
         tdg->record_map = new_record;
 
-        // XXX: double free
-        /* __kmp_free(old_record); */
+        if (!old_record) {
+          printf("--->TASKING: WHAT DA FUUU\n");
+        } else {
+          /* printf("--->TASKING: todo bien\n"); */
+        }
 
         for (kmp_int i = old_size; i < new_size; i++) {
           kmp_int32 *successorsList = (kmp_int32 *)__kmp_allocate(
@@ -2050,6 +2053,9 @@ kmp_int32 __kmp_omp_task(kmp_int32 gtid, kmp_task_t *new_task,
         // update the size at the end, so that we avoid other
         // threads use old_record while map_size is already updated
         tdg->map_size = new_size;
+
+        // XXX: double free
+        __kmp_free(old_record);
       }
       __kmp_release_bootstrap_lock(&tdg->graph_lock);
     }
