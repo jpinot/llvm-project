@@ -10,8 +10,8 @@ typedef struct ident ident_t;
 
 extern "C" {
 int __kmpc_global_thread_num(ident_t *);
-int __kmpc_start_record_task(ident_t *, int, int, int);
-void __kmpc_end_record_task(ident_t *, int, int, int);
+int __kmpc_start_record_task(ident_t *, int, int, int, int);
+void __kmpc_end_record_task(ident_t *, int, int, int, int);
 }
 
 void init(int &A, int val) { A = val; }
@@ -23,7 +23,7 @@ void test(int nb, std::vector<std::vector<int>> &Ah) {
 #pragma omp single
   {
     int gtid = __kmpc_global_thread_num(nullptr);
-    int res = __kmpc_start_record_task(nullptr, gtid, 0, 0);
+    int res = __kmpc_start_record_task(nullptr, gtid, 0, 0, 0);
     if (res) {
       for (int k = 0; k < nb; ++k) {
 #pragma omp task depend(inout : Ah[k][0])
@@ -35,7 +35,7 @@ void test(int nb, std::vector<std::vector<int>> &Ah) {
         }
       }
     }
-    __kmpc_end_record_task(nullptr, gtid, 0, 0);
+    __kmpc_end_record_task(nullptr, gtid, 0, 0, 0);
   }
 }
 

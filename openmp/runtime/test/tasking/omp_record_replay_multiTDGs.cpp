@@ -15,8 +15,8 @@ int val;
 #ifdef __cplusplus
 extern "C" {
   int __kmpc_global_thread_num(ident_t *);
-  int __kmpc_start_record_task(ident_t *, int, int, int);
-  void __kmpc_end_record_task(ident_t *, int, int , int);
+  int __kmpc_start_record_task(ident_t *, int, int, int, int);
+  void __kmpc_end_record_task(ident_t *, int, int, int, int);
 }
 #endif
 
@@ -43,7 +43,8 @@ int main() {
   #pragma omp single
   for (int iter = 0; iter < NT; ++iter) {
     int gtid = __kmpc_global_thread_num(nullptr);
-    int res =  __kmpc_start_record_task(nullptr, gtid, /* kmp_tdg_flags */ 0, /* tdg_id */0);
+    int res = __kmpc_start_record_task(nullptr, gtid, /* kmp_tdg_flags */ 0,
+                                       /* tdg_id */ 0, /* graph_id */ 0);
     if (res) {
       num_tasks++;
       #pragma omp task depend(out:y)
@@ -53,8 +54,10 @@ int main() {
       #pragma omp task depend(in:x,y)
       mult();
     }
-    __kmpc_end_record_task(nullptr, gtid, /* kmp_tdg_flags */0, /* tdg_id */0);
-    res =  __kmpc_start_record_task(nullptr, gtid, /* kmp_tdg_flags */ 0, /* tdg_id */1);
+    __kmpc_end_record_task(nullptr, gtid, /* kmp_tdg_flags */ 0, /* tdg_id */ 0,
+                           /* graph_id */ 0);
+    res = __kmpc_start_record_task(nullptr, gtid, /* kmp_tdg_flags */ 0,
+                                   /* tdg_id */ 1, /* graph_id */ 0);
     if (res) {
       num_tasks++;
       #pragma omp task depend(out:y)
@@ -64,7 +67,8 @@ int main() {
       #pragma omp task depend(in:x,y)
       mult();
     }
-    __kmpc_end_record_task(nullptr, gtid, /* kmp_tdg_flags */0, /* tdg_id */1);
+    __kmpc_end_record_task(nullptr, gtid, /* kmp_tdg_flags */ 0, /* tdg_id */ 1,
+                           /* graph_id */ 0);
   }
 
   assert(num_tasks==2);
