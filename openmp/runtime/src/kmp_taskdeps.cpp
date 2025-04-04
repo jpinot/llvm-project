@@ -242,6 +242,8 @@ static inline void __kmp_track_dependence(kmp_int32 gtid, kmp_depnode_t *source,
       }
     }
     if (!exists) {
+      /* __kmp_acquire_bootstrap_lock(&task_sink->tdg->graph_lock); */
+      /* source_info = &task_sink->tdg->record_map[task_source->td_tdg_task_id]; */
       if (source_info->nsuccessors >= source_info->successors_size) {
         kmp_uint old_size = source_info->successors_size;
         source_info->successors_size = 2 * source_info->successors_size;
@@ -260,6 +262,7 @@ static inline void __kmp_track_dependence(kmp_int32 gtid, kmp_depnode_t *source,
       kmp_node_info_t *sink_info =
           &(task_sink->tdg->record_map[task_sink->td_tdg_task_id]);
       sink_info->npredecessors++;
+      /* __kmp_release_bootstrap_lock(&task_sink->tdg->graph_lock); */
     }
   }
 #endif
