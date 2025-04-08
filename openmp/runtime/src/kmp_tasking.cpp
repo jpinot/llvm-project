@@ -5780,4 +5780,12 @@ void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 input_flags,
 
   __kmpc_end_record_task(loc_ref, gtid, input_flags, tdg_id, graph_id);
 }
+
+void __kmpc_taskgraph_recapture(uint64_t original_var, void *task_private_addr,
+                                size_t varSize) {
+  printf("private addr is %p (value %lx), original value is %lx\n",
+         task_private_addr, *(long *)task_private_addr, original_var);
+  static void *var = nullptr;
+  var = task_private_addr;
+}
 #endif
