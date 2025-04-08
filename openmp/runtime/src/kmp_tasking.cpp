@@ -21,6 +21,8 @@
 #include "ompt-specific.h"
 #endif
 
+static void *var = nullptr;
+
 #if ENABLE_LIBOMPTARGET
 static void (*tgt_target_nowait_query)(void **);
 
@@ -5604,6 +5606,16 @@ void __kmp_exec_tdg(kmp_int32 gtid, kmp_tdg_info_t *tdg) {
   }
 
   for (kmp_int32 j = 0; j < this_num_roots; ++j) {
+    kmp_task_t *task = this_record_map[this_root_tasks[j]].task;
+    typedef struct {
+      kmp_task_t task;
+      long x;
+    } my_task_t;
+    my_task_t *t = (my_task_t *)task;
+    long *fp = &t->x;
+    *fp = *(long *)var;
+    printf("[Task Debug]: %lx --- Need to be: %lx\n", t->x, *(long *)var);
+
     __kmp_omp_task(gtid, this_record_map[this_root_tasks[j]].task, true);
   }
   KA_TRACE(10, ("__kmp_exec_tdg(exit): T#%d tdg_id=%d num_roots=%d\n", gtid,
@@ -5785,7 +5797,6 @@ void __kmpc_taskgraph_recapture(uint64_t original_var, void *task_private_addr,
                                 size_t varSize) {
   printf("private addr is %p (value %lx), original value is %lx\n",
          task_private_addr, *(long *)task_private_addr, original_var);
-  static void *var = nullptr;
   var = task_private_addr;
 }
 #endif
