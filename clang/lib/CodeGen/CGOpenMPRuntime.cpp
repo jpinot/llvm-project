@@ -2144,6 +2144,35 @@ void CGOpenMPRuntime::emitTaskgraphCall(CodeGenFunction &CGF,
   auto &&BodyGen = [CS](CodeGenFunction &CGF, PrePostActionTy &) {
     CGF.EmitStmt(CS->getCapturedStmt());
   };
+  for (const auto &CI : CS->captures()) {
+    if (CI.capturesVariable()) {
+      const VarDecl *VD = CI.getCapturedVar();
+      llvm::errs() << "Var: " << VD->getNameAsString() << "\n";
+
+      // Get address
+      uint64_t OriginalVar = (uint64_t)((void *)VD);
+      Address Addr = CGF.GetAddrOfLocalVar(VD);
+      llvm::errs() << "Address: " << Addr.getBasePointer() << "\n";
+
+      // Get size
+      QualType QT = VD->getType();
+      CharUnits Size = CGF.getContext().getTypeSizeInChars(QT);
+      llvm::errs() << "Size: " << Size.getQuantity() << " bytes\n";
+      llvm::Value *SizeVal = CGF.getTypeSize(QT);
+
+      // Get LValue
+      LValue LV = CGF.MakeAddrLValue(Addr, VD->getType());
+
+      llvm::SmallVector<llvm::Value *> Args{CGF.Builder.getInt64(OriginalVar),
+                                            LV.getAddress().getBasePointer(),
+                                            SizeVal};
+      auto &OMPBuilder = CGF.CGM.getOpenMPRuntime().getOMPBuilder();
+      CGF.EmitRuntimeCall(
+          OMPBuilder.getOrCreateRuntimeFunction(
+              CGF.CGM.getModule(), OMPRTL___kmpc_taskgraph_recapture),
+          Args);
+    }
+  }
 
   LValue CapStruct = CGF.InitCapturedStruct(*CS);
   CGOpenMPTaskgraphRegionInfo TaskgraphRegion(*CS, BodyGen);
