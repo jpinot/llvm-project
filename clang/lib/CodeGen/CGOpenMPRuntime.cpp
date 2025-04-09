@@ -3370,6 +3370,11 @@ static void emitPrivatesInit(CodeGenFunction &CGF,
             CGF.ConvertTypeForMem(SharedsTy)),
         SharedsTy);
   }
+  bool InTaskgraph = false;
+  auto *CSInfo = dyn_cast_or_null<CGOpenMPRegionInfo>(CGF.CapturedStmtInfo);
+  if (CGOpenMPTaskgraphRegionInfo::classof(CSInfo)) {
+    InTaskgraph = true;
+  }
   FI = cast<RecordDecl>(FI->getType()->getAsTagDecl())->field_begin();
   for (const PrivateDataTy &Pair : Privates) {
     // Do not initialize private locals.
@@ -3384,6 +3389,21 @@ static void emitPrivatesInit(CodeGenFunction &CGF,
       LValue PrivateLValue = CGF.EmitLValueForField(PrivatesBase, *FI);
       if (const VarDecl *Elem = Pair.second.PrivateElemInit) {
         const VarDecl *OriginalVD = Pair.second.Original;
+        if (InTaskgraph) {
+          uint64_t OriginalVar = (uint64_t)((void *)OriginalVD);
+          llvm::Value *SizeVal = CGF.getTypeSize(Init->getType());
+
+          llvm::SmallVector<llvm::Value *> Args{
+              CGF.Builder.getInt64(OriginalVar),
+              PrivateLValue.getAddress()
+                  .getBasePointer(), // XXX: is getBasePointer == getPointer?
+              SizeVal};
+          auto &OMPBuilder = CGF.CGM.getOpenMPRuntime().getOMPBuilder();
+          CGF.EmitRuntimeCall(
+              OMPBuilder.getOrCreateRuntimeFunction(
+                  CGF.CGM.getModule(), OMPRTL___kmpc_taskgraph_private),
+              Args);
+        }
         // Check if the variable is the target-based BasePointersArray,
         // PointersArray, SizesArray, or MappersArray.
         LValue SharedRefLValue;
