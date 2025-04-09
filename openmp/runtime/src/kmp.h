@@ -4399,6 +4399,9 @@ KMP_EXPORT void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid,
 KMP_EXPORT void __kmpc_taskgraph_recapture(uint64_t original_var,
                                            void *task_private_addr,
                                            size_t varSize);
+KMP_EXPORT void __kmpc_taskgraph_private(uint64_t original_var,
+                                           void *task_private_addr,
+                                           size_t varSize);
 #endif
 /* Interface to fast scalable reduce methods routines */
 

@@ -21,8 +21,6 @@
 #include "ompt-specific.h"
 #endif
 
-static void *var = nullptr;
-
 #if ENABLE_LIBOMPTARGET
 static void (*tgt_target_nowait_query)(void **);
 
@@ -5783,10 +5781,35 @@ void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 input_flags,
   __kmpc_end_record_task(loc_ref, gtid, input_flags, tdg_id, graph_id);
 }
 
+typedef struct recapture {
+  uint64_t original;
+  void *ptr;
+  size_t size;
+} recapture_t;
+
+const int max_recaptures = 10;
+int curr_recaputre = 0;
+recapture_t recaputres[max_recaptures];
+
+
+void __kmpc_taskgraph_private(uint64_t original_var, void *task_private_addr,
+                                size_t varSize) {
+  printf("PRIVATE addr is %p (value %lx), original value is %lx\n",
+         task_private_addr, *(long *)task_private_addr, original_var);
+  recaputres[curr_recaputre++] = { original_var, task_private_addr, varSize };
+}
+
 void __kmpc_taskgraph_recapture(uint64_t original_var, void *task_private_addr,
                                 size_t varSize) {
-  printf("private addr is %p (value %lx), original value is %lx\n",
+  printf("RECAPTURE addr is %p (value %lx), original value is %lx\n",
          task_private_addr, *(long *)task_private_addr, original_var);
-  var = task_private_addr;
+
+  for (auto i = 0; i < max_recaptures; i++) {
+    auto curr = recaputres[i];
+    if (curr.original == original_var) {
+      KMP_ASSERT(curr.size == varSize);
+      memcpy(curr.ptr, task_private_addr, varSize);
+    }
+  }
 }
 #endif
