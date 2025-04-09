@@ -356,6 +356,7 @@ __OMP_RTL(__kmpc_end_taskgroup, false, Void, IdentPtr, Int32)
 __OMP_RTL(__kmpc_taskgroup, false, Void, IdentPtr, Int32)
 __OMP_RTL(__kmpc_taskgraph, false, Void, IdentPtr, Int32, Int32, Int32, VoidPtr, VoidPtr, Int32)
 __OMP_RTL(__kmpc_taskgraph_recapture, false, Void, Int64, VoidPtr, SizeTy)
+__OMP_RTL(__kmpc_taskgraph_private, false, Void, Int64, VoidPtr, SizeTy)
 __OMP_RTL(__kmpc_omp_task_begin_if0, false, Void, IdentPtr, Int32,
           /* kmp_task_t */ VoidPtr)
 __OMP_RTL(__kmpc_omp_task_complete_if0, false, Void, IdentPtr, Int32,
