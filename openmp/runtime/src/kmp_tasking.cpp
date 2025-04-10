@@ -5605,17 +5605,7 @@ void __kmp_exec_tdg(kmp_int32 gtid, kmp_tdg_info_t *tdg) {
       KMP_ATOMIC_INC(&this_record_map[j].parent_task->td_allocated_child_tasks);
   }
 
-  for (kmp_int32 j = 0; j < this_num_roots; ++j) {
-    kmp_task_t *task = this_record_map[this_root_tasks[j]].task;
-    typedef struct {
-      kmp_task_t task;
-      long x;
-    } my_task_t;
-    my_task_t *t = (my_task_t *)task;
-    long *fp = &t->x;
-    *fp = *(long *)var;
-    printf("[Task Debug]: %lx --- Need to be: %lx\n", t->x, *(long *)var);
-
+  for (kmp_int32 j = 0; j < this_num_roots; j++) {
     __kmp_omp_task(gtid, this_record_map[this_root_tasks[j]].task, true);
   }
   KA_TRACE(10, ("__kmp_exec_tdg(exit): T#%d tdg_id=%d num_roots=%d\n", gtid,
