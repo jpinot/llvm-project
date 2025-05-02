@@ -1900,7 +1900,7 @@ __kmp_invoke_task(kmp_int32 gtid, kmp_task_t *task,
       } else
 #endif /* KMP_GOMP_COMPAT */
       {
-        /* (*(task->routine))(gtid, task); */
+        (*(task->routine))(gtid, task);
       }
     }
     KMP_POP_PARTITIONED_TIMER();
