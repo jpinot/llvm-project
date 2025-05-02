@@ -16,6 +16,7 @@
 #include "kmp_stats.h"
 #include "kmp_wait_release.h"
 #include "kmp_taskdeps.h"
+#include <sys/time.h>
 
 #if OMPT_SUPPORT
 #include "ompt-specific.h"
@@ -1900,7 +1901,16 @@ __kmp_invoke_task(kmp_int32 gtid, kmp_task_t *task,
       } else
 #endif /* KMP_GOMP_COMPAT */
       {
+        struct timeval rss;
+        gettimeofday(&rss, 0);
+
         (*(task->routine))(gtid, task);
+
+        struct timeval rse;
+        gettimeofday(&rse, 0);
+        double wtime = (rse.tv_sec - rss.tv_sec)*1000.
+          + (rse.tv_usec - rss.tv_usec)/1000.;
+        exe_time[exe_time_size++] = wtime;
       }
     }
     KMP_POP_PARTITIONED_TIMER();
@@ -5773,6 +5783,8 @@ void __kmpc_end_record_task(ident_t *loc_ref, kmp_int32 gtid,
 void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 input_flags,
                       kmp_uint32 tdg_id, void (*entry)(void *), void *args,
                       kmp_uint32 graph_id) {
+  struct timeval rss;
+  gettimeofday(&rss, 0);
   kmp_int32 res =
       __kmpc_start_record_task(loc_ref, gtid, input_flags, tdg_id, graph_id);
   // When res = 1, we either start recording or only execute tasks
@@ -5782,5 +5794,15 @@ void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 input_flags,
     entry(args);
 
   __kmpc_end_record_task(loc_ref, gtid, input_flags, tdg_id, graph_id);
+  struct timeval rse;
+  gettimeofday(&rse, 0);
+  double wtime = (rse.tv_sec - rss.tv_sec)*1000. + (rse.tv_usec - rss.tv_usec)/1000.;
+  long sum = 0;
+  for (int i = 0; i < exe_time_size; i++) {
+    sum += exe_time[i];
+  }
+  printf("Avrg execution of %d task: %f\n", exe_time_size, (double)(sum / exe_time_size));
+  printf("Total taskgrpah: %f\n", wtime);
+  exe_time_size = 0;
 }
 #endif
