@@ -2700,7 +2700,7 @@ typedef struct kmp_tdg_info {
 extern int __kmp_tdg_dot;
 extern kmp_int32 __kmp_max_tdgs;
 extern double *exe_time;
-extern int exe_time_size;
+extern std::atomic<kmp_int32> exe_time_size;
 extern kmp_tdg_info_t **__kmp_global_tdgs;
 extern kmp_tdg_info_t *__kmp_curr_tdg;
 extern kmp_int32 __kmp_successors_size;

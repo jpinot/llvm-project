@@ -41,6 +41,12 @@ static void __kmp_bottom_half_finish_proxy(kmp_int32 gtid, kmp_task_t *ptask);
 #if OMPX_TASKGRAPH
 static kmp_tdg_info_t *__kmp_find_tdg(kmp_int32 tdg_id, kmp_int32 graph_id);
 int __kmp_taskloop_task(int gtid, void *ptask);
+
+double get_time_ms() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1000000.0;
+}
 #endif
 
 #ifdef BUILD_TIED_TASK_STACK
@@ -1901,16 +1907,12 @@ __kmp_invoke_task(kmp_int32 gtid, kmp_task_t *task,
       } else
 #endif /* KMP_GOMP_COMPAT */
       {
-        struct timeval rss;
-        gettimeofday(&rss, 0);
+        auto ts = get_time_ms();
 
         (*(task->routine))(gtid, task);
 
-        struct timeval rse;
-        gettimeofday(&rse, 0);
-        double wtime = (rse.tv_sec - rss.tv_sec)*1000.
-          + (rse.tv_usec - rss.tv_usec)/1000.;
-        exe_time[exe_time_size++] = wtime;
+        auto te = get_time_ms();
+        exe_time[exe_time_size++] = te - ts;
       }
     }
     KMP_POP_PARTITIONED_TIMER();
@@ -5783,8 +5785,7 @@ void __kmpc_end_record_task(ident_t *loc_ref, kmp_int32 gtid,
 void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 input_flags,
                       kmp_uint32 tdg_id, void (*entry)(void *), void *args,
                       kmp_uint32 graph_id) {
-  struct timeval rss;
-  gettimeofday(&rss, 0);
+  auto ts = get_time_ms();
   kmp_int32 res =
       __kmpc_start_record_task(loc_ref, gtid, input_flags, tdg_id, graph_id);
   // When res = 1, we either start recording or only execute tasks
@@ -5794,15 +5795,14 @@ void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 input_flags,
     entry(args);
 
   __kmpc_end_record_task(loc_ref, gtid, input_flags, tdg_id, graph_id);
-  struct timeval rse;
-  gettimeofday(&rse, 0);
-  double wtime = (rse.tv_sec - rss.tv_sec)*1000. + (rse.tv_usec - rss.tv_usec)/1000.;
+  auto te = get_time_ms();
   long sum = 0;
-  for (int i = 0; i < exe_time_size; i++) {
+  auto size = exe_time_size.exchange(0);
+  exe_time_size = 0;
+  for (int i = 0; i < size; i++) {
     sum += exe_time[i];
   }
-  printf("Avrg execution of %d task: %f\n", exe_time_size, (double)(sum / exe_time_size));
-  printf("Total taskgrpah: %f\n", wtime);
-  exe_time_size = 0;
+  printf("Avrg execution of %d task: %f\n", size, (double)(sum / size));
+  printf("Total taskgrpah: %f\n", te - ts);
 }
 #endif
