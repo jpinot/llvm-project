@@ -5796,13 +5796,13 @@ void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 input_flags,
 
   __kmpc_end_record_task(loc_ref, gtid, input_flags, tdg_id, graph_id);
   auto te = get_time_ms();
-  long sum = 0;
+  double sum = 0;
   auto size = exe_time_size.exchange(0);
   exe_time_size = 0;
   for (int i = 0; i < size; i++) {
     sum += exe_time[i];
   }
-  printf("Avrg execution of %d task: %f\n", size, (double)(sum / size));
-  printf("Total taskgrpah: %f\n", te - ts);
+  printf("Avrg execution of %d task: %fms (%fms)\n", size, (double)(sum / size), sum);
+  printf("Total taskgrpah: %fms\n", te - ts);
 }
 #endif
