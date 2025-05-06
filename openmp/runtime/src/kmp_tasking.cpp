@@ -17,6 +17,8 @@
 #include "kmp_wait_release.h"
 #include "kmp_taskdeps.h"
 #include <sys/time.h>
+#include <algorithm>
+#include <cfloat>
 
 #if OMPT_SUPPORT
 #include "ompt-specific.h"
@@ -5786,6 +5788,7 @@ void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 input_flags,
                       kmp_uint32 tdg_id, void (*entry)(void *), void *args,
                       kmp_uint32 graph_id) {
   auto ts = get_time_ms();
+  exe_time_size.store(0);
   kmp_int32 res =
       __kmpc_start_record_task(loc_ref, gtid, input_flags, tdg_id, graph_id);
   // When res = 1, we either start recording or only execute tasks
@@ -5797,12 +5800,16 @@ void __kmpc_taskgraph(ident_t *loc_ref, kmp_int32 gtid, kmp_int32 input_flags,
   __kmpc_end_record_task(loc_ref, gtid, input_flags, tdg_id, graph_id);
   auto te = get_time_ms();
   double sum = 0;
+  double worse = 0;
+  double best = DBL_MAX;
   auto size = exe_time_size.exchange(0);
   exe_time_size = 0;
   for (int i = 0; i < size; i++) {
     sum += exe_time[i];
+    worse = std::max(worse, exe_time[i]);
+    best = std::min(best, exe_time[i]);
   }
-  printf("Avrg execution of %d task: %fms (%fms)\n", size, (double)(sum / size), sum);
+  printf("%d tasks -> Avrg %fms | Worse: %fms | Best: %fms | Total: %fms\n", size, (double)(sum / size), worse, best, sum);
   printf("Total taskgrpah: %fms\n", te - ts);
 }
 #endif
