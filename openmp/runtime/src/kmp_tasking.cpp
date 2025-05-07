@@ -2332,6 +2332,17 @@ static kmp_int32 __kmpc_omp_taskwait_template(ident_t *loc_ref, kmp_int32 gtid,
                 "returning TASK_CURRENT_NOT_QUEUED\n",
                 gtid, taskdata));
 
+  double sum = 0;
+  double worse = 0;
+  double best = DBL_MAX;
+  auto size = exe_time_size.exchange(0);
+  exe_time_size = 0;
+  for (int i = 0; i < size; i++) {
+    sum += exe_time[i];
+    worse = std::max(worse, exe_time[i]);
+    best = std::min(best, exe_time[i]);
+  }
+  printf("%d tasks -> Avrg %fms | Worse: %fms | Best: %fms | Total: %fms\n", size, (double)(sum / size), worse, best, sum);
   return TASK_CURRENT_NOT_QUEUED;
 }
 
