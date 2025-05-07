@@ -563,7 +563,7 @@ kmp_int32 __kmp_num_tdg = 0;
 kmp_int32 __kmp_successors_size = 10; // Initial succesor size list for
                                       // recording
 std::atomic<kmp_int32> __kmp_tdg_task_id = 0;
-double *exe_time = (double *)malloc(500000 * sizeof(double));
+double *exe_time = (double *)malloc(5000000 * sizeof(double));
 std::atomic<kmp_int32> exe_time_size = 0;
 #endif
 // end of file //
