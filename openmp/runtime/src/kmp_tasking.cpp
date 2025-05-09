@@ -482,6 +482,9 @@ static kmp_int32 __kmp_push_priority_task(kmp_int32 gtid, kmp_info_t *thread,
   return TASK_SUCCESSFULLY_PUSHED;
 }
 
+static bool __kmp_give_task(kmp_info_t *thread, kmp_int32 tid, kmp_task_t *task,
+                            kmp_int32 pass);
+
 //  __kmp_push_task: Add a task to the thread's deque
 static kmp_int32 __kmp_push_task(kmp_int32 gtid, kmp_task_t *task) {
   kmp_info_t *thread = __kmp_threads[gtid];
@@ -502,6 +505,28 @@ static kmp_int32 __kmp_push_task(kmp_int32 gtid, kmp_task_t *task) {
   kmp_task_team_t *task_team = thread->th.th_task_team;
   kmp_int32 tid = __kmp_tid_from_gtid(gtid);
   kmp_thread_data_t *thread_data;
+  // XXX
+  if (taskdata->is_taskgraph && !__kmp_tdg_is_recording(taskdata->tdg->tdg_status)) {
+  kmp_int32 nthreads = task_team->tt.tt_nproc;
+
+  // TODO: Do it just in init task!!!!!
+  // XXX: who init __kmp_threads?? it seems it is more empty than it should???
+  for (kmp_int32 id = 0; id < nthreads; id++) {
+    /* if (!__kmp_threads[tid] || id == gtid) { */
+    /*   printf("it si null\n"); */
+    /*   continue; */
+    /* } */
+    if (__kmp_threads[id] && id != gtid) {
+      kmp_int32 tid = __kmp_tid_from_gtid(id);
+      // XXX: maybe replace with kmpc_give_task
+      if (__kmp_give_task(__kmp_threads[tid], id, task, 1000)) {
+        /* printf("orig_gtid %d: give task %d to id %d\n", gtid, taskdata->td_tdg_task_id, id); */
+        return TASK_SUCCESSFULLY_PUSHED;
+      }
+    }
+  }
+  }
+  // XXX
 
   KA_TRACE(20,
            ("__kmp_push_task: T#%d trying to push task %p.\n", gtid, taskdata));
