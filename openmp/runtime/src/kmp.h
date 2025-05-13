@@ -2680,10 +2680,15 @@ typedef enum kmp_tdg_status {
 typedef struct kmp_tdg_info {
   kmp_int32 tdg_id; // Unique idenfifier of the TDG
   kmp_taskgraph_flags_t tdg_flags; // Flags related to a TDG
+  // XXX: this should be atomic
   kmp_int32 map_size; // Number of allocated TDG nodes
+  // XXX: set on end_task, should be good
   kmp_int32 num_roots; // Number of roots tasks int the TDG
+  // XXX: set on end_task, should be good
   kmp_int32 *root_tasks; // Array of tasks identifiers that are roots
+  // XXX: write is protectd, not read
   kmp_node_info_t *record_map; // Array of TDG nodes
+  // XXX: this should be atomic, it is used as a atomic flag to check if TDG is ready
   kmp_tdg_status_t tdg_status =
       KMP_TDG_NONE; // Status of the TDG (recording, ready...)
   std::atomic<kmp_int32> num_tasks; // Number of TDG nodes

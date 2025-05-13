@@ -5456,6 +5456,7 @@ static kmp_tdg_info_t *__kmp_find_tdg(kmp_int32 tdg_id) {
   if (__kmp_max_tdgs == 0)
     return res;
 
+  // TODO: this need to be sync
   if (__kmp_global_tdgs == NULL)
     __kmp_global_tdgs = (kmp_tdg_info_t **)__kmp_allocate(
         sizeof(kmp_tdg_info_t *) * __kmp_max_tdgs);
