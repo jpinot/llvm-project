@@ -474,6 +474,9 @@ static kmp_int32 __kmp_push_priority_task(kmp_int32 gtid, kmp_info_t *thread,
 }
 
 //  __kmp_push_task: Add a task to the thread's deque
+static bool __kmp_give_task(kmp_info_t * th, kmp_int32 tid, kmp_task_t *t, kmp_int32 pass);
+
+
 static kmp_int32 __kmp_push_task(kmp_int32 gtid, kmp_task_t *task) {
   kmp_info_t *thread = __kmp_threads[gtid];
   kmp_taskdata_t *taskdata = KMP_TASK_TO_TASKDATA(task);
@@ -4339,6 +4342,7 @@ void __kmp_tasking_barrier(kmp_team_t *team, kmp_info_t *thread, int gtid) {
 // getting the lock
 static bool __kmp_give_task(kmp_info_t *thread, kmp_int32 tid, kmp_task_t *task,
                             kmp_int32 pass) {
+  KMP_DEBUG_ASSERT(thread != NULL);
   kmp_taskdata_t *taskdata = KMP_TASK_TO_TASKDATA(task);
   kmp_task_team_t *task_team = taskdata->td_task_team;
 
@@ -4351,13 +4355,26 @@ static bool __kmp_give_task(kmp_info_t *thread, kmp_int32 tid, kmp_task_t *task,
   bool result = false;
   kmp_thread_data_t *thread_data = &task_team->tt.tt_threads_data[tid];
 
+  // XXX: queue is almost always empty
   if (thread_data->td.td_deque == NULL) {
-    // There's no queue in this thread, go find another one
-    // We're guaranteed that at least one thread has a queue
-    KA_TRACE(30,
-             ("__kmp_give_task: thread %d has no queue while giving task %p.\n",
-              tid, taskdata));
-    return result;
+#if OMPX_TASKGRAPH
+    if (taskdata->is_taskgraph && taskdata->tdg->tdg_status == KMP_TDG_READY) {
+      __kmp_acquire_bootstrap_lock(&thread_data->td.td_deque_lock);
+      thread_data->td.td_deque = (kmp_taskdata_t **)__kmp_allocate(
+          INITIAL_TASK_DEQUE_SIZE * sizeof(kmp_taskdata_t *));
+      thread_data->td.td_deque_size = INITIAL_TASK_DEQUE_SIZE;
+      __kmp_release_bootstrap_lock(&thread_data->td.td_deque_lock);
+    } else {
+#endif
+      // There's no queue in this thread, go find another one
+      // We're guaranteed that at least one thread has a queue
+      KA_TRACE(30,
+          ("__kmp_give_task: thread %d has no queue while giving task %p.\n",
+           tid, taskdata));
+      return result;
+#if OMPX_TASKGRAPH
+    }
+#endif
   }
 
   if (TCR_4(thread_data->td.td_deque_ntasks) >=
@@ -5575,9 +5592,40 @@ void __kmp_exec_tdg(kmp_int32 gtid, kmp_tdg_info_t *tdg) {
     if (this_record_map[j].parent_task->td_flags.tasktype == TASK_EXPLICIT)
       KMP_ATOMIC_INC(&this_record_map[j].parent_task->td_allocated_child_tasks);
   }
+  // XXX: task distribution
+  if (1) {
+    /* kmp_taskdata_t *taskdata = KMP_TASK_TO_TASKDATA(&this_record_map[0]); */
+    /* kmp_taskdata_t *taskdata = KMP_TASK_TO_TASKDATA(&this_record_map[this_root_tasks[0]]); */
+    kmp_task_team_t  *task_team = thread->th.th_task_team;
+    kmp_int32 nthreads = task_team->tt.tt_max_threads;
+    /* kmp_int32 task_per_thread = this_num_roots / nthreads; */
 
-  for (kmp_int32 j = 0; j < this_num_roots; ++j) {
-    __kmp_omp_task(gtid, this_record_map[this_root_tasks[j]].task, true);
+    kmp_int32 dst_tid = (__kmp_tid_from_gtid(gtid) + 1) % nthreads;
+    for (kmp_int32 i = 0; i < this_num_roots; ++i) {
+      kmp_thread_data *thread_data = &task_team->tt.tt_threads_data[dst_tid];
+      if (thread_data == NULL) {
+        __kmp_enable_tasking(task_team, __kmp_threads[dst_tid]);
+        thread_data = &task_team->tt.tt_threads_data[dst_tid];
+      }
+      kmp_info_t *thread = thread_data->td.td_thr;
+      if (__kmp_give_task(thread, dst_tid, this_record_map[this_root_tasks[i]].task, 1000)) {
+        /* kmp_taskdata_t *taskdata = KMP_TASK_TO_TASKDATA(this_record_map[this_root_tasks[i]].task); */
+        /* printf("Thread %d give task %d to %d\n", __kmp_tid_from_gtid(gtid), */
+        /*     taskdata->td_tdg_task_id, dst_tid); */
+        if (thread->th.th_sleep_loc != NULL) {
+          __kmp_null_resume_wrapper(thread);
+        }
+      }
+      else {
+        KMP_ASSERT(false);
+      }
+      dst_tid = (dst_tid  + 1) % nthreads;
+    }
+  }
+  else {
+    for (kmp_int32 j = 0; j < this_num_roots; ++j) {
+      __kmp_omp_task(gtid, this_record_map[this_root_tasks[j]].task, true);
+    }
   }
   KA_TRACE(10, ("__kmp_exec_tdg(exit): T#%d tdg_id=%d num_roots=%d\n", gtid,
                 tdg->tdg_id, tdg->num_roots));
