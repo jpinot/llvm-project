@@ -497,29 +497,24 @@ static kmp_int32 __kmp_push_task(kmp_int32 gtid, kmp_task_t *task) {
   kmp_int32 tid = __kmp_tid_from_gtid(gtid);
   kmp_thread_data_t *thread_data;
 
-  // XXX
+#if OMPX_TASKGRAPH
   if (taskdata->is_taskgraph &&
       !__kmp_tdg_is_recording(taskdata->tdg->tdg_status)) {
-    kmp_int32 nthreads = task_team->tt.tt_nproc;
     kmp_int32 id = taskdata->td_tdg_th_gtid;
-    if (id > -1 && __kmp_threads[id] && id != gtid) {
+    if (id > -1 && id != gtid && __kmp_threads[id]) {
       kmp_int32 target_tid = __kmp_tid_from_gtid(id);
       kmp_info_t *thread = __kmp_threads[id];
+      KA_TRACE(20, ("__kmp_push_task: T#%d trying to give task %p to T#%d.\n",
+                    gtid, taskdata, id));
       if (__kmp_give_task(thread, target_tid, task, 1000)) {
         if (thread->th.th_sleep_loc != NULL) {
           __kmp_null_resume_wrapper(thread);
         }
-        /* printf("orig_gtid %d: give task %d to id %d\n", gtid,
-         * taskdata->td_tdg_task_id, id); */
         return TASK_SUCCESSFULLY_PUSHED;
-      } else {
-        printf("FAILED to give task\n");
-        KMP_ASSERT(0);
       }
     }
-    /* } */
   }
-  // XXX
+#endif
 
   KA_TRACE(20,
            ("__kmp_push_task: T#%d trying to push task %p.\n", gtid, taskdata));
@@ -4368,6 +4363,7 @@ void __kmp_tasking_barrier(kmp_team_t *team, kmp_info_t *thread, int gtid) {
 // getting the lock
 static bool __kmp_give_task(kmp_info_t *thread, kmp_int32 tid, kmp_task_t *task,
                             kmp_int32 pass) {
+  KMP_DEBUG_ASSERT(thread != NULL);
   kmp_taskdata_t *taskdata = KMP_TASK_TO_TASKDATA(task);
   kmp_task_team_t *task_team = taskdata->td_task_team;
 
@@ -4382,14 +4378,14 @@ static bool __kmp_give_task(kmp_info_t *thread, kmp_int32 tid, kmp_task_t *task,
 
   // XXX: queue is almost always empty
   if (thread_data->td.td_deque == NULL) {
+#if OMPX_TASKGRAPH
     if (taskdata->is_taskgraph && taskdata->tdg->tdg_status == KMP_TDG_READY) {
       // XXX: need guard
-      /* thread_data->td.td_deque = (kmp_taskdata_t **)__kmp_allocate( */
-      /*     INITIAL_TASK_DEQUE_SIZE * sizeof(kmp_taskdata_t *)); */
       thread_data->td.td_deque = (kmp_taskdata_t **)__kmp_allocate(
           INITIAL_TASK_DEQUE_SIZE * sizeof(kmp_taskdata_t *));
       thread_data->td.td_deque_size = INITIAL_TASK_DEQUE_SIZE;
     } else {
+#endif
       // There's no queue in this thread, go find another one
       // We're guaranteed that at least one thread has a queue
       KA_TRACE(
@@ -4397,7 +4393,9 @@ static bool __kmp_give_task(kmp_info_t *thread, kmp_int32 tid, kmp_task_t *task,
           ("__kmp_give_task: thread %d has no queue while giving task %p.\n",
            tid, taskdata));
       return result;
+#if OMPX_TASKGRAPH
     }
+#endif
   }
 
   if (TCR_4(thread_data->td.td_deque_ntasks) >=
