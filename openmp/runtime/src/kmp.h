@@ -2836,6 +2836,7 @@ struct kmp_taskdata { /* aligned during dynamic allocation       */
   ompt_task_info_t ompt_task_info;
 #endif
 #if OMPX_TASKGRAPH
+  std::atomic<kmp_int32> td_tdg_th_gtid;
   bool is_taskgraph = 0; // whether the task is within a TDG
   kmp_tdg_info_t *tdg; // used to associate task with a TDG
   kmp_int32 td_tdg_task_id; // local task id in its TDG
