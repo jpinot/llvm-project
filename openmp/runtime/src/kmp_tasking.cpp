@@ -4380,10 +4380,11 @@ static bool __kmp_give_task(kmp_info_t *thread, kmp_int32 tid, kmp_task_t *task,
   if (thread_data->td.td_deque == NULL) {
 #if OMPX_TASKGRAPH
     if (taskdata->is_taskgraph && taskdata->tdg->tdg_status == KMP_TDG_READY) {
-      // XXX: need guard
+      __kmp_acquire_bootstrap_lock(&thread_data->td.td_deque_lock);
       thread_data->td.td_deque = (kmp_taskdata_t **)__kmp_allocate(
           INITIAL_TASK_DEQUE_SIZE * sizeof(kmp_taskdata_t *));
       thread_data->td.td_deque_size = INITIAL_TASK_DEQUE_SIZE;
+      __kmp_release_bootstrap_lock(&thread_data->td.td_deque_lock);
     } else {
 #endif
       // There's no queue in this thread, go find another one
