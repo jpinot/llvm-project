@@ -242,8 +242,10 @@ static inline void __kmp_track_dependence(kmp_int32 gtid, kmp_depnode_t *source,
       }
     }
     if (!exists) {
-      /* __kmp_acquire_bootstrap_lock(&task_sink->tdg->graph_lock); */
-      /* source_info = &task_sink->tdg->record_map[task_source->td_tdg_task_id]; */
+      /* printf("thread %d: task %d depends on %d\n", */
+      /*     gtid, task_sink->td_tdg_task_id, task_source->td_tdg_task_id); */
+      __kmp_acquire_bootstrap_lock(&task_sink->tdg->graph_lock);
+      source_info = &task_sink->tdg->record_map[task_source->td_tdg_task_id];
       if (source_info->nsuccessors >= source_info->successors_size) {
         kmp_uint old_size = source_info->successors_size;
         source_info->successors_size = 2 * source_info->successors_size;
@@ -256,6 +258,9 @@ static inline void __kmp_track_dependence(kmp_int32 gtid, kmp_depnode_t *source,
         __kmp_free(old_succ_ids);
       }
 
+      // XXX: probably not updated values correctly
+      /* fprintf(stderr, "thread %d: task %d -> %d\n", gtid, task_source->td_tdg_task_id, */
+      /*     task_sink->td_tdg_task_id); */
       source_info->successors[source_info->nsuccessors] =
           task_sink->td_tdg_task_id;
       source_info->nsuccessors++;
@@ -263,7 +268,7 @@ static inline void __kmp_track_dependence(kmp_int32 gtid, kmp_depnode_t *source,
       kmp_node_info_t *sink_info =
           &(task_sink->tdg->record_map[task_sink->td_tdg_task_id]);
       sink_info->npredecessors++;
-      /* __kmp_release_bootstrap_lock(&task_sink->tdg->graph_lock); */
+      __kmp_release_bootstrap_lock(&task_sink->tdg->graph_lock);
     }
   }
 #endif
@@ -321,8 +326,9 @@ __kmp_depnode_link_successor(kmp_int32 gtid, kmp_info_t *thread,
       kmp_taskdata_t *td = KMP_TASK_TO_TASKDATA(task);
       if (td->is_taskgraph)
         tdg_status = KMP_TASK_TO_TASKDATA(task)->tdg->tdg_status;
-      if (__kmp_tdg_is_recording(tdg_status))
+      if (__kmp_tdg_is_recording(tdg_status)) {
         __kmp_track_dependence(gtid, dep, node, task);
+      }
     }
 #endif
     if (dep->dn.task) {
@@ -333,12 +339,29 @@ __kmp_depnode_link_successor(kmp_int32 gtid, kmp_info_t *thread,
           if (!(__kmp_tdg_is_recording(tdg_status)) && task)
 #endif
             __kmp_track_dependence(gtid, dep, node, task);
-          dep->dn.successors = __kmp_add_node(thread, dep->dn.successors, node);
-          KA_TRACE(40, ("__kmp_process_deps: T#%d adding dependence from %p to "
-                        "%p\n",
-                        gtid, KMP_TASK_TO_TASKDATA(dep->dn.task),
-                        KMP_TASK_TO_TASKDATA(task)));
-          npredecessors++;
+            /// XXX: here is the taskdeps incorrect!!!! :)
+            dep->dn.successors = __kmp_add_node(thread, dep->dn.successors, node);
+            KA_TRACE(40, ("__kmp_process_deps: T#%d adding dependence from %p to "
+                          "%p\n",
+                          gtid, KMP_TASK_TO_TASKDATA(dep->dn.task),
+                          KMP_TASK_TO_TASKDATA(task)));
+            printf("thread %d: task %d: add new successor node %d\n", 
+                gtid,
+                KMP_TASK_TO_TASKDATA(dep->dn.task)->td_tdg_task_id,
+                KMP_TASK_TO_TASKDATA(task)->td_tdg_task_id);
+            printf("task %d depends on ->", KMP_TASK_TO_TASKDATA(dep->dn.task)->td_tdg_task_id);
+            for (kmp_depnode_list_t *p = dep->dn.successors; p; p = p->next) {
+              if (p->node && p->node->dn.task) {
+                printf(" %d /", KMP_TASK_TO_TASKDATA(p->node->dn.task)->td_tdg_task_id);
+              } else {
+                printf(" null /");
+              }
+            }
+            printf("\n");
+/* #if OMPX_TASKGRAPH */
+/*             if (!__kmp_tdg_is_recording(tdg_status)) */
+/* #endif */
+              npredecessors++;
         }
       }
       KMP_RELEASE_DEPNODE(gtid, dep);
@@ -643,12 +666,15 @@ static bool __kmp_check_deps(kmp_int32 gtid, kmp_depnode_t *node,
   if (!dep_all) { // regular dependences
     npredecessors = __kmp_process_deps<true>(gtid, node, hash, dep_barrier,
                                              ndeps, dep_list, task);
+    /* printf("thread %d: task %d: NDEPS NOALIAS %d\n", */ 
+    /*     gtid, taskdata->td_tdg_task_id, ndeps_noalias); */
     npredecessors += __kmp_process_deps<false>(
         gtid, node, hash, dep_barrier, ndeps_noalias, noalias_dep_list, task);
   } else { // omp_all_memory dependence
     npredecessors = __kmp_process_dep_all(gtid, node, *hash, dep_barrier, task);
   }
 
+  printf("thread %d: add task %d in node\n", gtid, taskdata->td_tdg_task_id);
   node->dn.task = task;
   KMP_MB();
 
@@ -664,6 +690,9 @@ static bool __kmp_check_deps(kmp_int32 gtid, kmp_depnode_t *node,
   KA_TRACE(20, ("__kmp_check_deps: T#%d found %d predecessors for task %p \n",
                 gtid, npredecessors, taskdata));
 
+  if (npredecessors > 0)
+    printf("thread %d: task %d: -------------- predecessors %d\n",
+        gtid, taskdata->td_tdg_task_id, npredecessors);
   // beyond this point the task could be queued (and executed) by a releasing
   // task...
   return npredecessors > 0 ? true : false;
@@ -690,8 +719,8 @@ kmp_int32 __kmpc_omp_task_with_deps(ident_t *loc_ref, kmp_int32 gtid,
                                     kmp_depend_info_t *dep_list,
                                     kmp_int32 ndeps_noalias,
                                     kmp_depend_info_t *noalias_dep_list) {
-
   kmp_taskdata_t *new_taskdata = KMP_TASK_TO_TASKDATA(new_task);
+  /* printf("->thread %d: task_with_deps %d\n", gtid, new_taskdata->td_tdg_task_id); */
   KA_TRACE(10, ("__kmpc_omp_task_with_deps(enter): T#%d loc=%p task=%p\n", gtid,
                 loc_ref, new_taskdata));
   __kmp_assert_valid_gtid(gtid);
@@ -703,9 +732,9 @@ kmp_int32 __kmpc_omp_task_with_deps(ident_t *loc_ref, kmp_int32 gtid,
   if (new_taskdata->is_taskgraph &&
       __kmp_tdg_is_recording(new_taskdata->tdg->tdg_status)) {
     kmp_tdg_info_t *tdg = new_taskdata->tdg;
+    __kmp_acquire_bootstrap_lock(&tdg->graph_lock);
     // extend record_map if needed
-    if (new_taskdata->td_tdg_task_id >= tdg->map_size) {
-      __kmp_acquire_bootstrap_lock(&tdg->graph_lock);
+    /* if (new_taskdata->td_tdg_task_id >= tdg->map_size) { */
       if (new_taskdata->td_tdg_task_id >= tdg->map_size) {
         kmp_uint old_size = tdg->map_size;
         kmp_uint new_size = old_size * 2;
@@ -733,11 +762,11 @@ kmp_int32 __kmpc_omp_task_with_deps(ident_t *loc_ref, kmp_int32 gtid,
         // threads use old_record while map_size is already updated
         tdg->map_size = new_size;
       }
-      __kmp_release_bootstrap_lock(&tdg->graph_lock);
-    }
+    /* } */
     tdg->record_map[new_taskdata->td_tdg_task_id].task = new_task;
     tdg->record_map[new_taskdata->td_tdg_task_id].parent_task =
         new_taskdata->td_parent;
+    __kmp_release_bootstrap_lock(&tdg->graph_lock);
     KMP_ATOMIC_INC(&tdg->num_tasks);
   }
 #endif
@@ -843,6 +872,7 @@ kmp_int32 __kmpc_omp_task_with_deps(ident_t *loc_ref, kmp_int32 gtid,
     if (__kmp_check_deps(gtid, node, new_task, &current_task->td_dephash,
                          NO_DEP_BARRIER, ndeps, dep_list, ndeps_noalias,
                          noalias_dep_list)) {
+      printf("thread %d: task %d has blocking deps\n", gtid, new_taskdata->td_tdg_task_id);
       KA_TRACE(10, ("__kmpc_omp_task_with_deps(exit): T#%d task had blocking "
                     "dependences: "
                     "loc=%p task=%p, return: TASK_CURRENT_NOT_QUEUED\n",
@@ -852,6 +882,8 @@ kmp_int32 __kmpc_omp_task_with_deps(ident_t *loc_ref, kmp_int32 gtid,
         current_task->ompt_task_info.frame.enter_frame = ompt_data_none;
       }
 #endif
+      // XXX: detected incorrect deps? Leaving task without execution?
+      /* printf("thread %d: -------------NOT %d\n", gtid, new_taskdata->td_tdg_task_id); */
       return TASK_CURRENT_NOT_QUEUED;
     }
   } else {
@@ -865,6 +897,7 @@ kmp_int32 __kmpc_omp_task_with_deps(ident_t *loc_ref, kmp_int32 gtid,
                 "loc=%p task=%p, transferring to __kmp_omp_task\n",
                 gtid, loc_ref, new_taskdata));
 
+  /* printf("<-thread %d: task_with_deps %d\n", gtid, new_taskdata->td_tdg_task_id); */
   kmp_int32 ret = __kmp_omp_task(gtid, new_task, true);
 #if OMPT_SUPPORT
   if (ompt_enabled.enabled) {
