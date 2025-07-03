@@ -1687,9 +1687,11 @@ kmp_task_t *__kmp_task_alloc(ident_t *loc_ref, kmp_int32 gtid,
     taskdata->is_taskgraph = 1;
     taskdata->tdg = tdg;
     taskdata->td_task_id = KMP_GEN_TASK_ID();
-    taskdata->td_tdg_task_id = KMP_ATOMIC_INC(&__kmp_tdg_task_id);
+    /* taskdata->td_tdg_task_id = KMP_ATOMIC_INC(&__kmp_tdg_task_id); */
   }
 #endif
+  // XXX: help debug when compare with vanilla
+  taskdata->td_tdg_task_id = KMP_ATOMIC_INC(&__kmp_tdg_task_id);
   KA_TRACE(20, ("__kmp_task_alloc(exit): T#%d created task %p parent=%p\n",
                 gtid, taskdata, taskdata->td_parent));
 
@@ -1931,7 +1933,7 @@ __kmp_invoke_task(kmp_int32 gtid, kmp_task_t *task,
       {
         /* printf("-> thread %d: executes task %d\n", gtid, taskdata->td_tdg_task_id); */
         (*(task->routine))(gtid, task);
-        printf("<- thread %d: executes task %d\n", gtid, taskdata->td_tdg_task_id);
+        /* printf("<- thread %d: executes task %d\n", gtid, taskdata->td_tdg_task_id); */
       }
     }
     KMP_POP_PARTITIONED_TIMER();
@@ -1974,6 +1976,7 @@ __kmp_invoke_task(kmp_int32 gtid, kmp_task_t *task,
       30,
       ("__kmp_invoke_task(exit): T#%d completed task %p, resuming task %p\n",
        gtid, taskdata, current_task));
+  printf("<- thread %d: executes task %d\n", gtid, taskdata->td_tdg_task_id);
   return;
 }
 
