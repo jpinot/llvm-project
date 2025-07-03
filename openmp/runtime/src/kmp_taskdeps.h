@@ -148,6 +148,9 @@ static inline void __kmp_release_deps(kmp_int32 gtid, kmp_taskdata_t *task) {
         NULL; // mark this task as finished, so no new dependencies are generated
   KMP_RELEASE_DEPNODE(gtid, node);
 
+  /* kmp_taskdata_t *taskdata KMP_TASK_TO_TASKDATA(task); */
+  printf("thread %d: try release task %d deps(%d)\n", gtid, task->td_tdg_task_id, node->dn.npredecessors.load());
+
   kmp_depnode_list_t *next;
   kmp_taskdata_t *next_taskdata;
   for (kmp_depnode_list_t *p = node->dn.successors; p; p = next) {
@@ -165,6 +168,8 @@ static inline void __kmp_release_deps(kmp_int32 gtid, kmp_taskdata_t *task) {
 #endif
       KMP_MB();
       if (successor->dn.task) {
+          kmp_taskdata_t *taskdata KMP_TASK_TO_TASKDATA(successor->dn.task);
+          printf("thread %d: push task %d\n", gtid, taskdata->td_tdg_task_id);
         KA_TRACE(20, ("__kmp_release_deps: T#%d successor %p of %p scheduled "
                       "for execution.\n",
                       gtid, successor->dn.task, task));
