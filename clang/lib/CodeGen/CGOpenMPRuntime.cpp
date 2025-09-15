@@ -2110,7 +2110,8 @@ void CGOpenMPRuntime::emitTaskyieldCall(CodeGenFunction &CGF,
 
 void CGOpenMPRuntime::emitTaskgraphCall(CodeGenFunction &CGF,
                                         SourceLocation Loc,
-                                        const OMPExecutableDirective &D) {
+                                        const OMPExecutableDirective &D,
+                                        const Expr *IfCond) {
   if (!CGF.HaveInsertPoint())
     return;
 
@@ -2122,6 +2123,10 @@ void CGOpenMPRuntime::emitTaskgraphCall(CodeGenFunction &CGF,
 
   unsigned Flags = 0;
 
+  if (D.getSingleClause<OMPNowaitClause>()) {
+    Flags |= NowaitFlag;
+  }
+
   llvm::Value *GraphId = CGF.Builder.getInt32(0);
   const OMPGraphIdClause *GraphIdClause = D.getSingleClause<OMPGraphIdClause>();
   if (GraphIdClause) {
@@ -2129,6 +2134,7 @@ void CGOpenMPRuntime::emitTaskgraphCall(CodeGenFunction &CGF,
     auto *GraphIdVal = CGF.EmitScalarExpr(E);
     GraphId = CGF.Builder.CreateIntCast(GraphIdVal, CGM.Int32Ty, true);
   }
+
   const OMPGraphResetClause *GraphResetClause =
       D.getSingleClause<OMPGraphResetClause>();
   if (GraphResetClause) {
@@ -2169,9 +2175,33 @@ void CGOpenMPRuntime::emitTaskgraphCall(CodeGenFunction &CGF,
       CGF.Builder.CreatePointerBitCastOrAddrSpaceCast(
           CapStruct.getPointer(OutlinedCGF), CGM.VoidPtrTy)};
 
-  CGF.EmitRuntimeCall(OMPBuilder.getOrCreateRuntimeFunction(
-                          CGM.getModule(), OMPRTL___kmpc_taskgraph),
-                      Args);
+  auto &&ThenGen = [&CGF, this, &Args](CodeGenFunction &, PrePostActionTy &) {
+    CGF.EmitRuntimeCall(OMPBuilder.getOrCreateRuntimeFunction(
+                            CGM.getModule(), OMPRTL___kmpc_taskgraph),
+                        Args);
+  };
+  auto &&ElseGen = [&CGF, this, &FnT, &CapStruct, &Loc,
+                    &OutlinedCGF](CodeGenFunction &, PrePostActionTy &) {
+    llvm::Value *CapturedArgsPtr =
+        CGF.Builder.CreatePointerBitCastOrAddrSpaceCast(
+            CapStruct.getPointer(OutlinedCGF), CGM.VoidPtrTy);
+
+    auto &&CodeGen = [&](CodeGenFunction &CGF, PrePostActionTy &Action) {
+      Action.Enter(CGF);
+      CGF.CGM.getOpenMPRuntime().emitOutlinedFunctionCall(CGF, Loc, FnT,
+                                                          CapturedArgsPtr);
+    };
+    RegionCodeGenTy RCG(CodeGen);
+    RCG(CGF);
+  };
+
+  if (IfCond) {
+    emitIfClause(CGF, IfCond, ThenGen, ElseGen);
+  } else {
+    CGF.EmitRuntimeCall(OMPBuilder.getOrCreateRuntimeFunction(
+                            CGM.getModule(), OMPRTL___kmpc_taskgraph),
+                        Args);
+  }
 }
 
 void CGOpenMPRuntime::emitTaskgroupRegion(CodeGenFunction &CGF,
@@ -12272,7 +12302,8 @@ void CGOpenMPSIMDRuntime::emitTaskyieldCall(CodeGenFunction &CGF,
 
 void CGOpenMPSIMDRuntime::emitTaskgraphCall(CodeGenFunction &CGF,
                                             SourceLocation Loc,
-                                            const OMPExecutableDirective &D) {
+                                            const OMPExecutableDirective &D,
+                                            const Expr *IfCond) {
   llvm_unreachable("Not supported in SIMD-only mode");
 }
 
