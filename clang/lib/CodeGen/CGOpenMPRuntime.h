@@ -829,7 +829,7 @@ public:
 
   /// Emit code for 'taskgraph' directive.
   virtual void emitTaskgraphCall(CodeGenFunction &CGF, SourceLocation Loc,
-                                 const OMPExecutableDirective &D);
+                                 const OMPExecutableDirective &D, const Expr *IfCond);
 
   /// Emit a taskgroup region.
   /// \param TaskgroupOpGen Generator for the statement associated with the
@@ -1815,8 +1815,12 @@ public:
   void emitTaskyieldCall(CodeGenFunction &CGF, SourceLocation Loc) override;
 
   /// Emit code for 'taskgraph' directive.
+  /// \param IfCond Expression evaluated in if clause associated with the target
+  /// \param D Directive to emit.
   void emitTaskgraphCall(CodeGenFunction &CGF, SourceLocation Loc,
-                         const OMPExecutableDirective &D) override;
+                         const OMPExecutableDirective &D,
+                         const Expr *IfCond
+                         ) override;
 
   /// Emit a taskgroup region.
   /// \param TaskgroupOpGen Generator for the statement associated with the

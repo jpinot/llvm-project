@@ -5584,7 +5584,16 @@ static bool isSupportedByOpenMPIRBuilder(const OMPTaskgroupDirective &T) {
 
 void CodeGenFunction::EmitOMPTaskgraphDirective(
     const OMPTaskgraphDirective &S) {
-  CGM.getOpenMPRuntime().emitTaskgraphCall(*this, S.getBeginLoc(), S);
+  const Expr *IfCond = nullptr;
+  for (const auto *C : S.getClausesOfKind<OMPIfClause>()) {
+    if (C->getNameModifier() == OMPD_unknown ||
+        C->getNameModifier() == OMPD_cancel) {
+      IfCond = C->getCondition();
+      break;
+    }
+  }
+
+  CGM.getOpenMPRuntime().emitTaskgraphCall(*this, S.getBeginLoc(), S, IfCond);
 }
 
 void CodeGenFunction::EmitOMPTaskgroupDirective(
