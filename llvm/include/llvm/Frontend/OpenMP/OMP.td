@@ -1230,6 +1230,7 @@ def OMP_TaskGraph : Directive<[Spelling<"taskgraph">]> {
   let allowedClauses = [
     VersionedClause<OMPC_If>,
     VersionedClause<OMPC_NoGroup>,
+    VersionedClause<OMPC_GraphId>,
     VersionedClause<OMPC_GraphReset>,
   ];
   let association = AS_Block;
