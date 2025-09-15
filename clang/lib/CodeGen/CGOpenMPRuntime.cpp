@@ -2180,86 +2180,20 @@ void CGOpenMPRuntime::emitTaskgraphCall(CodeGenFunction &CGF,
           CGM.getModule(), OMPRTL___kmpc_taskgraph),
         Args);
   };
-  llvm::Module &M = CGM.getModule();
-  llvm::Value *ThreadID = getThreadID(CGF, Loc);
-  auto &&ElseGen = [&M, ThreadID, &CGF, this, &FnT, &CapStruct, &Loc, &OutlinedCGF]
+  auto &&ElseGen = [&CGF, this, &FnT, &CapStruct, &Loc, &OutlinedCGF]
     (CodeGenFunction &, PrePostActionTy &) {
-    // This logic is adapted from the if(false) path of a regular task.
-    // It ensures the taskgraph body is executed with minimal runtime overhead.
-
-    // Arguments for the begin/complete calls: ident_t*, gtid, kmp_task_t*
-    // We can pass the captured struct pointer as the "task" handle for the
-    // lightweight if0 calls.
-    /* llvm::Value *CapturedArgsPtr = CGF.Builder.CreatePointerBitCastOrAddrSpaceCast( */
-    /*     CapStruct.getPointer(CGF), CGM.KmpTaskTDefaultTy->getPointer()); */
       llvm::Value *CapturedArgsPtr = CGF.Builder.CreatePointerBitCastOrAddrSpaceCast(
           CapStruct.getPointer(OutlinedCGF), CGM.VoidPtrTy);
 
-    std::vector<llvm::Value *> TaskArgs{
-      emitUpdateLocation(CGF, Loc),
-        ThreadID,
-        CapturedArgsPtr
-    };
-
-    // This is the core logic that will execute the outlined function.
     auto &&CodeGen = [&](CodeGenFunction &CGF, PrePostActionTy &Action) {
       Action.Enter(CGF);
-      /* llvm::Value *OutlinedFnArgs[] = {ThreadID, CapturedArgsPtr }; */
       CGF.CGM.getOpenMPRuntime().emitOutlinedFunctionCall(CGF, Loc,
-          FnT, // Our outlined taskgraph body
+          FnT,
           CapturedArgsPtr);
     };
-
-    // We use a RegionCodeGenTy to wrap the core logic with "begin" and "complete"
-    // runtime calls. This is a standard pattern in Clang's OpenMP implementation.
     RegionCodeGenTy RCG(CodeGen);
-
-    // Set up the pre/post actions using the special 'if0' runtime functions.
-    // These are optimized for the if(false) case.
-    /* CommonActionTy Action( */
-    /*     OMPBuilder.getOrCreateRuntimeFunction(M, OMPRTL___kmpc_omp_task_begin_if0), */
-    /*     TaskArgs, */
-    /*     OMPBuilder.getOrCreateRuntimeFunction(M, OMPRTL___kmpc_omp_task_complete_if0), */
-    /*     TaskArgs); */
-    /* RCG.setAction(Action); */
     RCG(CGF);
   };
-
-  /* auto &&ElseCodeGen = [this, &M, &TaskArgs, ThreadID, */ 
-  /*                       TaskEntry, &Data, &DepWaitTaskArgs, */
-  /*                       Loc](CodeGenFunction &CGF, PrePostActionTy &) { */
-  /*   CodeGenFunction::RunCleanupsScope LocalScope(CGF); */
-  /*   // Build void __kmpc_omp_wait_deps(ident_t *, kmp_int32 gtid, */
-  /*   // kmp_int32 ndeps, kmp_depend_info_t *dep_list, kmp_int32 */
-  /*   // ndeps_noalias, kmp_depend_info_t *noalias_dep_list); if dependence info */
-  /*   // is specified. */
-  /*   if (!Data.Dependences.empty()) */
-  /*     CGF.EmitRuntimeCall(OMPBuilder.getOrCreateRuntimeFunction( */
-  /*                             M, OMPRTL___kmpc_omp_taskwait_deps_51), */
-  /*                         DepWaitTaskArgs); */
-  /*   // Call proxy_task_entry(gtid, new_task); */
-  /*   auto &&CodeGen = [TaskEntry, ThreadID, NewTaskNewTaskTTy, */
-  /*                     Loc](CodeGenFunction &CGF, PrePostActionTy &Action) { */
-  /*     Action.Enter(CGF); */
-  /*     llvm::Value *OutlinedFnArgs[] = {ThreadID, NewTaskNewTaskTTy}; */
-  /*     CGF.CGM.getOpenMPRuntime().emitOutlinedFunctionCall(CGF, Loc, TaskEntry, */
-  /*                                                         OutlinedFnArgs); */
-  /*   }; */
-
-  /*   // Build void __kmpc_omp_task_begin_if0(ident_t *, kmp_int32 gtid, */
-  /*   // kmp_task_t *new_task); */
-  /*   // Build void __kmpc_omp_task_complete_if0(ident_t *, kmp_int32 gtid, */
-  /*   // kmp_task_t *new_task); */
-  /*   RegionCodeGenTy RCG(CodeGen); */
-  /*   CommonActionTy Action(OMPBuilder.getOrCreateRuntimeFunction( */
-  /*                             M, OMPRTL___kmpc_omp_task_begin_if0), */
-  /*                         TaskArgs, */
-  /*                         OMPBuilder.getOrCreateRuntimeFunction( */
-  /*                             M, OMPRTL___kmpc_omp_task_complete_if0), */
-  /*                         TaskArgs); */
-  /*   RCG.setAction(Action); */
-  /*   RCG(CGF); */
-  /* }; */
 
   if (IfCond) {
       emitIfClause(CGF, IfCond, ThenGen, ElseGen);
