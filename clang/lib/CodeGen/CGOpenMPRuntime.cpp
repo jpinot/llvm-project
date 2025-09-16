@@ -8683,6 +8683,7 @@ private:
 public:
   MappableExprsHandler(const OMPExecutableDirective &Dir, CodeGenFunction &CGF)
       : CurDir(&Dir), CGF(CGF) {
+      printf("MappableExprsHandler called\n");
     // Extract firstprivate clause information.
     for (const auto *C : Dir.getClausesOfKind<OMPFirstprivateClause>()) {
       printf("Modifier is %d\n", C->getModifier());
