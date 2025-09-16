@@ -200,9 +200,16 @@ def OMPC_Final : Clause<[Spelling<"final">]> {
   let clangClass = "OMPFinalClause";
   let flangClass = "ScalarLogicalExpr";
 }
+def OMP_FIRSTPRIVATE_saved : EnumVal<"saved",1,1> {}
+def OMP_FIRSTPRIVATE_unknown : EnumVal<"unknown",2,0> { let isDefault = 1; }
 def OMPC_FirstPrivate : Clause<[Spelling<"firstprivate">]> {
   let clangClass = "OMPFirstprivateClause";
   let flangClass = "OmpObjectList";
+  let enumClauseValue = "FirstprivateKind";
+  let allowedClauseValues = [
+    OMP_FIRSTPRIVATE_unknown,
+    OMP_FIRSTPRIVATE_saved
+  ];
 }
 def OMPC_Flush : Clause<[Spelling<"flush">]> {
   let clangClass = "OMPFlushClause";

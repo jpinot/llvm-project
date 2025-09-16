@@ -8054,6 +8054,8 @@ void OMPClauseWriter::VisitOMPFirstprivateClause(OMPFirstprivateClause *C) {
   Record.push_back(C->varlist_size());
   VisitOMPClauseWithPreInit(C);
   Record.AddSourceLocation(C->getLParenLoc());
+  Record.writeEnum(C->getModifier());
+  Record.AddSourceLocation(C->getModifierLoc());
   for (auto *VE : C->varlist()) {
     Record.AddStmt(VE);
   }

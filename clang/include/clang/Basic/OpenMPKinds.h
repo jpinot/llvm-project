@@ -59,6 +59,14 @@ enum OpenMPDependClauseKind {
   OMPC_DEPEND_unknown
 };
 
+/// OpenMP attributes for 'firstprivate' clause.
+enum OpenMPFirstprivateClauseKind {
+#define OPENMP_FIRSTPRIVATE_KIND(Name) \
+  OMPC_FIRSTPRIVATE_##Name,
+#include "clang/Basic/OpenMPKinds.def"
+  OMPC_FIRSTPRIVATE_unknown
+};
+
 /// OpenMP attributes for 'linear' clause.
 enum OpenMPLinearClauseKind {
 #define OPENMP_LINEAR_KIND(Name) \
