@@ -6140,17 +6140,18 @@ StmtResult SemaOpenMP::ActOnOpenMPExecutableDirective(
       if (auto *DC = dyn_cast<OMPDetachClause>(C))
         ImpInfo.Firstprivates.insert(DC->getEventHandler());
     }
-    if (!ImpInfo.Firstprivates.empty()) {
-      if (OMPClause *Implicit = ActOnOpenMPFirstprivateClause(
-              ImpInfo.Firstprivates.getArrayRef(), SourceLocation(),
-              SourceLocation(), SourceLocation())) {
-        ClausesWithImplicit.push_back(Implicit);
-        ErrorFound = cast<OMPFirstprivateClause>(Implicit)->varlist_size() !=
-                     ImpInfo.Firstprivates.size();
-      } else {
-        ErrorFound = true;
-      }
-    }
+    //TODO: correctly call ActOnOpenMPFirstprivateClause
+    /* if (!ImpInfo.Firstprivates.empty()) { */
+    /*   if (OMPClause *Implicit = ActOnOpenMPFirstprivateClause( */
+    /*           ImpInfo.Firstprivates.getArrayRef(), SourceLocation(), */
+    /*           SourceLocation(), SourceLocation())) { */
+    /*     ClausesWithImplicit.push_back(Implicit); */
+    /*     ErrorFound = cast<OMPFirstprivateClause>(Implicit)->varlist_size() != */
+    /*                  ImpInfo.Firstprivates.size(); */
+    /*   } else { */
+    /*     ErrorFound = true; */
+    /*   } */
+    /* } */
     if (!ImpInfo.Privates.empty()) {
       if (OMPClause *Implicit = ActOnOpenMPPrivateClause(
               ImpInfo.Privates.getArrayRef(), SourceLocation(),
@@ -17660,7 +17661,8 @@ OMPClause *SemaOpenMP::ActOnOpenMPVarListClause(OpenMPClauseKind Kind,
     Res = ActOnOpenMPPrivateClause(VarList, StartLoc, LParenLoc, EndLoc);
     break;
   case OMPC_firstprivate:
-    Res = ActOnOpenMPFirstprivateClause(VarList, StartLoc, LParenLoc, EndLoc);
+    Res = ActOnOpenMPFirstprivateClause(VarList, StartLoc, LParenLoc, EndLoc,
+        static_cast<OpenMPFirstprivateClauseKind>(ExtraModifier), ExtraModifierLoc);
     break;
   case OMPC_lastprivate:
     assert(0 <= ExtraModifier && ExtraModifier <= OMPC_LASTPRIVATE_unknown &&
@@ -18037,7 +18039,21 @@ OMPClause *SemaOpenMP::ActOnOpenMPPrivateClause(ArrayRef<Expr *> VarList,
 OMPClause *SemaOpenMP::ActOnOpenMPFirstprivateClause(ArrayRef<Expr *> VarList,
                                                      SourceLocation StartLoc,
                                                      SourceLocation LParenLoc,
-                                                     SourceLocation EndLoc) {
+                                                     SourceLocation EndLoc,
+                                                     OpenMPFirstprivateClauseKind
+                                                     Modifier,
+                                                     SourceLocation ModifierLoc) {
+
+  // TODO:
+  /* assert((ModifierLoc.isInvalid() || getLangOpts().OpenMP >= 60) && */
+  /*     "Unexpected num_threads modifier in OpenMP < 60."); */
+  if (0 && Modifier == OMPC_FIRSTPRIVATE_unknown && ModifierLoc.isValid()) {
+    Diag(ModifierLoc, diag::err_omp_unexpected_clause_value)
+        << getListOfPossibleValues(OMPC_firstprivate, /*First=*/0,
+                                   /*Last=*/OMPC_FIRSTPRIVATE_unknown)
+        << getOpenMPClauseNameForDiag(OMPC_firstprivate);
+    return nullptr;
+  }
   SmallVector<Expr *, 8> Vars;
   SmallVector<Expr *, 8> PrivateCopies;
   SmallVector<Expr *, 8> Inits;
@@ -18323,7 +18339,7 @@ OMPClause *SemaOpenMP::ActOnOpenMPFirstprivateClause(ArrayRef<Expr *> VarList,
 
   return OMPFirstprivateClause::Create(
       getASTContext(), StartLoc, LParenLoc, EndLoc, Vars, PrivateCopies, Inits,
-      buildPreInits(getASTContext(), ExprCaptures));
+      buildPreInits(getASTContext(), ExprCaptures), Modifier);
 }
 
 OMPClause *SemaOpenMP::ActOnOpenMPLastprivateClause(

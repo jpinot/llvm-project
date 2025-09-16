@@ -485,10 +485,11 @@ OMPFirstprivateClause *
 OMPFirstprivateClause::Create(const ASTContext &C, SourceLocation StartLoc,
                               SourceLocation LParenLoc, SourceLocation EndLoc,
                               ArrayRef<Expr *> VL, ArrayRef<Expr *> PrivateVL,
-                              ArrayRef<Expr *> InitVL, Stmt *PreInit) {
+                              ArrayRef<Expr *> InitVL, Stmt *PreInit,
+                              OpenMPFirstprivateClauseKind Modifier) {
   void *Mem = C.Allocate(totalSizeToAlloc<Expr *>(3 * VL.size()));
   OMPFirstprivateClause *Clause =
-      new (Mem) OMPFirstprivateClause(StartLoc, LParenLoc, EndLoc, VL.size());
+      new (Mem) OMPFirstprivateClause(StartLoc, LParenLoc, EndLoc, VL.size(), Modifier);
   Clause->setVarRefs(VL);
   Clause->setPrivateCopies(PrivateVL);
   Clause->setInits(InitVL);
@@ -2356,6 +2357,11 @@ void OMPClausePrinter::VisitOMPPrivateClause(OMPPrivateClause *Node) {
 void OMPClausePrinter::VisitOMPFirstprivateClause(OMPFirstprivateClause *Node) {
   if (!Node->varlist_empty()) {
     OS << "firstprivate";
+    OpenMPFirstprivateClauseKind Modifier = Node->getModifier();
+    if (Modifier != OMPC_FIRSTPRIVATE_unknown) {
+      OS << getOpenMPSimpleClauseTypeName(Node->getClauseKind(), Modifier)
+        << ": ";
+    }
     VisitOMPClauseList(Node, '(');
     OS << ")";
   }

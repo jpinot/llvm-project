@@ -1221,7 +1221,9 @@ public:
   OMPClause *ActOnOpenMPFirstprivateClause(ArrayRef<Expr *> VarList,
                                            SourceLocation StartLoc,
                                            SourceLocation LParenLoc,
-                                           SourceLocation EndLoc);
+                                           SourceLocation EndLoc,
+                                           OpenMPFirstprivateClauseKind Modifier,
+                                           SourceLocation ModifierLoc);
   /// Called on well-formed 'lastprivate' clause.
   OMPClause *ActOnOpenMPLastprivateClause(
       ArrayRef<Expr *> VarList, OpenMPLastprivateModifier LPKind,
