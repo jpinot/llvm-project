@@ -3307,7 +3307,8 @@ emitTaskPrivateMappingFunction(CodeGenModule &CGM, SourceLocation Loc,
     ++Counter;
   }
   for (const Expr *E : Data.FirstprivateVars) {
-      printf("firstprivate var fund\n");
+    // XXX: Do i need to update the pointer here? Or at the init of Data?
+    // XXX: Also what about taskloop?
     Args.push_back(ImplicitParamDecl::Create(
         C, /*DC=*/nullptr, Loc, /*Id=*/nullptr,
         C.getPointerType(C.getPointerType(E->getType()))
