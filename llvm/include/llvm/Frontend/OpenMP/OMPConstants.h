@@ -282,12 +282,6 @@ enum class RTLDependenceKindTy {
   DepOmpAllMem = 0x80,
 };
 
-/// Firstprivate kind for RTL.
-enum class RTLFirstprivateKindTy {
-  Unknown,
-  Saved,
-};
-
 /// A type of worksharing loop construct
 enum class WorksharingLoopType {
   // Worksharing `for`-loop

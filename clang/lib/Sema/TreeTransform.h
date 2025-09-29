@@ -1891,12 +1891,9 @@ public:
   OMPClause *RebuildOMPFirstprivateClause(ArrayRef<Expr *> VarList,
                                           SourceLocation StartLoc,
                                           SourceLocation LParenLoc,
-                                          SourceLocation EndLoc,
-                                          OpenMPFirstprivateClauseKind Modifier,
-                                          SourceLocation ModifierLoc) {
+                                          SourceLocation EndLoc) {
     return getSema().OpenMP().ActOnOpenMPFirstprivateClause(VarList, StartLoc,
-                                                            LParenLoc, EndLoc,
-                                                            Modifier, ModifierLoc);
+                                                            LParenLoc, EndLoc);
   }
 
   /// Build a new OpenMP 'lastprivate' clause.
@@ -11038,8 +11035,7 @@ OMPClause *TreeTransform<Derived>::TransformOMPFirstprivateClause(
     Vars.push_back(EVar.get());
   }
   return getDerived().RebuildOMPFirstprivateClause(
-      Vars, C->getBeginLoc(), C->getLParenLoc(), C->getEndLoc(), C->getModifier(),
-      C->getModifierLoc());
+      Vars, C->getBeginLoc(), C->getLParenLoc(), C->getEndLoc());
 }
 
 template <typename Derived>

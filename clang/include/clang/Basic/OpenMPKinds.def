@@ -20,9 +20,6 @@
 #ifndef OPENMP_DEPEND_KIND
 #define OPENMP_DEPEND_KIND(Name)
 #endif
-#ifndef OPENMP_FIRSTPRIVATE_KIND
-#define OPENMP_FIRSTPRIVATE_KIND(Name)
-#endif
 #ifndef OPENMP_LINEAR_KIND
 #define OPENMP_LINEAR_KIND(Name)
 #endif
@@ -143,9 +140,6 @@ OPENMP_DEPEND_KIND(inoutset)
 OPENMP_DEPEND_KIND(outallmemory)
 OPENMP_DEPEND_KIND(inoutallmemory)
 
-// Static attributes for 'firstprivate' clause.
-OPENMP_FIRSTPRIVATE_KIND(saved)
-
 // Modifiers for 'linear' clause.
 OPENMP_LINEAR_KIND(val)
 OPENMP_LINEAR_KIND(ref)
@@ -263,7 +257,6 @@ OPENMP_DOACROSS_MODIFIER(source_omp_cur_iteration)
 #undef OPENMP_DEVICE_TYPE_KIND
 #undef OPENMP_LINEAR_KIND
 #undef OPENMP_DEPEND_KIND
-#undef OPENMP_FIRSTPRIVATE_KIND
 #undef OPENMP_SCHEDULE_MODIFIER
 #undef OPENMP_SCHEDULE_KIND
 #undef OPENMP_ATOMIC_DEFAULT_MEM_ORDER_KIND

@@ -3235,16 +3235,6 @@ class OMPFirstprivateClause final
   friend OMPVarListClause;
   friend TrailingObjects;
 
-  /// Modifiers for 'saved' clause.
-  OpenMPFirstprivateClauseKind  Modifier = OMPC_FIRSTPRIVATE_unknown;
-  /// Location of the modifier.
-  SourceLocation ModifierLoc;
-  /// Sets modifier.
-  void setModifier(OpenMPFirstprivateClauseKind M) { Modifier = M; }
-  /// Sets modifier location.
-  void setModifierLoc(SourceLocation Loc) { ModifierLoc = Loc; }
-
-
   /// Build clause with number of variables \a N.
   ///
   /// \param StartLoc Starting location of the clause.
@@ -3252,11 +3242,10 @@ class OMPFirstprivateClause final
   /// \param EndLoc Ending location of the clause.
   /// \param N Number of the variables in the clause.
   OMPFirstprivateClause(SourceLocation StartLoc, SourceLocation LParenLoc,
-                        SourceLocation EndLoc, unsigned N, OpenMPFirstprivateClauseKind Modifier)
+                        SourceLocation EndLoc, unsigned N)
       : OMPVarListClause<OMPFirstprivateClause>(llvm::omp::OMPC_firstprivate,
                                                 StartLoc, LParenLoc, EndLoc, N),
-        OMPClauseWithPreInit(this),
-       Modifier(Modifier) {}
+        OMPClauseWithPreInit(this) {}
 
   /// Build an empty clause.
   ///
@@ -3312,14 +3301,7 @@ public:
   static OMPFirstprivateClause *
   Create(const ASTContext &C, SourceLocation StartLoc, SourceLocation LParenLoc,
          SourceLocation EndLoc, ArrayRef<Expr *> VL, ArrayRef<Expr *> PrivateVL,
-         ArrayRef<Expr *> InitVL, Stmt *PreInit,
-         OpenMPFirstprivateClauseKind Modifier);
-
-  /// Gets modifier.
-  OpenMPFirstprivateClauseKind getModifier() const { return Modifier; }
-
-  /// Gets modifier location.
-  SourceLocation getModifierLoc() const { return ModifierLoc; }
+         ArrayRef<Expr *> InitVL, Stmt *PreInit);
 
   /// Creates an empty clause with the place for \a N variables.
   ///

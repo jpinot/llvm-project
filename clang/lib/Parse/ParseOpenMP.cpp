@@ -4580,26 +4580,7 @@ bool Parser::ParseOpenMPVarList(OpenMPDirectiveKind DKind,
             << "linear-modifier(list)" << getOpenMPClauseName(Kind)
             << "linear(list: [linear-modifier,] step(step-size))";
     }
-  } else if (Kind == OMPC_firstprivate) {
-    // Try to parse modifier if any.
-    Data.ExtraModifier = OMPC_FIRSTPRIVATE_unknown;
-    // Conditional modifier allowed only in OpenMP 5.0 and not supported in
-    // distribute and taskloop based directives.
-    /* if ((getLangOpts().OpenMP >= 50 && !isOpenMPDistributeDirective(DKind) && */
-    /*      !isOpenMPTaskLoopDirective(DKind)) && */
-    /*     Tok.is(tok::identifier) && PP.LookAhead(0).is(tok::colon)) { */
-    printf("Extra MODIFIER IS %d\n\n", Data.ExtraModifier);
-    if (Tok.is(tok::identifier) && PP.LookAhead(0).is(tok::colon)) {
-      Data.ExtraModifier =
-          getOpenMPSimpleClauseType(Kind, PP.getSpelling(Tok), getLangOpts());
-      Data.ExtraModifierLoc = Tok.getLocation();
-      ConsumeToken();
-      assert(Tok.is(tok::colon) && "Expected colon.");
-      Data.ColonLoc = ConsumeToken();
-      printf("AFTER MODIFIER IS %d\n\n", Data.ExtraModifier);
-    }
-  }
-  else if (Kind == OMPC_lastprivate) {
+  } else if (Kind == OMPC_lastprivate) {
     // Try to parse modifier if any.
     Data.ExtraModifier = OMPC_LASTPRIVATE_unknown;
     // Conditional modifier allowed only in OpenMP 5.0 and not supported in
